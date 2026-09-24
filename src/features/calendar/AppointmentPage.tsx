@@ -15,6 +15,8 @@ import {
   Search,
   UserPlus,
   X,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { query, queryOne, batch, execute } from '@/lib/db';
 import { genId, money, fullName, toLocalNaive } from '@/lib/format';
@@ -71,6 +73,22 @@ function naiveToMin(s: string): number {
 /** "YYYY-MM-DD" de hoy en hora local. */
 function todayLocalISO(): string {
   return toLocalNaive(new Date()).slice(0, 10);
+}
+
+/** Suma n días a una fecha "YYYY-MM-DD" (local). */
+function addDaysISO(iso: string, n: number): string {
+  const d = new Date(`${iso}T00:00:00`);
+  d.setDate(d.getDate() + n);
+  return toLocalNaive(d).slice(0, 10);
+}
+
+/** Etiqueta corta de día: { wd: 'lun', dm: '24 sep' }. */
+function dayLabel(iso: string): { wd: string; dm: string } {
+  const d = new Date(`${iso}T00:00:00`);
+  return {
+    wd: d.toLocaleDateString('es-EC', { weekday: 'short' }).replace('.', ''),
+    dm: d.toLocaleDateString('es-EC', { day: '2-digit', month: 'short' }),
+  };
 }
 
 /** Slots sugeridos cada 30 min (07:00–21:00). */
@@ -180,9 +198,10 @@ function NewAppointment() {
     setTimeout(() => searchRef.current?.focus(), 0);
   }
 
-  function addRow() {
-    const s = services.data?.find((x) => x.id === serviceId);
-    if (!s) return;
+  // Se agrega automáticamente cuando servicio + estilista están completos.
+  function addRowWith(sid: string, stid: string) {
+    const s = services.data?.find((x) => x.id === sid);
+    if (!s || !stid) return;
     setRows((r) => [
       ...r,
       {
@@ -192,7 +211,7 @@ function NewAppointment() {
         price: s.base_price,
         duration: s.duration_minutes ?? DEFAULT_SERVICE_MINUTES,
         discount: 0,
-        staffId,
+        staffId: stid,
       },
     ]);
     setServiceId('');
@@ -219,6 +238,11 @@ function NewAppointment() {
   const reservedMinutes = rows.length
     ? Math.max(...staffBlocks.values())
     : 0;
+
+  const dayStrip = useMemo(
+    () => Array.from({ length: 14 }, (_, i) => addDaysISO(todayLocalISO(), i)),
+    [],
+  );
 
   const staffName = (sid: string) => {
     const s = staff.data?.find((x) => x.id === sid);
@@ -317,11 +341,16 @@ function NewAppointment() {
         calendarId = branchRow?.google_calendar_id ?? null;
         const firstStaff = staff.data?.find((x) => x.id === rows[0].staffId);
         try {
+          const descLines = rows.map(
+            (r) => `• ${r.name} (${staffName(r.staffId)}) — ${money(r.price)}`,
+          );
+          descLines.push('');
+          descLines.push(`Total: ${money(total)}`);
+          descLines.push(`Abono: ${money(dep)}`);
+          descLines.push(`Saldo: ${money(Math.max(0, total - dep))}`);
           googleEventId = await createCalendarEvent({
-            summary: `${rows.map((r) => r.name).join(', ')} — ${clientLabel}`,
-            description: rows
-              .map((r) => `• ${r.name} (${staffName(r.staffId)})`)
-              .join('\n'),
+            summary: `${rows.map((r) => r.name).join(', ')} — ${clientLabel} (abono ${money(dep)})`,
+            description: descLines.join('\n'),
             startLocal,
             endLocal,
             calendarId,
@@ -535,7 +564,7 @@ function NewAppointment() {
           <Card>
             <CardHeader
               title="Servicios"
-              subtitle="Categoría → servicio → estilista"
+              subtitle="Elegí servicio y estilista: se agrega solo"
             />
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <Select
@@ -556,7 +585,11 @@ function NewAppointment() {
               <Select
                 label="Servicio"
                 value={serviceId}
-                onChange={(e) => setServiceId(e.target.value)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v && staffId) addRowWith(v, staffId);
+                  else setServiceId(v);
+                }}
               >
                 <option value="">Seleccionar…</option>
                 {filteredServices.map((s) => (
@@ -569,7 +602,11 @@ function NewAppointment() {
               <Select
                 label="Estilista"
                 value={staffId}
-                onChange={(e) => setStaffId(e.target.value)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v && serviceId) addRowWith(serviceId, v);
+                  else setStaffId(v);
+                }}
               >
                 <option value="">Sin asignar</option>
                 {staff.data?.map((s) => (
@@ -579,9 +616,6 @@ function NewAppointment() {
                 ))}
               </Select>
             </div>
-            <Button className="mt-3" onClick={addRow} disabled={!serviceId}>
-              <Plus className="h-4 w-4" /> Agregar servicio
-            </Button>
 
             <div className="mt-4">
               {rows.length === 0 ? (
@@ -597,28 +631,48 @@ function NewAppointment() {
                       key={r.tempId}
                       className="flex items-center justify-between gap-3 py-3"
                     >
-                      <div className="flex items-center gap-3">
+                      <div className="flex min-w-0 flex-1 items-center gap-3">
                         <span
-                          className="h-8 w-1.5 rounded-full"
+                          className="h-10 w-1.5 shrink-0 rounded-full"
                           style={{
                             backgroundColor:
                               staff.data?.find((s) => s.id === r.staffId)
                                 ?.color || '#64748b',
                           }}
                         />
-                        <div>
-                          <p className="text-sm font-medium text-white">
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium text-white">
                             {r.name}
-                          </p>
-                          <p className="flex items-center gap-1.5 text-xs text-white/40">
-                            {staffName(r.staffId)}
-                            <span className="inline-flex items-center gap-0.5">
+                            <span className="ml-2 inline-flex items-center gap-0.5 text-xs font-normal text-white/40">
                               <Clock className="h-3 w-3" /> {fmtDuration(r.duration)}
                             </span>
                           </p>
+                          <div className="mt-1 max-w-[220px]">
+                            <Select
+                              value={r.staffId}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setRows((rs) =>
+                                  rs.map((x) =>
+                                    x.tempId === r.tempId
+                                      ? { ...x, staffId: v }
+                                      : x,
+                                  ),
+                                );
+                                setConflicts([]);
+                              }}
+                            >
+                              <option value="">Sin asignar</option>
+                              {staff.data?.map((s) => (
+                                <option key={s.id} value={s.id}>
+                                  {fullName(s.first_name, s.last_name)}
+                                </option>
+                              ))}
+                            </Select>
+                          </div>
                         </div>
                       </div>
-                      <div className="flex items-center gap-3">
+                      <div className="flex shrink-0 items-center gap-3">
                         <span className="kpi-gold text-sm">
                           {money(r.price)}
                         </span>
@@ -644,8 +698,91 @@ function NewAppointment() {
           <Card>
             <CardHeader
               title="Disponibilidad"
-              subtitle="Tocá un espacio libre para fijar la hora"
+              subtitle="Elegí día y hora; tocá un hueco libre en la barra"
             />
+
+            {/* Controles de fecha / hora */}
+            <div className="mb-3 flex flex-wrap items-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setDate(addDaysISO(date, -1));
+                  setConflicts([]);
+                }}
+                disabled={date <= todayLocalISO()}
+                className="rounded-lg border border-white/10 p-2.5 text-white/60 hover:bg-white/10 hover:text-white disabled:opacity-30"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <Input
+                label="Fecha"
+                type="date"
+                min={todayLocalISO()}
+                value={date}
+                onChange={(e) => {
+                  setDate(e.target.value);
+                  setConflicts([]);
+                }}
+                className="w-40"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setDate(addDaysISO(date, 1));
+                  setConflicts([]);
+                }}
+                className="rounded-lg border border-white/10 p-2.5 text-white/60 hover:bg-white/10 hover:text-white"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+              <div className="w-28">
+                <Select
+                  label="Hora"
+                  value={time}
+                  onChange={(e) => {
+                    setTime(e.target.value);
+                    setConflicts([]);
+                  }}
+                >
+                  {!TIME_SLOTS.includes(time) && (
+                    <option value={time}>{time}</option>
+                  )}
+                  {TIME_SLOTS.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            </div>
+
+            {/* Tira de días (navegación horizontal) */}
+            <div className="mb-4 flex gap-1.5 overflow-x-auto pb-1">
+              {dayStrip.map((d) => {
+                const lbl = dayLabel(d);
+                const active = d === date;
+                return (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => {
+                      setDate(d);
+                      setConflicts([]);
+                    }}
+                    className={cn(
+                      'flex min-w-[52px] shrink-0 flex-col items-center rounded-lg border px-2 py-1.5 text-center transition',
+                      active
+                        ? 'border-gold/50 bg-gold/15 text-gold-100'
+                        : 'border-white/10 text-white/60 hover:bg-white/5',
+                    )}
+                  >
+                    <span className="text-[10px] uppercase">{lbl.wd}</span>
+                    <span className="text-xs font-medium">{lbl.dm}</span>
+                  </button>
+                );
+              })}
+            </div>
+
             <AvailabilityTimeline
               date={date}
               loading={dayAppts.isLoading}
@@ -666,34 +803,11 @@ function NewAppointment() {
           <Card gold className="sticky top-4">
             <CardHeader title="Resumen" />
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <Input
-                  label="Fecha"
-                  type="date"
-                  min={todayLocalISO()}
-                  value={date}
-                  onChange={(e) => {
-                    setDate(e.target.value);
-                    setConflicts([]);
-                  }}
-                />
-                <Select
-                  label="Hora"
-                  value={time}
-                  onChange={(e) => {
-                    setTime(e.target.value);
-                    setConflicts([]);
-                  }}
-                >
-                  {!TIME_SLOTS.includes(time) && (
-                    <option value={time}>{time}</option>
-                  )}
-                  {TIME_SLOTS.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                </Select>
+              <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm">
+                <span className="text-white/50">Cuándo</span>
+                <span className="font-medium text-white">
+                  {dayLabel(date).dm} · {time}
+                </span>
               </div>
 
               <div>
