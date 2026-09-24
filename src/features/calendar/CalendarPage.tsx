@@ -310,9 +310,32 @@ export function CalendarPage() {
               onSelectEvent={(id) =>
                 navigate(`${ROUTES.appointment}/${id}`)
               }
-              onDrop={(id, start, end) =>
-                reschedule.mutate({ id, start, end })
-              }
+              onDrop={(id, start, end) => {
+                const row = appts.data?.find((a) => a.id === id);
+                const staffId = row?.staff_id;
+                const conflict = staffId
+                  ? (appts.data ?? []).find(
+                      (a) =>
+                        a.id !== id &&
+                        a.staff_id === staffId &&
+                        new Date(a.start_at) < end &&
+                        start < new Date(a.end_at),
+                    )
+                  : undefined;
+                if (
+                  conflict &&
+                  !window.confirm(
+                    `Se solapa con otra cita de ${
+                      row?.staff_name ?? 'la estilista'
+                    } (${
+                      conflict.customer_name ?? 'sin cliente'
+                    }). ¿Reprogramar de todas formas?`,
+                  )
+                ) {
+                  return;
+                }
+                reschedule.mutate({ id, start, end });
+              }}
               onSelectSlot={(start) =>
                 navigate(`${ROUTES.appointmentNew}?date=${ymd(start)}`)
               }
