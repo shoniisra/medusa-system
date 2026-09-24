@@ -183,6 +183,45 @@ export async function createCalendarEvent(
   return data.id;
 }
 
+/** Actualiza (PATCH) campos de un evento existente. Best-effort. */
+export async function updateCalendarEvent(
+  eventId: string,
+  calendarId: string | null | undefined,
+  patch: {
+    summary?: string;
+    description?: string;
+    colorHex?: string | null;
+    startLocal?: string;
+    endLocal?: string;
+  },
+): Promise<void> {
+  const token = await getAccessToken();
+  const calId = encodeURIComponent(calendarId?.trim() || 'primary');
+  const body: Record<string, unknown> = {};
+  if (patch.summary != null) body.summary = patch.summary;
+  if (patch.description != null) body.description = patch.description;
+  if (patch.colorHex) {
+    const cid = hexToGoogleColorId(patch.colorHex);
+    if (cid) body.colorId = cid;
+  }
+  if (patch.startLocal) body.start = { dateTime: patch.startLocal, timeZone: TIMEZONE };
+  if (patch.endLocal) body.end = { dateTime: patch.endLocal, timeZone: TIMEZONE };
+  const res = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${calId}/events/${encodeURIComponent(eventId)}`,
+    {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    },
+  );
+  if (!res.ok && res.status !== 404 && res.status !== 410) {
+    throw new Error(`Google Calendar respondió ${res.status} al actualizar.`);
+  }
+}
+
 /** Borra un evento del calendario (best-effort). No lanza si ya no existe. */
 export async function deleteCalendarEvent(
   eventId: string,

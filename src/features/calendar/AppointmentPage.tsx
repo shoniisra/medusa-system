@@ -36,6 +36,7 @@ import { ROUTES } from '@/config/constants';
 import {
   isGoogleCalendarEnabled,
   createCalendarEvent,
+  updateCalendarEvent,
 } from '@/lib/googleCalendar';
 import {
   Button,
@@ -943,7 +944,10 @@ interface ApptHead {
   status: AppointmentStatus;
   deposit_amount: number;
   start_at: string;
+  end_at: string;
   customer_name: string | null;
+  google_calendar_id: string | null;
+  google_calendar_event_id: string | null;
 }
 
 interface ItemRow {
@@ -972,7 +976,8 @@ function EditAppointment({ id }: { id: string }) {
     queryKey: ['appointment-head', id],
     queryFn: () =>
       queryOne<ApptHead>(
-        `SELECT a.id, a.status, a.deposit_amount, a.start_at,
+        `SELECT a.id, a.status, a.deposit_amount, a.start_at, a.end_at,
+                a.google_calendar_id, a.google_calendar_event_id,
                 c.first_name || CASE WHEN c.last_name IS NOT NULL THEN ' ' || c.last_name ELSE '' END AS customer_name
            FROM appointment a
            LEFT JOIN customer c ON c.id = a.customer_id
@@ -1030,15 +1035,15 @@ function EditAppointment({ id }: { id: string }) {
   };
 
   const addService = useMutation({
-    mutationFn: async () => {
-      const s = services.data?.find((x) => x.id === serviceId);
+    mutationFn: async ({ sid, stid }: { sid: string; stid: string | null }) => {
+      const s = services.data?.find((x) => x.id === sid);
       if (!s) return;
       await execute(
         `INSERT INTO appointment_item
            (id, appointment_id, service_id, product_id, description, quantity,
             list_unit_price, discount_amount, final_unit_price, assigned_staff_id)
          VALUES (?, ?, ?, NULL, ?, 1, ?, 0, ?, ?)`,
-        [genId(), id, s.id, s.name, s.base_price, s.base_price, staffId || null],
+        [genId(), id, s.id, s.name, s.base_price, s.base_price, stid || null],
       );
     },
     onSuccess: () => {
@@ -1046,6 +1051,50 @@ function EditAppointment({ id }: { id: string }) {
       setStaffId('');
       invalidate();
     },
+  });
+
+  // Reasignar estilista de un ítem. En atención NO se consulta disponibilidad;
+  // sí se actualiza el evento de Google para que las comisiones/colores cuadren.
+  const reassign = useMutation({
+    mutationFn: async ({
+      itemId,
+      staffId: newStaff,
+    }: {
+      itemId: string;
+      staffId: string | null;
+    }) => {
+      await execute(
+        'UPDATE appointment_item SET assigned_staff_id = ? WHERE id = ?',
+        [newStaff || null, itemId],
+      );
+      const h = head.data;
+      if (h?.google_calendar_event_id && isGoogleCalendarEnabled()) {
+        const nameOf = (sid: string | null) => {
+          const s = staff.data?.find((x) => x.id === sid);
+          return s ? fullName(s.first_name, s.last_name) : 'Sin asignar';
+        };
+        const updated = serviceItems.map((i) =>
+          i.id === itemId ? { ...i, assigned_staff_id: newStaff } : i,
+        );
+        const desc = updated
+          .map((i) => `• ${i.description} (${nameOf(i.assigned_staff_id)})`)
+          .join('\n');
+        const firstStaffId =
+          updated.find((i) => i.assigned_staff_id)?.assigned_staff_id ?? null;
+        const colorHex =
+          staff.data?.find((s) => s.id === firstStaffId)?.color ?? null;
+        try {
+          await updateCalendarEvent(
+            h.google_calendar_event_id,
+            h.google_calendar_id,
+            { description: desc, colorHex },
+          );
+        } catch {
+          /* si Google falla, la reasignación local ya quedó guardada */
+        }
+      }
+    },
+    onSuccess: invalidate,
   });
 
   const addProduct = useMutation({
@@ -1156,8 +1205,11 @@ function EditAppointment({ id }: { id: string }) {
 
           {/* Servicios */}
           <Card>
-            <CardHeader title="Servicios" />
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <CardHeader
+              title="Servicios"
+              subtitle="Elegí servicio y estilista: se agrega solo"
+            />
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <Select
                 label="Categoría"
                 value={category}
@@ -1176,7 +1228,11 @@ function EditAppointment({ id }: { id: string }) {
               <Select
                 label="Servicio"
                 value={serviceId}
-                onChange={(e) => setServiceId(e.target.value)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v && staffId) addService.mutate({ sid: v, stid: staffId });
+                  else setServiceId(v);
+                }}
               >
                 <option value="">Seleccionar…</option>
                 {filteredServices.map((s) => (
@@ -1188,7 +1244,12 @@ function EditAppointment({ id }: { id: string }) {
               <Select
                 label="Estilista"
                 value={staffId}
-                onChange={(e) => setStaffId(e.target.value)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v && serviceId)
+                    addService.mutate({ sid: serviceId, stid: v });
+                  else setStaffId(v);
+                }}
               >
                 <option value="">Sin asignar</option>
                 {staff.data?.map((s) => (
@@ -1197,13 +1258,6 @@ function EditAppointment({ id }: { id: string }) {
                   </option>
                 ))}
               </Select>
-              <Button
-                className="self-end"
-                onClick={() => addService.mutate()}
-                disabled={!serviceId || addService.isPending}
-              >
-                <Plus className="h-4 w-4" /> Agregar
-              </Button>
             </div>
 
             <ItemList
@@ -1211,6 +1265,10 @@ function EditAppointment({ id }: { id: string }) {
               emptyIcon={Scissors}
               emptyTitle="Sin servicios"
               onRemove={(itemId) => removeItem.mutate(itemId)}
+              staffOptions={staff.data ?? []}
+              onReassign={(itemId, newStaff) =>
+                reassign.mutate({ itemId, staffId: newStaff })
+              }
             />
           </Card>
 
@@ -1340,16 +1398,26 @@ function Header({
   );
 }
 
+interface StaffOpt {
+  id: string;
+  first_name: string;
+  last_name: string | null;
+}
+
 function ItemList({
   rows,
   emptyIcon,
   emptyTitle,
   onRemove,
+  staffOptions,
+  onReassign,
 }: {
   rows: ItemRow[];
   emptyIcon: typeof Scissors;
   emptyTitle: string;
   onRemove: (id: string) => void;
+  staffOptions?: StaffOpt[];
+  onReassign?: (itemId: string, staffId: string | null) => void;
 }) {
   if (rows.length === 0) {
     return (
@@ -1362,25 +1430,47 @@ function ItemList({
     <ul className="mt-4 divide-y divide-white/5">
       {rows.map((i) => (
         <li key={i.id} className="flex items-center justify-between gap-3 py-3">
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
             {i.service_id && (
               <span
-                className="h-8 w-1.5 rounded-full"
+                className="h-10 w-1.5 shrink-0 rounded-full"
                 style={{ backgroundColor: i.staff_color || '#64748b' }}
               />
             )}
-            <div>
-              <p className="text-sm font-medium text-white">{i.description}</p>
-              <p className="text-xs text-white/40">
-                {i.quantity} × {money(i.final_unit_price)}
-                {i.service_id && i.staff_name ? ` · ${i.staff_name}` : ''}
-                {i.service_id
-                  ? ` · ${fmtDuration(i.duration ?? DEFAULT_SERVICE_MINUTES)}`
-                  : ''}
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-white">
+                {i.description}
+                {i.service_id ? (
+                  <span className="ml-2 text-xs font-normal text-white/40">
+                    {fmtDuration(i.duration ?? DEFAULT_SERVICE_MINUTES)}
+                  </span>
+                ) : null}
               </p>
+              {i.service_id && onReassign && staffOptions ? (
+                <div className="mt-1 max-w-[220px]">
+                  <Select
+                    value={i.assigned_staff_id ?? ''}
+                    onChange={(e) =>
+                      onReassign(i.id, e.target.value || null)
+                    }
+                  >
+                    <option value="">Sin asignar</option>
+                    {staffOptions.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {fullName(s.first_name, s.last_name)}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+              ) : (
+                <p className="text-xs text-white/40">
+                  {i.quantity} × {money(i.final_unit_price)}
+                  {i.service_id && i.staff_name ? ` · ${i.staff_name}` : ''}
+                </p>
+              )}
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-3">
             <span className="kpi-gold text-sm">
               {money(i.final_unit_price * i.quantity)}
             </span>
