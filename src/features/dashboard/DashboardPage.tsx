@@ -1,23 +1,23 @@
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  TrendingUp,
-  Banknote,
-  Receipt,
-  Wallet,
   CalendarDays,
   CalendarPlus,
   Trophy,
   Users,
-  UserX,
   Clock,
   ArrowLeftRight,
   CreditCard,
+  Banknote,
   CalendarClock,
+  Wallet,
+  BarChart3,
 } from 'lucide-react';
 import { useDashboard } from './useDashboard';
 import { useDashboardMetrics } from './useDashboardMetrics';
+import { useMonthlySales } from './useMonthlySales';
+import { FinanceOverview, MiniBarChart, Gauge } from './FinanceOverview';
 import { StatCard, Card, CardHeader, Badge, Button, EmptyState } from '@/components/ui';
-import { money, dateShort, timeShort, todayISO, percent } from '@/lib/format';
+import { money, dateShort, timeShort, todayISO } from '@/lib/format';
 import { useSession } from '@/store/session';
 import { ROUTES, APPOINTMENT_STATUS } from '@/config/constants';
 import type { AppointmentStatus } from '@/types';
@@ -28,19 +28,18 @@ export function DashboardPage() {
 
   const { data, isLoading } = useDashboard();
   const m = useDashboardMetrics();
+  const monthly = useMonthlySales();
 
-  const sales = data?.sales;
   const col = data?.collections;
-  const exp = data?.expenses;
   const cash = data?.cashSession;
   const expected = data?.cashExpected ?? 0;
   const counted = cash?.counted_cash ?? null;
 
   const met = m.data;
-  const monthProfit = (met?.month.received ?? 0) - (met?.month.expenses ?? 0);
+  const attendance = met ? Math.max(0, 100 - met.noShowRate) : 0;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8">
+    <div className="mx-auto max-w-6xl space-y-6">
       {/* Encabezado + acciones */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -61,107 +60,91 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {/* ── HOY ── */}
-      <section className="space-y-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-white/40">
-          Hoy
-        </h2>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
-          <StatCard
-            gold
-            tone="gold"
-            label="Ventas del día"
-            value={isLoading ? '—' : money(sales?.total_sales)}
-            icon={TrendingUp}
-            hint={`${sales?.sales_count ?? 0} ventas`}
-          />
-          <StatCard
-            tone="success"
-            label="Dinero recibido"
-            value={isLoading ? '—' : money(col?.total_received)}
-            icon={Banknote}
-          />
-          <StatCard
-            tone="danger"
-            label="Egresos del día"
-            value={isLoading ? '—' : money(exp?.total_expenses)}
-            icon={Receipt}
-          />
-          <StatCard
-            label="Efectivo esperado"
-            value={isLoading ? '—' : money(expected)}
-            icon={Wallet}
-            hint={counted != null ? `Contado: ${money(counted)}` : 'Sin contar'}
-          />
-          <StatCard
-            label="Citas hoy"
-            value={
-              m.isLoading
-                ? '—'
-                : `${met?.todayAttended ?? 0} / ${met?.todayPending ?? 0}`
-            }
-            icon={CalendarClock}
-            hint="Atendidas / Pendientes"
-          />
-        </div>
-      </section>
+      {/* Resumen financiero con tabs día/semana/mes */}
+      <FinanceOverview />
 
-      {/* ── MES ── */}
-      <section className="space-y-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-white/40">
-          Este mes
-        </h2>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <StatCard
-            gold
-            tone="gold"
-            label="Ventas del mes"
-            value={m.isLoading ? '—' : money(met?.month.sales)}
-            icon={TrendingUp}
+      {/* Quick stats de hoy */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatCard
+          label="Citas hoy"
+          value={
+            m.isLoading
+              ? '—'
+              : `${met?.todayAttended ?? 0} / ${met?.todayPending ?? 0}`
+          }
+          icon={CalendarClock}
+          hint="Atendidas / Pendientes"
+        />
+        <StatCard
+          label="Efectivo esperado"
+          value={isLoading ? '—' : money(expected)}
+          icon={Wallet}
+          hint={counted != null ? `Contado: ${money(counted)}` : 'Sin contar'}
+        />
+        <StatCard
+          tone="success"
+          label="Recibido hoy"
+          value={isLoading ? '—' : money(col?.total_received)}
+          icon={Banknote}
+        />
+        <StatCard
+          tone="gold"
+          gold
+          label="Ventas del mes"
+          value={m.isLoading ? '—' : money(met?.month.sales)}
+          icon={BarChart3}
+        />
+      </div>
+
+      {/* Gráfico mensual + gauge de asistencia */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardHeader
+            title="Resumen de ventas mensuales"
+            subtitle="Últimos 6 meses"
           />
-          <StatCard
-            tone="success"
-            label="Recibido del mes"
-            value={m.isLoading ? '—' : money(met?.month.received)}
-            icon={Banknote}
+          {monthly.data && monthly.data.length > 0 ? (
+            <MiniBarChart data={monthly.data} />
+          ) : (
+            <EmptyState icon={BarChart3} title="Sin datos de ventas" />
+          )}
+          {met && (
+            <div className="mt-4 grid grid-cols-3 gap-3 border-t border-white/5 pt-4">
+              <MiniStat
+                icon={Banknote}
+                label="Efectivo (mes)"
+                value={money(met.month.cash)}
+              />
+              <MiniStat
+                icon={ArrowLeftRight}
+                label="Transfer. (mes)"
+                value={money(met.month.transfer)}
+              />
+              <MiniStat
+                icon={CreditCard}
+                label="Tarjeta (mes)"
+                value={money(met.month.card)}
+              />
+            </div>
+          )}
+        </Card>
+
+        <Card gold>
+          <CardHeader
+            title="Asistencia del mes"
+            subtitle="Citas cumplidas vs no-show"
           />
-          <StatCard
-            tone="danger"
-            label="Egresos del mes"
-            value={m.isLoading ? '—' : money(met?.month.expenses)}
-            icon={Receipt}
-          />
-          <StatCard
-            label="Ganancia del mes"
-            value={m.isLoading ? '—' : money(monthProfit)}
-            tone={monthProfit >= 0 ? 'success' : 'danger'}
-            icon={Wallet}
-            hint="Recibido − egresos"
-          />
-        </div>
-        {/* Desglose de ingresos del mes */}
-        {met && (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <MiniStat
-              icon={Banknote}
-              label="Efectivo (mes)"
-              value={money(met.month.cash)}
-            />
-            <MiniStat
-              icon={ArrowLeftRight}
-              label="Transferencias (mes)"
-              value={money(met.month.transfer)}
-            />
-            <MiniStat
-              icon={CreditCard}
-              label="Tarjeta (mes)"
-              value={money(met.month.card)}
+          <div className="flex flex-col items-center justify-center py-4">
+            <Gauge
+              value={attendance}
+              label={`${met?.noShowCount ?? 0} no-show de ${met?.monthAppointments ?? 0}`}
+              tone={attendance >= 80 ? 'emerald' : attendance >= 60 ? 'gold' : 'rose'}
             />
           </div>
-        )}
-      </section>
+        </Card>
+      </div>
 
-      {/* ── PRÓXIMAS CITAS + CAJA ── */}
+      {/* Próximas citas + Estado de caja */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader
@@ -259,11 +242,10 @@ export function DashboardPage() {
         </Card>
       </div>
 
-      {/* ── RANKINGS ── */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {/* Vendedor del mes */}
+      {/* Rankings */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
-          <CardHeader title="Vendedor del mes" subtitle="Por ingresos generados" />
+          <CardHeader title="Estilista del mes" subtitle="Por ingresos generados" />
           {met?.topSeller ? (
             <>
               <div className="mb-3 flex items-center gap-3">
@@ -296,7 +278,6 @@ export function DashboardPage() {
           )}
         </Card>
 
-        {/* Top clientes */}
         <Card>
           <CardHeader title="Top clientes" subtitle="Los que más han gastado" />
           {met && met.topCustomers.length > 0 ? (
@@ -325,25 +306,9 @@ export function DashboardPage() {
             <EmptyState icon={Users} title="Sin clientes aún" />
           )}
         </Card>
-
-        {/* Inasistencia */}
-        <Card>
-          <CardHeader title="Inasistencia" subtitle="No-show del mes" />
-          <div className="flex flex-col items-center justify-center py-4">
-            <div className="flex h-24 w-24 items-center justify-center rounded-full border-4 border-danger/40">
-              <UserX className="h-7 w-7 text-danger" />
-            </div>
-            <p className="mt-3 text-3xl font-bold text-danger">
-              {m.isLoading ? '—' : percent(met?.noShowRate)}
-            </p>
-            <p className="text-xs text-white/40">
-              {met?.noShowCount ?? 0} de {met?.monthAppointments ?? 0} citas
-            </p>
-          </div>
-        </Card>
       </div>
 
-      {/* ── DISPONIBILIDAD HOY POR ESTILISTA ── */}
+      {/* Disponibilidad hoy por estilista */}
       <Card>
         <CardHeader
           title="Disponibilidad de hoy"
@@ -398,8 +363,8 @@ function MiniStat({
   value: string;
 }) {
   return (
-    <div className="glass-card flex items-center justify-between p-3">
-      <span className="flex items-center gap-2 text-sm text-white/50">
+    <div className="flex items-center justify-between rounded-xl bg-white/[0.03] p-3">
+      <span className="flex items-center gap-2 text-xs text-white/50">
         <Icon className="h-4 w-4 text-gold-300/70" />
         {label}
       </span>
