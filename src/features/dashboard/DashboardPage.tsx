@@ -11,6 +11,7 @@ import {
   CalendarClock,
   Wallet,
   BarChart3,
+  MessageCircle,
 } from 'lucide-react';
 import { useDashboard } from './useDashboard';
 import { useDashboardMetrics } from './useDashboardMetrics';
@@ -186,7 +187,24 @@ export function DashboardPage() {
                         </p>
                       </div>
                     </div>
-                    <Badge tone={meta.tone}>{meta.label}</Badge>
+                    <div className="flex items-center gap-2">
+                      {a.phone && (
+                        <a
+                          href={waReminder(
+                            a.phone,
+                            a.customer_name,
+                            a.start_at,
+                          )}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Recordar por WhatsApp"
+                          className="rounded-lg p-1.5 text-emerald-400 hover:bg-emerald-400/10"
+                        >
+                          <MessageCircle className="h-4 w-4" />
+                        </a>
+                      )}
+                      <Badge tone={meta.tone}>{meta.label}</Badge>
+                    </div>
                   </li>
                 );
               })}
@@ -371,6 +389,22 @@ function MiniStat({
       <span className="text-sm font-medium text-white">{value}</span>
     </div>
   );
+}
+
+/** Arma un enlace wa.me con mensaje de recordatorio precargado (EC por defecto). */
+function waReminder(
+  phone: string,
+  name: string | null,
+  startAt: string,
+): string {
+  let d = phone.replace(/\D/g, '');
+  if (d.startsWith('0')) d = '593' + d.slice(1);
+  else if (!d.startsWith('593')) d = '593' + d;
+  const saludo = name ? `Hola ${name.split(' ')[0]}` : 'Hola';
+  const text = `${saludo} 👋 Te recordamos tu cita en Medusa Estudio el ${dateShort(
+    startAt,
+  )} a las ${timeShort(startAt)}. ¿La confirmás? 💇`;
+  return `https://wa.me/${d}?text=${encodeURIComponent(text)}`;
 }
 
 function RowKV({ label, value }: { label: string; value: string }) {

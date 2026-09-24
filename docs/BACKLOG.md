@@ -22,12 +22,11 @@ Estado al 2026-09-24. Ordenado por impacto/esfuerzo. Marcá `[x]` al completar.
 - [ ] **Seguridad de credenciales Turso**: el token viaja en el bundle (ver
       `src/lib/db.ts`). Mover escrituras a un backend/proxy o usar token de solo
       lectura + Edge Function para mutaciones. Bloqueante para producción.
-- [ ] **Próximas citas en la ficha del cliente**: mostrar citas futuras además
-      del historial facturado (tabla `appointment`).
+- [x] **Próximas citas en la ficha del cliente**: citas futuras además del
+      historial facturado (tabla `appointment`).
 - [ ] **Recordatorios de WhatsApp**: botón "recordar" en próximas citas que abra
       `wa.me` con mensaje precargado (confirmación de cita).
-- [ ] **Validación de conflicto también al reprogramar por drag** en el calendario
-      (hoy reprograma sin chequear solape).
+- [x] **Validación de conflicto al reprogramar por drag** en el calendario.
 
 ## 🟡 Media prioridad
 - [ ] Cumpleaños del mes en dashboard (usa `customer.birth_date`).
@@ -43,4 +42,4 @@ Estado al 2026-09-24. Ordenado por impacto/esfuerzo. Marcá `[x]` al completar.
 - [ ] Roles y permisos por usuario (recepción vs admin).
 - [ ] Herramienta de migraciones versionadas (hoy son scripts one-off).
 - [ ] Tests (Vitest) para helpers de `schedule.ts` y cálculos de nómina.
-- [ ] Mover `@types/react-big-calendar` a devDependencies.
+- [x] Mover `@types/react-big-calendar` a devDependencies.
