@@ -4,7 +4,7 @@ import {
   ShoppingBag,
   Wallet,
   CalendarDays,
-  FileText,
+  Contact,
 } from 'lucide-react';
 import { ROUTES } from '@/config/constants';
 import { cn } from '@/lib/cn';
@@ -14,7 +14,7 @@ const NAV = [
   { to: ROUTES.pos, label: 'Venta', icon: ShoppingBag },
   { to: ROUTES.cashflow, label: 'Caja', icon: Wallet },
   { to: ROUTES.calendar, label: 'Agenda', icon: CalendarDays },
-  { to: ROUTES.invoices, label: 'Facturas', icon: FileText },
+  { to: ROUTES.clients, label: 'Clientes', icon: Contact },
 ];
 
 /** Barra de navegación inferior para móvil. */

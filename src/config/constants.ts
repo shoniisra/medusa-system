@@ -60,6 +60,8 @@ export const ROUTES = {
   pos: '/pos',
   cashflow: '/caja',
   staff: '/personal',
+  clients: '/clientes',
+  client: '/clientes', // + /:id
   calendar: '/agenda',
   appointmentNew: '/agenda/cita/nueva',
   appointment: '/agenda/cita', // + /:id

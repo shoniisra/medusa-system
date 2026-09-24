@@ -8,6 +8,7 @@ import { DashboardPage } from '@/features/dashboard/DashboardPage';
 import { PosPage } from '@/features/pos/PosPage';
 import { CashflowPage } from '@/features/cashflow/CashflowPage';
 import { StaffPage } from '@/features/staff/StaffPage';
+import { ClientsPage, ClientDetailPage } from '@/features/clients/ClientsPage';
 import { CalendarPage } from '@/features/calendar/CalendarPage';
 import { AppointmentPage } from '@/features/calendar/AppointmentPage';
 import { InvoicesPage } from '@/features/invoices/InvoicesPage';
@@ -28,6 +29,8 @@ export const router = createBrowserRouter([
           { path: ROUTES.appointmentNew, element: <AppointmentPage /> },
           { path: `${ROUTES.appointment}/:id`, element: <AppointmentPage /> },
           { path: ROUTES.staff, element: <StaffPage /> },
+          { path: ROUTES.clients, element: <ClientsPage /> },
+          { path: `${ROUTES.client}/:id`, element: <ClientDetailPage /> },
           { path: ROUTES.invoices, element: <InvoicesPage /> },
           { path: ROUTES.settings, element: <SettingsPage /> },
         ],
