@@ -1,4 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
   CalendarDays,
   CalendarPlus,
@@ -12,14 +13,16 @@ import {
   Wallet,
   BarChart3,
   MessageCircle,
+  Cake,
 } from 'lucide-react';
+import { query } from '@/lib/db';
 import { useDashboard } from './useDashboard';
 import { useDashboardMetrics } from './useDashboardMetrics';
 import { useMonthlySales } from './useMonthlySales';
 import { FinanceOverview, MiniBarChart, Gauge } from './FinanceOverview';
 import { StatCard, Card, CardHeader, Badge, Button, EmptyState } from '@/components/ui';
 import { money, dateShort, timeShort, todayISO } from '@/lib/format';
-import { useSession } from '@/store/session';
+import { useSession, useOrgId } from '@/store/session';
 import { ROUTES, APPOINTMENT_STATUS } from '@/config/constants';
 import type { AppointmentStatus } from '@/types';
 
@@ -261,7 +264,7 @@ export function DashboardPage() {
       </div>
 
       {/* Rankings */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card>
           <CardHeader title="Estilista del mes" subtitle="Por ingresos generados" />
           {met?.topSeller ? (
@@ -324,6 +327,8 @@ export function DashboardPage() {
             <EmptyState icon={Users} title="Sin clientes aún" />
           )}
         </Card>
+
+        <BirthdaysCard />
       </div>
 
       {/* Disponibilidad hoy por estilista */}
@@ -391,20 +396,99 @@ function MiniStat({
   );
 }
 
+interface BirthdayRow {
+  id: string;
+  name: string;
+  phone: string | null;
+  day: number;
+}
+
+/** Clientes que cumplen años este mes. */
+function BirthdaysCard() {
+  const orgId = useOrgId();
+  const month = String(new Date().getMonth() + 1).padStart(2, '0');
+  const today = new Date().getDate();
+
+  const rows = useQuery({
+    queryKey: ['birthdays', orgId, month],
+    enabled: !!orgId,
+    queryFn: () =>
+      query<BirthdayRow>(
+        `SELECT id,
+                first_name || CASE WHEN last_name IS NOT NULL THEN ' ' || last_name ELSE '' END AS name,
+                phone,
+                CAST(substr(birth_date,9,2) AS INTEGER) AS day
+           FROM customer
+          WHERE organization_id = ? AND active = 1 AND birth_date IS NOT NULL
+            AND substr(birth_date,6,2) = ?
+          ORDER BY day`,
+        [orgId, month],
+      ),
+  });
+
+  return (
+    <Card>
+      <CardHeader title="Cumpleaños del mes" subtitle="Clientes que cumplen años" />
+      {rows.data && rows.data.length > 0 ? (
+        <ul className="space-y-2">
+          {rows.data.map((b) => (
+            <li key={b.id} className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2 text-sm text-white/80">
+                <Cake
+                  className={
+                    b.day === today
+                      ? 'h-4 w-4 text-gold-300'
+                      : 'h-4 w-4 text-white/30'
+                  }
+                />
+                {b.name}
+                <span className="text-xs text-white/30">día {b.day}</span>
+              </span>
+              {b.phone && (
+                <a
+                  href={waBirthday(b.phone, b.name)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Saludar por WhatsApp"
+                  className="rounded-lg p-1.5 text-emerald-400 hover:bg-emerald-400/10"
+                >
+                  <MessageCircle className="h-4 w-4" />
+                </a>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <EmptyState icon={Cake} title="Sin cumpleaños este mes" />
+      )}
+    </Card>
+  );
+}
+
+function normalizePhone(phone: string): string {
+  let d = phone.replace(/\D/g, '');
+  if (d.startsWith('0')) d = '593' + d.slice(1);
+  else if (!d.startsWith('593')) d = '593' + d;
+  return d;
+}
+
+function waBirthday(phone: string, name: string | null): string {
+  const saludo = name ? `¡Feliz cumpleaños, ${name.split(' ')[0]}!` : '¡Feliz cumpleaños!';
+  const text = `${saludo} 🎉 De parte de todo el equipo de Medusa Estudio. Te esperamos para consentirte 💇✨`;
+  return `https://wa.me/${normalizePhone(phone)}?text=${encodeURIComponent(text)}`;
+}
+
 /** Arma un enlace wa.me con mensaje de recordatorio precargado (EC por defecto). */
 function waReminder(
   phone: string,
   name: string | null,
   startAt: string,
 ): string {
-  let d = phone.replace(/\D/g, '');
-  if (d.startsWith('0')) d = '593' + d.slice(1);
-  else if (!d.startsWith('593')) d = '593' + d;
   const saludo = name ? `Hola ${name.split(' ')[0]}` : 'Hola';
   const text = `${saludo} 👋 Te recordamos tu cita en Medusa Estudio el ${dateShort(
     startAt,
   )} a las ${timeShort(startAt)}. ¿La confirmás? 💇`;
-  return `https://wa.me/${d}?text=${encodeURIComponent(text)}`;
+  return `https://wa.me/${normalizePhone(phone)}?text=${encodeURIComponent(text)}`;
 }
 
 function RowKV({ label, value }: { label: string; value: string }) {

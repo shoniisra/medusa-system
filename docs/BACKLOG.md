@@ -24,12 +24,12 @@ Estado al 2026-09-24. Ordenado por impacto/esfuerzo. Marcá `[x]` al completar.
       lectura + Edge Function para mutaciones. Bloqueante para producción.
 - [x] **Próximas citas en la ficha del cliente**: citas futuras además del
       historial facturado (tabla `appointment`).
-- [ ] **Recordatorios de WhatsApp**: botón "recordar" en próximas citas que abra
+- [x] **Recordatorios de WhatsApp**: botón "recordar" en próximas citas que abre
       `wa.me` con mensaje precargado (confirmación de cita).
 - [x] **Validación de conflicto al reprogramar por drag** en el calendario.
 
 ## 🟡 Media prioridad
-- [ ] Cumpleaños del mes en dashboard (usa `customer.birth_date`).
+- [x] Cumpleaños del mes en dashboard (con saludo por WhatsApp).
 - [ ] Filtro por estilista/estado en la vista calendario.
 - [ ] Exportar liquidación de nómina a CSV/PDF.
 - [ ] Historial de color: adjuntar foto del resultado (requiere storage).
