@@ -3,30 +3,26 @@ import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CalendarDays,
-  UserPlus,
   CalendarPlus,
+  CalendarRange,
   Pencil,
   Trash2,
   List,
   Columns3,
 } from 'lucide-react';
+import type { View } from 'react-big-calendar';
 import { query, execute, batch } from '@/lib/db';
-import { genId, timeShort, dateShort } from '@/lib/format';
-import { useOrgId, useBranchId } from '@/store/session';
+import { timeShort, dateShort, toLocalNaive } from '@/lib/format';
+import { useBranchId } from '@/store/session';
 import { APPOINTMENT_STATUS, ROUTES } from '@/config/constants';
 import {
   isGoogleCalendarEnabled,
   deleteCalendarEvent,
+  updateCalendarEvent,
 } from '@/lib/googleCalendar';
-import {
-  Card,
-  Badge,
-  Button,
-  Input,
-  Modal,
-  EmptyState,
-} from '@/components/ui';
+import { Card, Badge, Button, Modal, EmptyState } from '@/components/ui';
 import { GoogleCalendarEmbed } from './GoogleCalendarEmbed';
+import { AgendaCalendar, type AgendaEvent } from './AgendaCalendar';
 import { cn } from '@/lib/cn';
 import type { AppointmentStatus } from '@/types';
 
@@ -47,7 +43,7 @@ interface AppointmentRow {
 }
 
 type RangeMode = 'today' | 'week' | 'month';
-type ViewMode = 'list' | 'kanban';
+type ViewMode = 'list' | 'kanban' | 'calendar';
 
 const FALLBACK_COLOR = '#64748b';
 const STATUS_ORDER: AppointmentStatus[] = [
@@ -94,6 +90,19 @@ function rangeFor(mode: RangeMode): { from: string; to: string; label: string } 
   };
 }
 
+/** Ventana amplia (mes ± 1 semana) alrededor de una fecha, para la vista calendario. */
+function windowFor(d: Date): { from: string; to: string; label: string } {
+  const from = new Date(d.getFullYear(), d.getMonth(), 1);
+  from.setDate(from.getDate() - 7);
+  const to = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  to.setDate(to.getDate() + 7);
+  return {
+    from: ymd(from),
+    to: ymd(to),
+    label: d.toLocaleDateString('es-EC', { month: 'long', year: 'numeric' }),
+  };
+}
+
 /* ─────────────────────────────── Página ─────────────────────────────── */
 
 export function CalendarPage() {
@@ -103,13 +112,17 @@ export function CalendarPage() {
   const [range, setRange] = useState<RangeMode>('today');
   const [view, setView] = useState<ViewMode>('list');
   const [source, setSource] = useState<'internal' | 'google'>('internal');
-  const [clientOpen, setClientOpen] = useState(false);
   const [toDelete, setToDelete] = useState<AppointmentRow | null>(null);
+  const [calDate, setCalDate] = useState(new Date());
+  const [calView, setCalView] = useState<View>('week');
 
   const openAppt = (a: AppointmentRow) =>
     navigate(`${ROUTES.appointment}/${a.id}`);
 
-  const { from, to, label } = useMemo(() => rangeFor(range), [range]);
+  const { from, to, label } = useMemo(
+    () => (view === 'calendar' ? windowFor(calDate) : rangeFor(range)),
+    [view, range, calDate],
+  );
 
   const appts = useQuery({
     queryKey: ['appointments', branchId, from, to],
@@ -139,6 +152,53 @@ export function CalendarPage() {
 
   const invalidate = () =>
     qc.invalidateQueries({ queryKey: ['appointments'] });
+
+  const events: AgendaEvent[] = useMemo(
+    () =>
+      (appts.data ?? []).map((a) => ({
+        id: a.id,
+        title: `${a.customer_name ?? 'Sin cliente'}${
+          a.service_name ? ' · ' + a.service_name : ''
+        }`,
+        start: new Date(a.start_at),
+        end: new Date(a.end_at),
+        color: a.staff_color || FALLBACK_COLOR,
+      })),
+    [appts.data],
+  );
+
+  // Arrastrar/redimensionar en el calendario reprograma la cita (y su evento).
+  const reschedule = useMutation({
+    mutationFn: async ({
+      id,
+      start,
+      end,
+    }: {
+      id: string;
+      start: Date;
+      end: Date;
+    }) => {
+      const row = appts.data?.find((a) => a.id === id);
+      const startLocal = toLocalNaive(start);
+      const endLocal = toLocalNaive(end);
+      await execute(
+        'UPDATE appointment SET start_at = ?, end_at = ?, updated_at = ? WHERE id = ?',
+        [startLocal, endLocal, new Date().toISOString(), id],
+      );
+      if (row?.google_calendar_event_id && isGoogleCalendarEnabled()) {
+        try {
+          await updateCalendarEvent(
+            row.google_calendar_event_id,
+            row.google_calendar_id,
+            { startLocal, endLocal },
+          );
+        } catch {
+          /* la reprogramación local ya quedó guardada */
+        }
+      }
+    },
+    onSuccess: invalidate,
+  });
 
   const del = useMutation({
     mutationFn: async (a: AppointmentRow) => {
@@ -170,14 +230,9 @@ export function CalendarPage() {
     <div className="mx-auto max-w-4xl space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold text-white">Agenda</h1>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => setClientOpen(true)}>
-            <UserPlus className="h-4 w-4" /> Nuevo cliente
-          </Button>
-          <Button onClick={() => navigate(ROUTES.appointmentNew)}>
-            <CalendarPlus className="h-4 w-4" /> Nueva cita
-          </Button>
-        </div>
+        <Button onClick={() => navigate(ROUTES.appointmentNew)}>
+          <CalendarPlus className="h-4 w-4" /> Nueva cita
+        </Button>
       </div>
 
       {/* Fuente: agenda propia vs Google Calendar */}
@@ -202,17 +257,30 @@ export function CalendarPage() {
         <>
           {/* Rango + vista */}
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex gap-1 rounded-xl bg-ink-800/60 p-1">
-              <ToggleBtn active={range === 'today'} onClick={() => setRange('today')}>
-                Hoy
-              </ToggleBtn>
-              <ToggleBtn active={range === 'week'} onClick={() => setRange('week')}>
-                Esta semana
-              </ToggleBtn>
-              <ToggleBtn active={range === 'month'} onClick={() => setRange('month')}>
-                Este mes
-              </ToggleBtn>
-            </div>
+            {view === 'calendar' ? (
+              <span />
+            ) : (
+              <div className="flex gap-1 rounded-xl bg-ink-800/60 p-1">
+                <ToggleBtn
+                  active={range === 'today'}
+                  onClick={() => setRange('today')}
+                >
+                  Hoy
+                </ToggleBtn>
+                <ToggleBtn
+                  active={range === 'week'}
+                  onClick={() => setRange('week')}
+                >
+                  Esta semana
+                </ToggleBtn>
+                <ToggleBtn
+                  active={range === 'month'}
+                  onClick={() => setRange('month')}
+                >
+                  Este mes
+                </ToggleBtn>
+              </div>
+            )}
             <div className="flex gap-1 rounded-xl bg-ink-800/60 p-1">
               <ToggleBtn active={view === 'list'} onClick={() => setView('list')}>
                 <List className="h-4 w-4" />
@@ -223,37 +291,64 @@ export function CalendarPage() {
               >
                 <Columns3 className="h-4 w-4" />
               </ToggleBtn>
+              <ToggleBtn
+                active={view === 'calendar'}
+                onClick={() => setView('calendar')}
+              >
+                <CalendarRange className="h-4 w-4" />
+              </ToggleBtn>
             </div>
           </div>
 
-          <p className="text-center text-sm capitalize text-white/60">{label}</p>
-
-          {!appts.data || appts.data.length === 0 ? (
-            <Card>
-              <EmptyState
-                icon={CalendarDays}
-                title="Sin citas en este período"
-                description="No hay reservas para el rango seleccionado."
-              />
-            </Card>
-          ) : view === 'list' ? (
-            <ListView
-              rows={appts.data}
-              showDate={range !== 'today'}
-              onEdit={openAppt}
-              onDelete={setToDelete}
+          {view === 'calendar' ? (
+            <AgendaCalendar
+              events={events}
+              date={calDate}
+              view={calView}
+              onNavigate={setCalDate}
+              onView={setCalView}
+              onSelectEvent={(id) =>
+                navigate(`${ROUTES.appointment}/${id}`)
+              }
+              onDrop={(id, start, end) =>
+                reschedule.mutate({ id, start, end })
+              }
+              onSelectSlot={(start) =>
+                navigate(`${ROUTES.appointmentNew}?date=${ymd(start)}`)
+              }
             />
           ) : (
-            <KanbanView
-              rows={appts.data}
-              onEdit={openAppt}
-              onDelete={setToDelete}
-            />
+            <>
+              <p className="text-center text-sm capitalize text-white/60">
+                {label}
+              </p>
+
+              {!appts.data || appts.data.length === 0 ? (
+                <Card>
+                  <EmptyState
+                    icon={CalendarDays}
+                    title="Sin citas en este período"
+                    description="No hay reservas para el rango seleccionado."
+                  />
+                </Card>
+              ) : view === 'list' ? (
+                <ListView
+                  rows={appts.data}
+                  showDate={range !== 'today'}
+                  onEdit={openAppt}
+                  onDelete={setToDelete}
+                />
+              ) : (
+                <KanbanView
+                  rows={appts.data}
+                  onEdit={openAppt}
+                  onDelete={setToDelete}
+                />
+              )}
+            </>
           )}
         </>
       )}
-
-      <QuickClientModal open={clientOpen} onClose={() => setClientOpen(false)} />
 
       {/* Confirmación de eliminado */}
       <Modal
@@ -455,87 +550,5 @@ function ToggleBtn({
     >
       {children}
     </button>
-  );
-}
-
-/* ─────────────────────── Registro rápido de cliente ─────────────────────── */
-
-function QuickClientModal({
-  open,
-  onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}) {
-  const orgId = useOrgId();
-  const qc = useQueryClient();
-
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [phone, setPhone] = useState('');
-  const [birth, setBirth] = useState('');
-
-  const save = useMutation({
-    mutationFn: () =>
-      execute(
-        `INSERT INTO customer
-           (id, organization_id, first_name, last_name, phone, birth_date)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          genId(),
-          orgId,
-          firstName,
-          lastName || null,
-          phone || null,
-          birth || null,
-        ],
-      ),
-    onSuccess: () => {
-      setFirstName('');
-      setLastName('');
-      setPhone('');
-      setBirth('');
-      qc.invalidateQueries({ queryKey: ['customers', orgId] });
-      onClose();
-    },
-  });
-
-  return (
-    <Modal open={open} onClose={onClose} title="Nuevo cliente">
-      <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-3">
-          <Input
-            label="Nombre"
-            value={firstName}
-            onChange={(e) => setFirstName(e.target.value)}
-          />
-          <Input
-            label="Apellido"
-            value={lastName}
-            onChange={(e) => setLastName(e.target.value)}
-          />
-        </div>
-        <Input
-          label="WhatsApp"
-          value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-          placeholder="+593…"
-        />
-        <Input
-          label="Cumpleaños"
-          type="date"
-          value={birth}
-          onChange={(e) => setBirth(e.target.value)}
-        />
-        <Button
-          className="w-full"
-          disabled={!firstName}
-          loading={save.isPending}
-          onClick={() => save.mutate()}
-        >
-          Guardar cliente
-        </Button>
-      </div>
-    </Modal>
   );
 }
