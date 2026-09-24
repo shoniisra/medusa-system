@@ -13,7 +13,15 @@ import {
   TriangleAlert,
 } from 'lucide-react';
 import { query, queryOne, execute } from '@/lib/db';
-import { genId, money, dateShort, fullName, todayISO } from '@/lib/format';
+import {
+  genId,
+  money,
+  dateShort,
+  timeShort,
+  fullName,
+  todayISO,
+  toLocalNaive,
+} from '@/lib/format';
 import { useOrgId, useSession } from '@/store/session';
 import { useStaff } from '@/features/pos/useCatalog';
 import {
@@ -289,6 +297,27 @@ export function ClientDetailPage() {
       ),
   });
 
+  const upcoming = useQuery({
+    queryKey: ['client-upcoming', id],
+    enabled: !!id,
+    queryFn: () =>
+      query<{
+        id: string;
+        start_at: string;
+        status: string;
+        services: string | null;
+      }>(
+        `SELECT a.id, a.start_at, a.status,
+                (SELECT GROUP_CONCAT(ai.description, ', ')
+                   FROM appointment_item ai WHERE ai.appointment_id = a.id) AS services
+           FROM appointment a
+          WHERE a.customer_id = ? AND a.start_at >= ?
+            AND a.status IN ('reserved','confirmed')
+          ORDER BY a.start_at ASC LIMIT 10`,
+        [id, toLocalNaive(new Date())],
+      ),
+  });
+
   if (client.isLoading) return null;
   if (!client.data) {
     return (
@@ -334,6 +363,38 @@ export function ClientDetailPage() {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
+          {/* Próximas citas */}
+          {upcoming.data && upcoming.data.length > 0 && (
+            <Card>
+              <CardHeader
+                title="Próximas citas"
+                subtitle="Reservas futuras de este cliente"
+              />
+              <ul className="divide-y divide-white/5">
+                {upcoming.data.map((a) => (
+                  <li key={a.id}>
+                    <button
+                      onClick={() => navigate(`${ROUTES.appointment}/${a.id}`)}
+                      className="flex w-full items-center justify-between gap-3 py-2.5 text-left hover:bg-white/[0.02]"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm text-white/90">
+                          {a.services ?? 'Sin servicios'}
+                        </p>
+                        <p className="text-xs text-white/40">
+                          {dateShort(a.start_at)} · {timeShort(a.start_at)}
+                        </p>
+                      </div>
+                      <Badge tone={a.status === 'confirmed' ? 'gold' : 'info'}>
+                        {a.status === 'confirmed' ? 'Confirmada' : 'Reservada'}
+                      </Badge>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
+
           <ColorRecordsCard customerId={id} />
 
           {/* Historial de servicios */}
