@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Users, Plus, HandCoins } from 'lucide-react';
+import { Users, Plus, HandCoins, Scissors } from 'lucide-react';
 import { query, execute } from '@/lib/db';
 import { genId, money, dateShort, fullName, todayISO } from '@/lib/format';
 import { useOrgId, useBranchId, useSession } from '@/store/session';
@@ -44,6 +44,8 @@ export function StaffPage() {
         </Button>
       </div>
 
+      <DailyServicesSection />
+
       <LiquidationSection orgId={orgId} />
 
       <Card>
@@ -77,6 +79,113 @@ export function StaffPage() {
 
       <AdvanceModal open={advanceOpen} onClose={() => setAdvanceOpen(false)} />
     </div>
+  );
+}
+
+interface DailyServiceRow {
+  staff_id: string;
+  staff_name: string;
+  service: string;
+  client: string | null;
+  amount: number;
+  sold_at: string;
+}
+
+/** Servicios realizados en un día, agrupados por colaborador. */
+function DailyServicesSection() {
+  const branchId = useBranchId();
+  const [day, setDay] = useState(todayISO());
+
+  const rows = useQuery({
+    queryKey: ['daily-services', branchId, day],
+    enabled: !!branchId,
+    queryFn: () =>
+      query<DailyServiceRow>(
+        `SELECT sss.staff_member_id AS staff_id,
+                sm.first_name || CASE WHEN sm.last_name IS NOT NULL THEN ' ' || sm.last_name ELSE '' END AS staff_name,
+                si.description AS service,
+                c.first_name || CASE WHEN c.last_name IS NOT NULL THEN ' ' || c.last_name ELSE '' END AS client,
+                sss.basis_amount AS amount,
+                s.sold_at AS sold_at
+           FROM sale s
+           JOIN sale_item si ON si.sale_id = s.id
+           JOIN sale_service_staff sss ON sss.sale_item_id = si.id
+           JOIN staff_member sm ON sm.id = sss.staff_member_id
+           LEFT JOIN customer c ON c.id = s.customer_id
+          WHERE s.branch_id = ?
+            AND s.status IN ('completed','partially_refunded')
+            AND date(s.sold_at) = ?
+          ORDER BY sm.first_name, s.sold_at`,
+        [branchId, day],
+      ),
+  });
+
+  const groups = (() => {
+    const m = new Map<
+      string,
+      { name: string; items: DailyServiceRow[]; total: number }
+    >();
+    for (const r of rows.data ?? []) {
+      const g = m.get(r.staff_id) ?? { name: r.staff_name, items: [], total: 0 };
+      g.items.push(r);
+      g.total += r.amount ?? 0;
+      m.set(r.staff_id, g);
+    }
+    return [...m.values()];
+  })();
+
+  return (
+    <Card>
+      <CardHeader
+        title="Servicios del día por colaborador"
+        subtitle="Lo realizado y facturado en la fecha elegida"
+        action={
+          <div className="w-44">
+            <Input
+              type="date"
+              value={day}
+              onChange={(e) => setDay(e.target.value)}
+            />
+          </div>
+        }
+      />
+      {groups.length > 0 ? (
+        <div className="space-y-4">
+          {groups.map((g) => (
+            <div key={g.name} className="rounded-xl border border-white/10 p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-sm font-semibold text-white">{g.name}</p>
+                <span className="kpi-gold text-sm">{money(g.total)}</span>
+              </div>
+              <ul className="divide-y divide-white/5">
+                {g.items.map((it, i) => (
+                  <li
+                    key={i}
+                    className="flex items-center justify-between gap-3 py-1.5 text-sm"
+                  >
+                    <span className="min-w-0 flex-1 truncate text-white/80">
+                      {it.service}
+                      <span className="text-white/40">
+                        {it.client ? ` · ${it.client}` : ''}
+                      </span>
+                    </span>
+                    <span className="shrink-0 font-medium text-white">
+                      {money(it.amount)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <EmptyState
+          icon={Scissors}
+          title="Sin servicios ese día"
+          description="No hay servicios facturados para la fecha seleccionada."
+        />
+      )}
+    </Card>
   );
 }
 
