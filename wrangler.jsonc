@@ -4,6 +4,12 @@
   // Worker (TURSO_DATABASE_URL, TURSO_AUTH_TOKEN), no en el bundle del cliente.
   "name": "medusa-system",
   "compatibility_date": "2026-09-25",
+  // Mantener apagadas las URLs públicas: solo se entra por el custom domain
+  // (admin.medusa-estudio.com) que está detrás de Cloudflare Access. Sin esto,
+  // cada `wrangler deploy` reactiva workers.dev y las preview URLs, que NO pasan
+  // por Access y dejarían /api/db accesible sin autenticación.
+  "workers_dev": false,
+  "preview_urls": false,
   "main": "worker/index.ts",
   "assets": {
     "directory": "./dist",
