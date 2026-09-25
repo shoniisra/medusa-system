@@ -1,5 +1,6 @@
+import { useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   CalendarDays,
   CalendarPlus,
@@ -14,8 +15,11 @@ import {
   BarChart3,
   MessageCircle,
   Cake,
+  Check,
+  GripVertical,
 } from 'lucide-react';
-import { query } from '@/lib/db';
+import { query, execute } from '@/lib/db';
+import { cn } from '@/lib/cn';
 import { useDashboard } from './useDashboard';
 import { useDashboardMetrics } from './useDashboardMetrics';
 import { useMonthlySales } from './useMonthlySales';
@@ -26,13 +30,78 @@ import { useSession, useOrgId } from '@/store/session';
 import { ROUTES, APPOINTMENT_STATUS } from '@/config/constants';
 import type { AppointmentStatus } from '@/types';
 
+const SECTION_KEYS = [
+  'stats',
+  'chart',
+  'appointments',
+  'rankings',
+  'availability',
+] as const;
+type SectionKey = (typeof SECTION_KEYS)[number];
+const ORDER_STORAGE_KEY = 'medusa-dashboard-order';
+
+/** Orden de las secciones del dashboard, persistido por navegador. */
+function useSectionOrder() {
+  const [order, setOrder] = useState<SectionKey[]>(() => {
+    try {
+      const raw = localStorage.getItem(ORDER_STORAGE_KEY);
+      if (raw) {
+        const saved = (JSON.parse(raw) as string[]).filter((k): k is SectionKey =>
+          (SECTION_KEYS as readonly string[]).includes(k),
+        );
+        const missing = SECTION_KEYS.filter((k) => !saved.includes(k));
+        return [...saved, ...missing];
+      }
+    } catch {
+      /* localStorage no disponible → orden por defecto */
+    }
+    return [...SECTION_KEYS];
+  });
+
+  const move = (from: SectionKey, to: SectionKey) => {
+    setOrder((prev) => {
+      if (from === to) return prev;
+      const arr = [...prev];
+      const fi = arr.indexOf(from);
+      const ti = arr.indexOf(to);
+      if (fi < 0 || ti < 0) return prev;
+      arr.splice(fi, 1);
+      arr.splice(ti, 0, from);
+      try {
+        localStorage.setItem(ORDER_STORAGE_KEY, JSON.stringify(arr));
+      } catch {
+        /* ignore */
+      }
+      return arr;
+    });
+  };
+
+  return { order, move };
+}
+
 export function DashboardPage() {
   const branchName = useSession((s) => s.branch?.name ?? '');
   const navigate = useNavigate();
+  const qc = useQueryClient();
 
   const { data, isLoading } = useDashboard();
   const m = useDashboardMetrics();
   const monthly = useMonthlySales();
+  const { order, move } = useSectionOrder();
+
+  // Marca una cita como atendida desde la tarjeta de próximas citas.
+  const attend = useMutation({
+    mutationFn: (id: string) =>
+      execute(
+        "UPDATE appointment SET status = 'attended', updated_at = ? WHERE id = ?",
+        [new Date().toISOString(), id],
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['dashboard-metrics'] });
+      qc.invalidateQueries({ queryKey: ['appointments'] });
+    },
+  });
+  const orderOf = (k: SectionKey) => order.indexOf(k) + 1;
 
   const col = data?.collections;
   const cash = data?.cashSession;
@@ -43,7 +112,7 @@ export function DashboardPage() {
   const attendance = met ? Math.max(0, 100 - met.noShowRate) : 0;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <div className="mx-auto flex max-w-6xl flex-col gap-6">
       {/* Encabezado + acciones */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -67,6 +136,7 @@ export function DashboardPage() {
       {/* Resumen financiero con tabs día/semana/mes */}
       <FinanceOverview />
 
+      <SortableSection id="stats" order={orderOf('stats')} onMove={move}>
       {/* Quick stats de hoy */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
@@ -87,6 +157,7 @@ export function DashboardPage() {
         />
         <StatCard
           tone="success"
+          glow="green"
           label="Recibido hoy"
           value={isLoading ? '—' : money(col?.total_received)}
           icon={Banknote}
@@ -94,12 +165,15 @@ export function DashboardPage() {
         <StatCard
           tone="gold"
           gold
+          glow="gold"
           label="Ventas del mes"
           value={m.isLoading ? '—' : money(met?.month.sales)}
           icon={BarChart3}
         />
       </div>
+      </SortableSection>
 
+      <SortableSection id="chart" order={orderOf('chart')} onMove={move}>
       {/* Gráfico mensual + gauge de asistencia */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
@@ -147,7 +221,13 @@ export function DashboardPage() {
           </div>
         </Card>
       </div>
+      </SortableSection>
 
+      <SortableSection
+        id="appointments"
+        order={orderOf('appointments')}
+        onMove={move}
+      >
       {/* Próximas citas + Estado de caja */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
@@ -207,6 +287,13 @@ export function DashboardPage() {
                         </a>
                       )}
                       <Badge tone={meta.tone}>{meta.label}</Badge>
+                      <Button
+                        size="sm"
+                        loading={attend.isPending && attend.variables === a.id}
+                        onClick={() => attend.mutate(a.id)}
+                      >
+                        <Check className="h-4 w-4" /> Atender
+                      </Button>
                     </div>
                   </li>
                 );
@@ -262,7 +349,9 @@ export function DashboardPage() {
           )}
         </Card>
       </div>
+      </SortableSection>
 
+      <SortableSection id="rankings" order={orderOf('rankings')} onMove={move}>
       {/* Rankings */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card>
@@ -330,7 +419,13 @@ export function DashboardPage() {
 
         <BirthdaysCard />
       </div>
+      </SortableSection>
 
+      <SortableSection
+        id="availability"
+        order={orderOf('availability')}
+        onMove={move}
+      >
       {/* Disponibilidad hoy por estilista */}
       <Card>
         <CardHeader
@@ -372,6 +467,56 @@ export function DashboardPage() {
           />
         )}
       </Card>
+      </SortableSection>
+    </div>
+  );
+}
+
+/** Sección reordenable por drag & drop. El orden se aplica con CSS `order`. */
+function SortableSection({
+  id,
+  order,
+  onMove,
+  children,
+}: {
+  id: SectionKey;
+  order: number;
+  onMove: (from: SectionKey, to: SectionKey) => void;
+  children: ReactNode;
+}) {
+  const [over, setOver] = useState(false);
+  return (
+    <div
+      style={{ order }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setOver(false);
+        const from = e.dataTransfer.getData('text/plain') as SectionKey;
+        if (from) onMove(from, id);
+      }}
+      className={cn(
+        'group relative rounded-2xl transition-shadow',
+        over && 'ring-2 ring-gold-400/60',
+      )}
+    >
+      <button
+        type="button"
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData('text/plain', id);
+          e.dataTransfer.effectAllowed = 'move';
+        }}
+        title="Arrastrar para reordenar"
+        className="absolute -top-2 right-2 z-10 hidden cursor-grab rounded-lg bg-ink-800 p-1.5 text-white/40 shadow hover:text-white active:cursor-grabbing group-hover:flex"
+      >
+        <GripVertical className="h-4 w-4" />
+      </button>
+      {children}
     </div>
   );
 }

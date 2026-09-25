@@ -123,6 +123,13 @@ function parseHex(hex: string): [number, number, number] | null {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
+/** Devuelve el hex oficial de un colorId de Google (1..11), o null. */
+export function googleColorIdToHex(colorId?: string | null): string | null {
+  if (!colorId) return null;
+  const c = GOOGLE_EVENT_COLORS.find((x) => x.id === String(colorId));
+  return c ? c.hex : null;
+}
+
 /** Mapea un color hex del colaborador al colorId de Google más cercano. */
 export function hexToGoogleColorId(hex?: string | null): string | undefined {
   if (!hex) return undefined;
@@ -220,6 +227,120 @@ export async function updateCalendarEvent(
   if (!res.ok && res.status !== 404 && res.status !== 410) {
     throw new Error(`Google Calendar respondió ${res.status} al actualizar.`);
   }
+}
+
+/* ─────────────────────── Lectura / exportación ──────────────────────── */
+
+/** Evento crudo de Google Calendar (solo los campos que usamos). */
+export interface RawCalendarEvent {
+  id: string;
+  status?: string;
+  summary?: string;
+  description?: string;
+  location?: string;
+  colorId?: string;
+  start?: { dateTime?: string; date?: string; timeZone?: string };
+  end?: { dateTime?: string; date?: string; timeZone?: string };
+  attendees?: { email?: string; displayName?: string }[];
+  created?: string;
+  updated?: string;
+}
+
+/** Evento normalizado para exportar/mapear (color ya resuelto a hex). */
+export interface ExportedEvent {
+  id: string;
+  summary: string;
+  description: string | null;
+  location: string | null;
+  colorId: string | null;
+  colorHex: string | null;
+  /** Hora local naive "YYYY-MM-DDTHH:mm:ss" cuando el evento tiene hora. */
+  startLocal: string | null;
+  endLocal: string | null;
+  /** true si es evento de día completo (sin hora). */
+  allDay: boolean;
+  attendees: { email: string | null; name: string | null }[];
+}
+
+/** ISO/fecha → naive local "YYYY-MM-DDTHH:mm:ss" (o null si es all-day). */
+function toNaiveLocal(dt?: { dateTime?: string; date?: string }): {
+  local: string | null;
+  allDay: boolean;
+} {
+  if (!dt) return { local: null, allDay: false };
+  if (dt.date && !dt.dateTime) return { local: `${dt.date}T00:00:00`, allDay: true };
+  if (!dt.dateTime) return { local: null, allDay: false };
+  const d = new Date(dt.dateTime);
+  if (Number.isNaN(d.getTime())) return { local: null, allDay: false };
+  const p = (n: number) => String(n).padStart(2, '0');
+  const local = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(
+    d.getHours(),
+  )}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  return { local, allDay: false };
+}
+
+/**
+ * Lista los eventos de un calendario en un rango (paginado). Requiere que el
+ * usuario autorice Google (mismo flujo que la creación de eventos).
+ */
+export async function listCalendarEvents(opts: {
+  calendarId?: string | null;
+  timeMinIso: string;
+  timeMaxIso: string;
+}): Promise<RawCalendarEvent[]> {
+  const token = await getAccessToken();
+  const calId = encodeURIComponent(opts.calendarId?.trim() || 'primary');
+  const out: RawCalendarEvent[] = [];
+  let pageToken: string | undefined;
+  do {
+    const params = new URLSearchParams({
+      timeMin: opts.timeMinIso,
+      timeMax: opts.timeMaxIso,
+      singleEvents: 'true',
+      orderBy: 'startTime',
+      maxResults: '2500',
+    });
+    if (pageToken) params.set('pageToken', pageToken);
+    const res = await fetch(
+      `https://www.googleapis.com/calendar/v3/calendars/${calId}/events?${params.toString()}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) {
+      throw new Error(`Google Calendar respondió ${res.status} al listar.`);
+    }
+    const data = (await res.json()) as {
+      items?: RawCalendarEvent[];
+      nextPageToken?: string;
+    };
+    for (const it of data.items ?? []) out.push(it);
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+  return out;
+}
+
+/** Normaliza eventos crudos a `ExportedEvent` (color resuelto, horas locales). */
+export function normalizeEvents(raw: RawCalendarEvent[]): ExportedEvent[] {
+  return raw
+    .filter((e) => e.status !== 'cancelled')
+    .map((e) => {
+      const s = toNaiveLocal(e.start);
+      const en = toNaiveLocal(e.end);
+      return {
+        id: e.id,
+        summary: (e.summary ?? '').trim(),
+        description: e.description?.trim() || null,
+        location: e.location?.trim() || null,
+        colorId: e.colorId ?? null,
+        colorHex: googleColorIdToHex(e.colorId),
+        startLocal: s.local,
+        endLocal: en.local,
+        allDay: s.allDay,
+        attendees: (e.attendees ?? []).map((a) => ({
+          email: a.email ?? null,
+          name: a.displayName ?? null,
+        })),
+      };
+    });
 }
 
 /** Borra un evento del calendario (best-effort). No lanza si ya no existe. */

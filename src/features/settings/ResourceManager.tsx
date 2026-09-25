@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import type { InValue } from '@libsql/client';
 import { query, execute } from '@/lib/db';
-import { genId } from '@/lib/format';
+import { genId, fullName } from '@/lib/format';
 import { useOrgId } from '@/store/session';
 import {
   Button,
@@ -60,14 +60,32 @@ export function ResourceManager({ resource }: { resource: ResourceConfig }) {
     },
   });
 
-  // Opciones de sucursal para campos FK (optionsKey === 'branches').
-  const needsBranches = resource.fields.some((f) => f.optionsKey === 'branches');
+  // Opciones para campos FK (optionsKey).
+  const has = (key: string) => resource.fields.some((f) => f.optionsKey === key);
   const branches = useQuery({
     queryKey: ['branches-options', orgId],
-    enabled: needsBranches && !!orgId,
+    enabled: has('branches') && !!orgId,
     queryFn: () =>
       query<Branch>(
         'SELECT id, name FROM branch WHERE organization_id = ? AND active = 1 ORDER BY name',
+        [orgId],
+      ),
+  });
+  const staffOpts = useQuery({
+    queryKey: ['staff-options', orgId],
+    enabled: has('staff') && !!orgId,
+    queryFn: () =>
+      query<{ id: string; first_name: string; last_name: string | null }>(
+        'SELECT id, first_name, last_name FROM staff_member WHERE organization_id = ? AND active = 1 ORDER BY first_name',
+        [orgId],
+      ),
+  });
+  const serviceOpts = useQuery({
+    queryKey: ['services-options', orgId],
+    enabled: has('services') && !!orgId,
+    queryFn: () =>
+      query<{ id: string; name: string }>(
+        'SELECT id, name FROM service WHERE organization_id = ? AND active = 1 ORDER BY name',
         [orgId],
       ),
   });
@@ -269,9 +287,20 @@ export function ResourceManager({ resource }: { resource: ResourceConfig }) {
         <ResourceForm
           resource={resource}
           row={editing}
-          branchOptions={
-            branches.data?.map((b) => ({ value: b.id, label: b.name })) ?? []
-          }
+          fkOptions={{
+            branches:
+              branches.data?.map((b) => ({ value: b.id, label: b.name })) ?? [],
+            staff:
+              staffOpts.data?.map((s) => ({
+                value: s.id,
+                label: fullName(s.first_name, s.last_name),
+              })) ?? [],
+            services:
+              serviceOpts.data?.map((sv) => ({
+                value: sv.id,
+                label: sv.name,
+              })) ?? [],
+          }}
           onClose={() => {
             setCreating(false);
             setEditing(null);
@@ -329,13 +358,13 @@ export function ResourceManager({ resource }: { resource: ResourceConfig }) {
 function ResourceForm({
   resource,
   row,
-  branchOptions,
+  fkOptions,
   onClose,
   onSaved,
 }: {
   resource: ResourceConfig;
   row: Row | null;
-  branchOptions: { value: string; label: string }[];
+  fkOptions: Record<string, { value: string; label: string }[]>;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -430,8 +459,9 @@ function ResourceForm({
       <div className="grid grid-cols-2 gap-3">
         {resource.fields.map((f) => {
           const span = f.colSpan === 2 ? 'col-span-2' : 'col-span-2 sm:col-span-1';
-          const opts =
-            f.optionsKey === 'branches' ? branchOptions : f.options ?? [];
+          const opts = f.optionsKey
+            ? fkOptions[f.optionsKey] ?? []
+            : f.options ?? [];
 
           if (f.type === 'select') {
             return (

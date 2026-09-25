@@ -9,10 +9,20 @@ import {
   Tags,
   Landmark,
   Calculator,
+  Percent,
   type LucideIcon,
 } from 'lucide-react';
 import { money, fullName } from '@/lib/format';
-import { PAYMENT_METHOD_LABELS, SERVICE_CATEGORIES } from '@/config/constants';
+import {
+  PAYMENT_METHOD_LABELS,
+  SERVICE_CATEGORIES,
+  DEFAULT_COMMISSION_RATE,
+} from '@/config/constants';
+
+const COMMISSION_TYPE_OPTIONS = [
+  { value: 'percentage', label: 'Porcentaje (%)' },
+  { value: 'fixed', label: 'Monto fijo' },
+];
 
 const CATEGORY_OPTIONS = SERVICE_CATEGORIES.map((c) => ({
   value: c,
@@ -38,8 +48,8 @@ export interface Field {
   required?: boolean;
   placeholder?: string;
   options?: { value: string; label: string }[];
-  /** Carga dinámica de opciones (FK). Solo 'branches' por ahora. */
-  optionsKey?: 'branches';
+  /** Carga dinámica de opciones (FK): sucursal, colaborador o servicio. */
+  optionsKey?: 'branches' | 'staff' | 'services';
   colSpan?: 1 | 2;
 }
 
@@ -385,6 +395,74 @@ export const RESOURCES: ResourceConfig[] = [
         required: true,
         optionsKey: 'branches',
       },
+    ],
+  },
+  {
+    key: 'commissions',
+    label: 'Comisiones',
+    singular: 'comisión',
+    icon: Percent,
+    table: 'staff_service_commission',
+    autoScopeOrg: false,
+    listSql: (orgId) => ({
+      sql: `SELECT ssc.*,
+                   sm.first_name || CASE WHEN sm.last_name IS NOT NULL THEN ' ' || sm.last_name ELSE '' END AS staff_name,
+                   sv.name AS service_name
+              FROM staff_service_commission ssc
+              JOIN staff_member sm ON sm.id = ssc.staff_member_id
+              JOIN service sv ON sv.id = ssc.service_id
+             WHERE sm.organization_id = ?
+             ORDER BY sm.first_name, sv.name`,
+      args: [orgId],
+    }),
+    orderBy: 'id',
+    hasActive: true,
+    hasUpdatedAt: false,
+    columns: [
+      { header: 'Colaborador', render: (r) => s(r.staff_name) },
+      { header: 'Servicio', render: (r) => s(r.service_name) },
+      {
+        header: 'Comisión',
+        align: 'right',
+        render: (r) =>
+          r.commission_type === 'fixed'
+            ? money(Number(r.commission_value))
+            : `${Number(r.commission_value)}%`,
+      },
+      { header: 'Desde', render: (r) => s(r.effective_from) },
+    ],
+    fields: [
+      {
+        name: 'staff_member_id',
+        label: 'Colaborador',
+        type: 'select',
+        required: true,
+        optionsKey: 'staff',
+        colSpan: 2,
+      },
+      {
+        name: 'service_id',
+        label: 'Servicio',
+        type: 'select',
+        required: true,
+        optionsKey: 'services',
+        colSpan: 2,
+      },
+      {
+        name: 'commission_type',
+        label: 'Tipo',
+        type: 'select',
+        required: true,
+        options: COMMISSION_TYPE_OPTIONS,
+      },
+      {
+        name: 'commission_value',
+        label: `Valor (def. ${DEFAULT_COMMISSION_RATE}%)`,
+        type: 'number',
+        required: true,
+      },
+      { name: 'effective_from', label: 'Vigente desde', type: 'date', required: true },
+      { name: 'effective_to', label: 'Vigente hasta (opcional)', type: 'date' },
     ],
   },
 ];

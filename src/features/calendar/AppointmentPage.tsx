@@ -19,7 +19,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { query, queryOne, batch, execute } from '@/lib/db';
-import { genId, money, fullName, toLocalNaive } from '@/lib/format';
+import { genId, money, fullName, toLocalNaive, dateShort } from '@/lib/format';
 import { useOrgId, useBranchId, useSession } from '@/store/session';
 import { useCustomers, useServices, useProducts, useStaff } from '@/features/pos/useCatalog';
 import {
@@ -46,8 +46,21 @@ import {
   Select,
   EmptyState,
   Badge,
+  Modal,
 } from '@/components/ui';
-import type { AppointmentStatus } from '@/types';
+import {
+  createSale,
+  loadCommissionRules,
+  commissionForItem,
+} from '@/features/pos/createSale';
+import type {
+  AppointmentStatus,
+  BankAccount,
+  CashSession,
+  DraftCommission,
+  DraftSaleItem,
+  PaymentMethod,
+} from '@/types';
 
 export function AppointmentPage() {
   const { id } = useParams();
@@ -224,6 +237,45 @@ function NewAppointment() {
   const discountTotal = rows.reduce((a, r) => a + r.discount, 0);
   const total = Math.max(0, subtotal - discountTotal);
   const dep = Number(deposit) || 0;
+
+  // Cobro de la seña al reservar: destino (banco por defecto principal, o caja).
+  const [depositDest, setDepositDest] = useState('');
+  const banks = useQuery({
+    queryKey: ['bank-accounts', orgId],
+    enabled: !!orgId,
+    queryFn: () =>
+      query<BankAccount>(
+        'SELECT * FROM bank_account WHERE organization_id = ? AND active = 1 ORDER BY name',
+        [orgId],
+      ),
+  });
+  const payMethods = useQuery({
+    queryKey: ['payment-methods', orgId],
+    enabled: !!orgId,
+    queryFn: () =>
+      query<PaymentMethod>(
+        'SELECT * FROM payment_method WHERE organization_id = ? AND active = 1 ORDER BY name',
+        [orgId],
+      ),
+  });
+  const openCash = useQuery({
+    queryKey: ['open-cash', branchId],
+    enabled: !!branchId,
+    queryFn: () =>
+      queryOne<CashSession>(
+        `SELECT cs.* FROM cash_session cs
+           JOIN cash_register cr ON cr.id = cs.cash_register_id
+          WHERE cr.branch_id = ? AND cs.status = 'open'
+          ORDER BY cs.opened_at DESC LIMIT 1`,
+        [branchId],
+      ),
+  });
+  const cashMethod = payMethods.data?.find((m) => m.method_type === 'cash');
+  const transferMethod = payMethods.data?.find((m) => m.method_type === 'transfer');
+  // Principal = primera cuenta bancaria activa. Efectivo si no hay cuentas.
+  const firstBankId = banks.data?.[0]?.id ?? '';
+  const effectiveDest = depositDest || firstBankId || 'cash';
+  const depositIsCash = effectiveDest === 'cash';
 
   // Bloques por colaborador: los servicios del mismo estilista se apilan; los de
   // estilistas distintos corren en paralelo. El tiempo reservado (lo que se
@@ -412,6 +464,54 @@ function NewAppointment() {
             r.staffId || null,
           ],
         });
+      }
+
+      // Cobro de la seña: ingreso atado a la cita (sale_id NULL). Efectivo entra
+      // a la caja abierta; transferencia va a la cuenta bancaria elegida.
+      if (dep > 0) {
+        const method = depositIsCash ? cashMethod : transferMethod;
+        if (!method)
+          throw new Error(
+            `No hay un método de pago ${depositIsCash ? 'en efectivo' : 'por transferencia'} configurado.`,
+          );
+        const bankId = depositIsCash ? null : effectiveDest;
+        const paymentId = genId();
+        const nowIso = new Date().toISOString();
+        stmts.push({
+          sql: `INSERT INTO payment
+                  (id, organization_id, branch_id, sale_id, appointment_id, payment_method_id,
+                   bank_account_id, paid_at, amount, status, reference)
+                VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, 'confirmed', ?)`,
+          args: [
+            paymentId,
+            orgId,
+            branchId,
+            apptId,
+            method.id,
+            bankId,
+            nowIso,
+            dep,
+            `[Seña] ${clientLabel}`,
+          ],
+        });
+        if (depositIsCash && openCash.data?.id) {
+          stmts.push({
+            sql: `INSERT INTO cash_movement
+                    (id, cash_session_id, branch_id, movement_type, direction, amount,
+                     movement_at, payment_id, description, created_by)
+                  VALUES (?, ?, ?, 'cash_in', 'in', ?, ?, ?, ?, ?)`,
+            args: [
+              genId(),
+              openCash.data.id,
+              branchId,
+              dep,
+              nowIso,
+              paymentId,
+              `Seña ${clientLabel}`,
+              userId,
+            ],
+          });
+        }
       }
 
       await batch(stmts);
@@ -865,6 +965,31 @@ function NewAppointment() {
                     onChange={(e) => setDeposit(e.target.value)}
                   />
                 )}
+
+                {dep > 0 && (
+                  <div className="mt-3 space-y-1">
+                    <span className="block text-xs font-medium text-white/60">
+                      Cobrar seña en
+                    </span>
+                    <Select
+                      value={effectiveDest}
+                      onChange={(e) => setDepositDest(e.target.value)}
+                    >
+                      {banks.data?.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name} (transferencia)
+                        </option>
+                      ))}
+                      <option value="cash">Efectivo (caja)</option>
+                    </Select>
+                    {depositIsCash && !openCash.data && (
+                      <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
+                        <AlertTriangle className="h-3.5 w-3.5" /> No hay caja
+                        abierta: la seña se registra pero no entra al efectivo.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
 
               <SummaryRows
@@ -945,6 +1070,7 @@ interface ApptHead {
   deposit_amount: number;
   start_at: string;
   end_at: string;
+  customer_id: string | null;
   customer_name: string | null;
   google_calendar_id: string | null;
   google_calendar_event_id: string | null;
@@ -977,6 +1103,7 @@ function EditAppointment({ id }: { id: string }) {
     queryFn: () =>
       queryOne<ApptHead>(
         `SELECT a.id, a.status, a.deposit_amount, a.start_at, a.end_at,
+                a.customer_id,
                 a.google_calendar_id, a.google_calendar_event_id,
                 c.first_name || CASE WHEN c.last_name IS NOT NULL THEN ' ' || c.last_name ELSE '' END AS customer_name
            FROM appointment a
@@ -1005,15 +1132,31 @@ function EditAppointment({ id }: { id: string }) {
       ),
   });
 
+  // Seña realmente cobrada (pagos de la cita sin venta asociada todavía).
+  const deposits = useQuery({
+    queryKey: ['appointment-deposits', id],
+    queryFn: () =>
+      queryOne<{ paid: number }>(
+        `SELECT COALESCE(SUM(amount), 0) AS paid FROM payment
+          WHERE appointment_id = ? AND sale_id IS NULL AND status = 'confirmed'`,
+        [id],
+      ),
+  });
+  const depositPaid = deposits.data?.paid ?? 0;
+
   const serviceItems = (items.data ?? []).filter((i) => i.service_id);
   const productItems = (items.data ?? []).filter((i) => i.product_id);
 
-  const [attending, setAttending] = useState(false);
+  // Si se llega con ?atender=1 desde la agenda, se abre directo en modo atención.
+  const [params] = useSearchParams();
+  const [attending, setAttending] = useState(() => params.get('atender') === '1');
   const showProducts = attending || productItems.length > 0;
 
-  // Abono editable
-  const [deposit, setDeposit] = useState('');
-  const depValue = deposit !== '' ? Number(deposit) || 0 : head.data?.deposit_amount ?? 0;
+  const orgId = useOrgId();
+  const branchId = useBranchId();
+  const userId = useSession((s) => s.user?.id ?? null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [voidOpen, setVoidOpen] = useState(false);
 
   // Alta de servicio
   const [category, setCategory] = useState('');
@@ -1325,9 +1468,17 @@ function EditAppointment({ id }: { id: string }) {
               <Select
                 label="Estado"
                 value={head.data.status}
-                onChange={(e) =>
-                  setStatus.mutate(e.target.value as AppointmentStatus)
-                }
+                disabled={head.data.status === 'attended'}
+                onChange={(e) => {
+                  const next = e.target.value as AppointmentStatus;
+                  if (next === head.data!.status) return;
+                  // "Atendido" no se marca directo: se confirma la venta y el cobro.
+                  if (next === 'attended') {
+                    setConfirmOpen(true);
+                    return;
+                  }
+                  setStatus.mutate(next);
+                }}
               >
                 {(Object.keys(APPOINTMENT_STATUS) as AppointmentStatus[]).map(
                   (st) => (
@@ -1337,37 +1488,610 @@ function EditAppointment({ id }: { id: string }) {
                   ),
                 )}
               </Select>
+              {head.data.status === 'attended' && (
+                <div className="-mt-2 space-y-2">
+                  <p className="text-xs text-white/40">
+                    Cita atendida: ya tiene venta y cobro registrados.
+                  </p>
+                  <button
+                    onClick={() => setVoidOpen(true)}
+                    className="text-xs font-medium text-danger hover:underline"
+                  >
+                    Anular venta y cobro
+                  </button>
+                </div>
+              )}
 
-              <Input
-                label="Abono"
-                type="number"
-                min="0"
-                step="0.01"
-                value={deposit !== '' ? deposit : String(head.data.deposit_amount)}
-                onChange={(e) => setDeposit(e.target.value)}
-                onBlur={() => saveDeposit.mutate(depValue)}
-              />
+              {depositPaid > 0 && (
+                <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm">
+                  <span className="text-white/50">Seña cobrada</span>
+                  <span className="font-medium text-emerald-300">
+                    {money(depositPaid)}
+                  </span>
+                </div>
+              )}
 
               <SummaryRows
                 subtotal={subtotal}
                 discountTotal={discountTotal}
                 total={total}
-                deposit={depValue}
+                deposit={depositPaid}
                 reservedMinutes={reservedMinutes}
               />
 
-              <Button
-                variant="outline"
-                className="w-full"
-                onClick={() => navigate(ROUTES.calendar)}
-              >
-                Volver a la agenda
-              </Button>
+              {head.data.status !== 'attended' && (
+                <Button
+                  className="w-full"
+                  disabled={all.length === 0}
+                  onClick={() => setConfirmOpen(true)}
+                >
+                  <Check className="h-4 w-4" /> Confirmar Venta
+                </Button>
+              )}
+
+              <div className="flex gap-2">
+                <Button
+                  variant="ghost"
+                  className="flex-1"
+                  loading={saveDeposit.isPending}
+                  onClick={() => saveDeposit.mutate(depositPaid)}
+                >
+                  Guardar
+                </Button>
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => navigate(ROUTES.calendar)}
+                >
+                  Volver
+                </Button>
+              </div>
             </div>
           </Card>
         </div>
       </div>
+
+      {confirmOpen && head.data && (
+        <ConfirmSaleModal
+          appointmentId={id}
+          orgId={orgId}
+          branchId={branchId}
+          userId={userId}
+          customerId={head.data.customer_id}
+          customerName={head.data.customer_name}
+          serviceDate={head.data.start_at}
+          items={all}
+          subtotal={subtotal}
+          discountTotal={discountTotal}
+          total={total}
+          depositPaid={depositPaid}
+          onClose={() => setConfirmOpen(false)}
+          onDone={() => {
+            setConfirmOpen(false);
+            navigate(ROUTES.calendar);
+          }}
+        />
+      )}
+
+      {voidOpen && (
+        <VoidSaleModal
+          appointmentId={id}
+          branchId={branchId}
+          userId={userId}
+          customerName={head.data.customer_name}
+          onClose={() => setVoidOpen(false)}
+          onDone={() => {
+            setVoidOpen(false);
+            qc.invalidateQueries({ queryKey: ['appointment-head', id] });
+            qc.invalidateQueries({ queryKey: ['appointments'] });
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * Anula la venta y el cobro de una cita atendida, sin descuadrar:
+ *  - la venta y sus pagos pasan a "voided" (dejan de contar en ingresos/saldos);
+ *  - por cada cobro en efectivo se registra un movimiento de salida en la caja
+ *    abierta, para revertir el efectivo que había entrado;
+ *  - la cita vuelve a "Atendiendo" para poder corregirla y re-confirmarla.
+ */
+function VoidSaleModal({
+  appointmentId,
+  branchId,
+  userId,
+  customerName,
+  onClose,
+  onDone,
+}: {
+  appointmentId: string;
+  branchId: string;
+  userId: string | null;
+  customerName: string | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [error, setError] = useState('');
+
+  // Venta de la cita + sus pagos (con tipo de método, para saber cuál es efectivo).
+  const data = useQuery({
+    queryKey: ['appointment-sale', appointmentId],
+    queryFn: async () => {
+      const sale = await queryOne<{ id: string; total: number }>(
+        `SELECT id, total FROM sale
+          WHERE appointment_id = ? AND status <> 'voided'
+          ORDER BY created_at DESC LIMIT 1`,
+        [appointmentId],
+      );
+      if (!sale) return { sale: null, payments: [] as PaymentLite[] };
+      const payments = await query<PaymentLite>(
+        `SELECT p.id, p.amount, p.appointment_id, pm.method_type
+           FROM payment p
+           JOIN payment_method pm ON pm.id = p.payment_method_id
+          WHERE p.sale_id = ? AND p.status = 'confirmed'`,
+        [sale.id],
+      );
+      return { sale, payments };
+    },
+  });
+
+  // Caja abierta (para revertir efectivo).
+  const cash = useQuery({
+    queryKey: ['open-cash', branchId],
+    enabled: !!branchId,
+    queryFn: () =>
+      queryOne<CashSession>(
+        `SELECT cs.* FROM cash_session cs
+           JOIN cash_register cr ON cr.id = cs.cash_register_id
+          WHERE cr.branch_id = ? AND cs.status = 'open'
+          ORDER BY cs.opened_at DESC LIMIT 1`,
+        [branchId],
+      ),
+  });
+  const sessionId = cash.data?.id ?? null;
+
+  const sale = data.data?.sale ?? null;
+  const payments = data.data?.payments ?? [];
+  // La seña (pago atado a la cita) NO se anula: no es reembolsable. Se desvincula
+  // de la venta y vuelve a quedar como abono de la cita. Solo se revierte el saldo.
+  const depositTotal = payments
+    .filter((p) => p.appointment_id)
+    .reduce((a, p) => a + p.amount, 0);
+  const cashTotal = payments
+    .filter((p) => p.method_type === 'cash' && !p.appointment_id)
+    .reduce((a, p) => a + p.amount, 0);
+
+  const voidSale = useMutation({
+    mutationFn: async () => {
+      const now = new Date().toISOString();
+      const stmts: { sql: string; args: (string | number | null)[] }[] = [];
+
+      if (sale) {
+        stmts.push({
+          sql: `UPDATE sale SET status = 'voided', updated_at = ? WHERE id = ?`,
+          args: [now, sale.id],
+        });
+        // Anula el saldo cobrado; la seña se desvincula (sigue pagada).
+        stmts.push({
+          sql: `UPDATE payment SET status = 'voided'
+                  WHERE sale_id = ? AND appointment_id IS NULL`,
+          args: [sale.id],
+        });
+        stmts.push({
+          sql: `UPDATE payment SET sale_id = NULL
+                  WHERE sale_id = ? AND appointment_id IS NOT NULL`,
+          args: [sale.id],
+        });
+        // Revertir el efectivo del saldo que había entrado a caja.
+        if (cashTotal > 0 && sessionId) {
+          stmts.push({
+            sql: `INSERT INTO cash_movement
+                    (id, cash_session_id, branch_id, movement_type, direction, amount,
+                     movement_at, sale_id, description, created_by)
+                  VALUES (?, ?, ?, 'adjustment', 'out', ?, ?, ?, ?, ?)`,
+            args: [
+              genId(),
+              sessionId,
+              branchId,
+              cashTotal,
+              now,
+              sale.id,
+              `Anulación venta ${customerName ?? ''}`.trim(),
+              userId,
+            ],
+          });
+        }
+      }
+
+      // La cita vuelve a "Atendiendo" para corregirla y re-confirmarla.
+      stmts.push({
+        sql: `UPDATE appointment SET status = 'confirmed', updated_at = ? WHERE id = ?`,
+        args: [now, appointmentId],
+      });
+
+      await batch(stmts);
+    },
+    onSuccess: onDone,
+    onError: (e) =>
+      setError(e instanceof Error ? e.message : 'No se pudo anular la venta.'),
+  });
+
+  const blocked = cashTotal > 0 && !sessionId;
+
+  return (
+    <Modal open onClose={onClose} title="Anular venta y cobro">
+      <div className="space-y-4">
+        <p className="text-sm text-white/70">
+          Se anulará la venta y sus cobros. La cita volverá a «Atendiendo» para
+          corregirla y volver a cobrar.
+        </p>
+
+        {data.isLoading ? (
+          <p className="text-sm text-white/40">Cargando…</p>
+        ) : !sale ? (
+          <p className="text-sm text-white/40">
+            No se encontró una venta activa para esta cita. Igual se devolverá la
+            cita a «Atendiendo».
+          </p>
+        ) : (
+          <div className="rounded-xl bg-white/5 p-3 text-sm">
+            <div className="flex justify-between text-white/60">
+              <span>Total a anular</span>
+              <span className="kpi-gold">{money(sale.total)}</span>
+            </div>
+            {cashTotal > 0 && (
+              <p className="mt-1 text-xs text-white/40">
+                Se revertirán {money(cashTotal)} de la caja en efectivo.
+              </p>
+            )}
+            {depositTotal > 0 && (
+              <p className="mt-1 text-xs text-white/40">
+                La seña de {money(depositTotal)} no se reembolsa: queda como abono
+                de la cita.
+              </p>
+            )}
+          </div>
+        )}
+
+        {blocked && (
+          <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
+            <AlertTriangle className="h-3.5 w-3.5" /> Hay cobro en efectivo pero no
+            hay caja abierta. Abrí la caja para revertir el efectivo antes de
+            anular.
+          </p>
+        )}
+        {error && <p className="text-xs text-danger">{error}</p>}
+
+        <div className="flex gap-2">
+          <Button variant="outline" className="flex-1" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button
+            className="flex-1"
+            variant="danger"
+            disabled={voidSale.isPending || blocked || data.isLoading}
+            loading={voidSale.isPending}
+            onClick={() => {
+              setError('');
+              voidSale.mutate();
+            }}
+          >
+            Anular
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+interface PaymentLite {
+  id: string;
+  amount: number;
+  appointment_id: string | null;
+  method_type: string;
+}
+
+/**
+ * Confirma la venta de la cita: crea la venta (con comisiones al colaborador
+ * asignado, % por defecto) y registra el pago con su forma de pago. El efectivo
+ * entra a la caja abierta; transferencia/tarjeta no tocan la caja física.
+ * Al confirmar, la cita queda "atendida".
+ */
+function ConfirmSaleModal({
+  appointmentId,
+  orgId,
+  branchId,
+  userId,
+  customerId,
+  customerName,
+  serviceDate,
+  items,
+  subtotal,
+  discountTotal,
+  total,
+  depositPaid,
+  onClose,
+  onDone,
+}: {
+  appointmentId: string;
+  orgId: string;
+  branchId: string;
+  userId: string | null;
+  customerId: string | null;
+  customerName: string | null;
+  serviceDate: string;
+  items: ItemRow[];
+  subtotal: number;
+  discountTotal: number;
+  total: number;
+  depositPaid: number;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const qc = useQueryClient();
+  // Saldo a cobrar = total − seña ya pagada.
+  const balance = Math.max(0, total - depositPaid);
+  const [amount, setAmount] = useState(String(balance));
+  const [methodId, setMethodId] = useState('');
+  const [reference, setReference] = useState('');
+  const [error, setError] = useState('');
+
+  const methods = useQuery({
+    queryKey: ['payment-methods', orgId],
+    enabled: !!orgId,
+    queryFn: () =>
+      query<PaymentMethod>(
+        'SELECT * FROM payment_method WHERE organization_id = ? AND active = 1 ORDER BY name',
+        [orgId],
+      ),
+  });
+
+  // Caja abierta de la sucursal (para movimientos en efectivo).
+  const cash = useQuery({
+    queryKey: ['open-cash', branchId],
+    enabled: !!branchId,
+    queryFn: () =>
+      queryOne<CashSession>(
+        `SELECT cs.* FROM cash_session cs
+           JOIN cash_register cr ON cr.id = cs.cash_register_id
+          WHERE cr.branch_id = ? AND cs.status = 'open'
+          ORDER BY cs.opened_at DESC LIMIT 1`,
+        [branchId],
+      ),
+  });
+  const sessionId = cash.data?.id ?? null;
+
+  const method = methods.data?.find((m) => m.id === methodId);
+  const isCash = method?.method_type === 'cash';
+
+  // ¿La cita es de un día anterior? → venta retroactiva.
+  const now = new Date();
+  const todayYmd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
+    2,
+    '0',
+  )}-${String(now.getDate()).padStart(2, '0')}`;
+  const serviceDay = serviceDate.slice(0, 10);
+  const isRetroactive = serviceDay < todayYmd;
+
+  const confirm = useMutation({
+    mutationFn: async () => {
+      // Guarda anti-doble-venta: si la cita ya fue atendida, no se vuelve a
+      // vender. Se relee el estado real en DB por si otra pestaña la cerró.
+      const current = await queryOne<{ status: AppointmentStatus }>(
+        'SELECT status FROM appointment WHERE id = ?',
+        [appointmentId],
+      );
+      if (current?.status === 'attended') {
+        throw new Error('Esta cita ya fue atendida y cobrada.');
+      }
+
+      // Comisiones vigentes por colaborador+servicio (config o % por defecto).
+      const rules = await loadCommissionRules();
+
+      // Ítems → líneas de venta con comisión del colaborador asignado.
+      const draftItems: DraftSaleItem[] = items.map((it) => {
+        const commissions: DraftCommission[] = [];
+        if (it.service_id && it.assigned_staff_id) {
+          const basis = it.final_unit_price * it.quantity;
+          const c = commissionForItem(
+            it.assigned_staff_id,
+            it.service_id,
+            basis,
+            rules,
+          );
+          commissions.push({
+            tempId: genId(),
+            staff_member_id: it.assigned_staff_id,
+            participation_role: 'primary',
+            commission_type: c.commission_type,
+            commission_rate: c.commission_rate,
+            commission_amount: c.commission_amount,
+            reduces_primary_amount: false,
+          });
+        }
+        return {
+          tempId: genId(),
+          service_id: it.service_id,
+          product_id: it.product_id,
+          description: it.description,
+          quantity: it.quantity,
+          list_unit_price: it.list_unit_price,
+          discount_amount: it.discount_amount,
+          final_unit_price: it.final_unit_price,
+          commissions,
+        };
+      });
+
+      const saleId = await createSale({
+        orgId,
+        branchId,
+        userId,
+        customerId,
+        appointmentId,
+        requiresInvoice: false,
+        items: draftItems,
+        subtotal,
+        discountTotal,
+        total,
+        // Venta/comisiones con la fecha real del servicio (retroactivo si aplica).
+        soldAt: serviceDate,
+      });
+
+      const now = new Date().toISOString();
+      const pay = Number(amount);
+      const stmts: { sql: string; args: (string | number | null)[] }[] = [];
+
+      // La seña ya cobrada se atribuye a esta venta (deja de ser "otro ingreso").
+      stmts.push({
+        sql: `UPDATE payment SET sale_id = ?
+                WHERE appointment_id = ? AND sale_id IS NULL AND status = 'confirmed'`,
+        args: [saleId, appointmentId],
+      });
+
+      // Cobro del saldo (solo si queda algo por cobrar tras la seña).
+      if (pay > 0) {
+        const paymentId = genId();
+        stmts.push({
+          sql: `INSERT INTO payment
+                  (id, organization_id, branch_id, sale_id, payment_method_id, paid_at,
+                   amount, status, reference)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)`,
+          args: [
+            paymentId,
+            orgId,
+            branchId,
+            saleId,
+            methodId,
+            now,
+            pay,
+            reference || null,
+          ],
+        });
+
+        // Solo el efectivo ingresa a la caja física.
+        if (isCash && sessionId) {
+          stmts.push({
+            sql: `INSERT INTO cash_movement
+                    (id, cash_session_id, branch_id, movement_type, direction, amount,
+                     movement_at, sale_id, payment_id, description, created_by)
+                  VALUES (?, ?, ?, 'sale', 'in', ?, ?, ?, ?, ?, ?)`,
+            args: [
+              genId(),
+              sessionId,
+              branchId,
+              pay,
+              now,
+              saleId,
+              paymentId,
+              `Venta cita ${customerName ?? ''}`.trim(),
+              userId,
+            ],
+          });
+        }
+      }
+
+      // La cita queda atendida.
+      stmts.push({
+        sql: `UPDATE appointment SET status = 'attended', updated_at = ? WHERE id = ?`,
+        args: [now, appointmentId],
+      });
+
+      await batch(stmts);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['appointment-head', appointmentId] });
+      qc.invalidateQueries({ queryKey: ['appointments'] });
+      qc.invalidateQueries({ queryKey: ['sales'] });
+      onDone();
+    },
+    onError: (e) =>
+      setError(e instanceof Error ? e.message : 'No se pudo confirmar la venta.'),
+  });
+
+  const canConfirm =
+    items.length > 0 &&
+    !confirm.isPending &&
+    (Number(amount) === 0 || (!!methodId && Number(amount) > 0));
+
+  return (
+    <Modal open onClose={onClose} title="Confirmar venta">
+      <div className="space-y-4">
+        <div className="space-y-1 rounded-xl bg-white/5 p-3 text-sm">
+          <div className="flex justify-between text-white/60">
+            <span>{customerName ?? 'Sin cliente'}</span>
+            <span>Total {money(total)}</span>
+          </div>
+          {depositPaid > 0 && (
+            <div className="flex justify-between text-white/60">
+              <span>Seña ya cobrada</span>
+              <span className="text-emerald-300">−{money(depositPaid)}</span>
+            </div>
+          )}
+          <div className="flex justify-between border-t border-white/10 pt-1 font-medium text-white">
+            <span>Saldo a cobrar</span>
+            <span className="kpi-gold">{money(balance)}</span>
+          </div>
+        </div>
+
+        <Input
+          label="Monto a cobrar"
+          type="number"
+          min="0"
+          step="0.01"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+        />
+
+        <Select
+          label="Forma de pago"
+          value={methodId}
+          onChange={(e) => setMethodId(e.target.value)}
+        >
+          <option value="">Seleccionar…</option>
+          {methods.data?.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name}
+            </option>
+          ))}
+        </Select>
+
+        <Input
+          label="Referencia (opcional)"
+          value={reference}
+          onChange={(e) => setReference(e.target.value)}
+          placeholder="Nº transferencia, voucher…"
+        />
+
+        {isRetroactive && (
+          <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
+            <AlertTriangle className="h-3.5 w-3.5" /> Venta retroactiva: el
+            servicio se registra con fecha {dateShort(serviceDay)}; el cobro entra
+            a la caja de hoy.
+          </p>
+        )}
+        {isCash && !sessionId && (
+          <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
+            <AlertTriangle className="h-3.5 w-3.5" /> No hay caja abierta: el pago
+            se registra pero no entra al efectivo de caja.
+          </p>
+        )}
+        {error && <p className="text-xs text-danger">{error}</p>}
+
+        <Button
+          className="w-full"
+          disabled={!canConfirm}
+          loading={confirm.isPending}
+          onClick={() => {
+            setError('');
+            confirm.mutate();
+          }}
+        >
+          <Check className="h-4 w-4" /> Confirmar venta
+        </Button>
+      </div>
+    </Modal>
   );
 }
 

@@ -3,13 +3,31 @@ import { cn } from '@/lib/cn';
 
 interface CardProps extends HTMLAttributes<HTMLDivElement> {
   gold?: boolean;
+  /** Resplandor de color desde una esquina, como la referencia. */
+  glow?: 'gold' | 'green';
+  /** Realce al pasar el cursor (para tarjetas clicables). */
+  hover?: boolean;
   children: ReactNode;
 }
 
-export function Card({ gold, className, children, ...props }: CardProps) {
+export function Card({
+  gold,
+  glow,
+  hover,
+  className,
+  children,
+  ...props
+}: CardProps) {
   return (
     <div
-      className={cn(gold ? 'glass-card-gold' : 'glass-card', 'p-5', className)}
+      className={cn(
+        gold ? 'glass-card-gold' : 'glass-card',
+        glow === 'gold' && 'glass-card-glow glass-card-glow-gold',
+        glow === 'green' && 'glass-card-glow glass-card-glow-green',
+        hover && 'glass-card-hover',
+        'p-5',
+        className,
+      )}
       {...props}
     >
       {children}

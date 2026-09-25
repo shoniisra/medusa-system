@@ -39,6 +39,14 @@ const AppointmentPage = lazy(() =>
     default: m.AppointmentPage,
   })),
 );
+const TasksPage = lazy(() =>
+  import('@/features/tasks/TasksPage').then((m) => ({ default: m.TasksPage })),
+);
+const RemindersPage = lazy(() =>
+  import('@/features/reminders/RemindersPage').then((m) => ({
+    default: m.RemindersPage,
+  })),
+);
 const InvoicesPage = lazy(() =>
   import('@/features/invoices/InvoicesPage').then((m) => ({
     default: m.InvoicesPage,
@@ -74,6 +82,8 @@ export const router = createBrowserRouter([
           { path: ROUTES.pos, element: lazyRoute(<PosPage />) },
           { path: ROUTES.cashflow, element: lazyRoute(<CashflowPage />) },
           { path: ROUTES.calendar, element: lazyRoute(<CalendarPage />) },
+          { path: ROUTES.tasks, element: lazyRoute(<TasksPage />) },
+          { path: ROUTES.reminders, element: lazyRoute(<RemindersPage />) },
           {
             path: ROUTES.appointmentNew,
             element: lazyRoute(<AppointmentPage />),

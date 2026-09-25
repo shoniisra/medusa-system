@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -11,6 +11,13 @@ import {
   Palette,
   Scissors,
   TriangleAlert,
+  MessageCircle,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  UserCheck,
+  Wallet,
 } from 'lucide-react';
 import { query, queryOne, execute } from '@/lib/db';
 import {
@@ -27,6 +34,7 @@ import { useStaff } from '@/features/pos/useCatalog';
 import {
   Card,
   CardHeader,
+  StatCard,
   Button,
   Input,
   Select,
@@ -42,12 +50,23 @@ import type { Customer, CustomerColorRecord } from '@/types';
 interface ClientRow extends Customer {
   visits: number;
   spent: number;
+  last_visit: string | null;
 }
+
+type WaFilter = 'all' | 'with' | 'without';
+type StatusFilter = 'all' | 'buyers' | 'new';
+type SortKey = 'name' | 'spent' | 'visits' | 'recent';
+const PAGE_SIZES = [25, 50, 100];
 
 export function ClientsPage() {
   const orgId = useOrgId();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
+  const [wa, setWa] = useState<WaFilter>('all');
+  const [status, setStatus] = useState<StatusFilter>('all');
+  const [sort, setSort] = useState<SortKey>('name');
+  const [pageSize, setPageSize] = useState(25);
+  const [page, setPage] = useState(1);
   const [createOpen, setCreateOpen] = useState(false);
 
   const clients = useQuery({
@@ -61,80 +80,293 @@ export function ClientsPage() {
                     AND s.status IN ('completed','partially_refunded')) AS visits,
                 (SELECT COALESCE(SUM(total),0) FROM sale s
                   WHERE s.customer_id = c.id
-                    AND s.status IN ('completed','partially_refunded')) AS spent
+                    AND s.status IN ('completed','partially_refunded')) AS spent,
+                (SELECT MAX(sold_at) FROM sale s
+                  WHERE s.customer_id = c.id
+                    AND s.status IN ('completed','partially_refunded')) AS last_visit
            FROM customer c
-          WHERE c.organization_id = ? AND c.active = 1
-          ORDER BY c.first_name`,
+          WHERE c.organization_id = ? AND c.active = 1`,
         [orgId],
       ),
   });
 
+  const all = clients.data ?? [];
+
+  const stats = useMemo(() => {
+    const withWa = all.filter((c) => !!c.phone).length;
+    const buyers = all.filter((c) => c.visits > 0).length;
+    const revenue = all.reduce((s, c) => s + (c.spent || 0), 0);
+    return { total: all.length, withWa, buyers, revenue };
+  }, [all]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const list = clients.data ?? [];
-    if (!q) return list;
-    return list.filter(
-      (c) =>
+    let list = all.filter((c) => {
+      if (wa === 'with' && !c.phone) return false;
+      if (wa === 'without' && c.phone) return false;
+      if (status === 'buyers' && c.visits === 0) return false;
+      if (status === 'new' && c.visits > 0) return false;
+      if (!q) return true;
+      return (
         fullName(c.first_name, c.last_name).toLowerCase().includes(q) ||
         (c.phone ?? '').toLowerCase().includes(q) ||
-        (c.email ?? '').toLowerCase().includes(q),
-    );
-  }, [clients.data, search]);
+        (c.email ?? '').toLowerCase().includes(q)
+      );
+    });
+    list = [...list].sort((a, b) => {
+      switch (sort) {
+        case 'spent':
+          return b.spent - a.spent;
+        case 'visits':
+          return b.visits - a.visits;
+        case 'recent':
+          return (b.last_visit ?? '').localeCompare(a.last_visit ?? '');
+        default:
+          return fullName(a.first_name, a.last_name).localeCompare(
+            fullName(b.first_name, b.last_name),
+          );
+      }
+    });
+    return list;
+  }, [all, search, wa, status, sort]);
+
+  // Reset a la primera página cuando cambian filtros
+  useEffect(() => setPage(1), [search, wa, status, sort, pageSize]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const current = Math.min(page, totalPages);
+  const start = (current - 1) * pageSize;
+  const pageRows = filtered.slice(start, start + pageSize);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-white">Clientes</h1>
+        <div>
+          <h1 className="text-2xl font-semibold text-white">Clientes</h1>
+          <p className="text-sm text-white/40">
+            {stats.total.toLocaleString('es-EC')} en total
+          </p>
+        </div>
         <Button onClick={() => setCreateOpen(true)}>
           <UserPlus className="h-4 w-4" /> Nuevo cliente
         </Button>
       </div>
 
-      <Card>
-        <div className="relative mb-4">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Buscar por nombre, WhatsApp o email…"
-            className="input-base w-full pl-9"
-          />
+      {/* Resumen */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard
+          label="Clientes"
+          value={stats.total.toLocaleString('es-EC')}
+          icon={Users}
+        />
+        <StatCard
+          label="Con WhatsApp"
+          value={stats.withWa.toLocaleString('es-EC')}
+          icon={MessageCircle}
+          hint={
+            stats.total
+              ? `${Math.round((stats.withWa / stats.total) * 100)}% del total`
+              : undefined
+          }
+        />
+        <StatCard
+          label="Con compras"
+          value={stats.buyers.toLocaleString('es-EC')}
+          icon={UserCheck}
+        />
+        <StatCard
+          label="Facturado"
+          value={money(stats.revenue)}
+          icon={Wallet}
+          tone="gold"
+        />
+      </div>
+
+      <Card className="space-y-4">
+        {/* Filtros */}
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Buscar por nombre, WhatsApp o email…"
+              className="input-base w-full pl-9"
+            />
+          </div>
+          <div className="grid grid-cols-3 gap-2 lg:flex lg:w-auto">
+            <Select
+              value={wa}
+              onChange={(e) => setWa(e.target.value as WaFilter)}
+            >
+              <option value="all">WhatsApp: todos</option>
+              <option value="with">Con WhatsApp</option>
+              <option value="without">Sin WhatsApp</option>
+            </Select>
+            <Select
+              value={status}
+              onChange={(e) => setStatus(e.target.value as StatusFilter)}
+            >
+              <option value="all">Actividad: todos</option>
+              <option value="buyers">Con compras</option>
+              <option value="new">Nuevos (0)</option>
+            </Select>
+            <Select
+              value={sort}
+              onChange={(e) => setSort(e.target.value as SortKey)}
+            >
+              <option value="name">Orden: nombre</option>
+              <option value="spent">Más gastan</option>
+              <option value="visits">Más visitas</option>
+              <option value="recent">Recientes</option>
+            </Select>
+          </div>
         </div>
 
         {filtered.length > 0 ? (
-          <ul className="divide-y divide-white/5">
-            {filtered.map((c) => (
-              <li key={c.id}>
-                <button
-                  onClick={() => navigate(`${ROUTES.client}/${c.id}`)}
-                  className="flex w-full items-center justify-between gap-3 py-3 text-left hover:bg-white/[0.02]"
+          <>
+            <div className="-mx-4 overflow-x-auto sm:mx-0">
+              <table className="w-full min-w-[640px] border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-white/40">
+                    <th className="px-4 py-2.5 font-medium">Cliente</th>
+                    <th className="px-4 py-2.5 font-medium">WhatsApp</th>
+                    <th className="px-4 py-2.5 text-center font-medium">
+                      Visitas
+                    </th>
+                    <th className="px-4 py-2.5 text-right font-medium">
+                      Total gastado
+                    </th>
+                    <th className="hidden px-4 py-2.5 font-medium md:table-cell">
+                      Última visita
+                    </th>
+                    <th className="px-4 py-2.5" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {pageRows.map((c) => (
+                    <tr
+                      key={c.id}
+                      onClick={() => navigate(`${ROUTES.client}/${c.id}`)}
+                      className="cursor-pointer border-b border-white/5 transition-colors hover:bg-white/[0.03]"
+                    >
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <Avatar
+                            first={c.first_name}
+                            last={c.last_name}
+                          />
+                          <div className="min-w-0">
+                            <p className="flex items-center gap-1.5 truncate font-medium text-white">
+                              {fullName(c.first_name, c.last_name)}
+                              {c.allergies && (
+                                <TriangleAlert
+                                  className="h-3.5 w-3.5 shrink-0 text-danger"
+                                  aria-label="Alergias"
+                                />
+                              )}
+                            </p>
+                            {c.email && (
+                              <p className="truncate text-xs text-white/40">
+                                {c.email}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-white/70">
+                        {c.phone || (
+                          <span className="text-white/25">Sin WhatsApp</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {c.visits > 0 ? (
+                          <Badge tone="info">{c.visits}</Badge>
+                        ) : (
+                          <span className="text-white/25">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-right font-medium text-gold-200">
+                        {money(c.spent)}
+                      </td>
+                      <td className="hidden px-4 py-3 text-white/50 md:table-cell">
+                        {c.last_visit ? dateShort(c.last_visit) : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {c.phone && (
+                          <a
+                            href={waLink(c.phone)}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            title="Abrir WhatsApp"
+                            className="inline-flex rounded-lg p-1.5 text-success/80 hover:bg-success/10 hover:text-success"
+                          >
+                            <MessageCircle className="h-4 w-4" />
+                          </a>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Paginación */}
+            <div className="flex flex-col items-center justify-between gap-3 pt-1 text-sm text-white/50 sm:flex-row">
+              <div className="flex items-center gap-2">
+                <span>
+                  {start + 1}–{Math.min(start + pageSize, filtered.length)} de{' '}
+                  {filtered.length.toLocaleString('es-EC')}
+                </span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => setPageSize(Number(e.target.value))}
+                  className="input-base h-8 py-0 text-xs"
                 >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-white">
-                      {fullName(c.first_name, c.last_name)}
-                    </p>
-                    <p className="truncate text-xs text-white/40">
-                      {c.phone || 'Sin WhatsApp'}
-                      {c.allergies ? ' · ⚠ alergias' : ''}
-                    </p>
-                  </div>
-                  <div className="shrink-0 text-right">
-                    <p className="text-sm font-medium text-gold-200">
-                      {money(c.spent)}
-                    </p>
-                    <p className="text-[10px] text-white/30">
-                      {c.visits} visitas
-                    </p>
-                  </div>
-                </button>
-              </li>
-            ))}
-          </ul>
+                  {PAGE_SIZES.map((n) => (
+                    <option key={n} value={n}>
+                      {n} / pág.
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-1">
+                <PagerBtn
+                  onClick={() => setPage(1)}
+                  disabled={current === 1}
+                  icon={ChevronsLeft}
+                />
+                <PagerBtn
+                  onClick={() => setPage(current - 1)}
+                  disabled={current === 1}
+                  icon={ChevronLeft}
+                />
+                <span className="px-2 text-white/70">
+                  {current} / {totalPages}
+                </span>
+                <PagerBtn
+                  onClick={() => setPage(current + 1)}
+                  disabled={current === totalPages}
+                  icon={ChevronRight}
+                />
+                <PagerBtn
+                  onClick={() => setPage(totalPages)}
+                  disabled={current === totalPages}
+                  icon={ChevronsRight}
+                />
+              </div>
+            </div>
+          </>
         ) : (
           <EmptyState
             icon={Users}
-            title="Sin clientes"
-            description="Creá tu primer cliente para empezar la ficha."
+            title={all.length ? 'Sin resultados' : 'Sin clientes'}
+            description={
+              all.length
+                ? 'Probá ajustar la búsqueda o los filtros.'
+                : 'Creá tu primer cliente para empezar la ficha.'
+            }
           />
         )}
       </Card>
@@ -145,6 +377,68 @@ export function ClientsPage() {
       />
     </div>
   );
+}
+
+/* ─── avatar de iniciales ─── */
+const AVATAR_TONES = [
+  'bg-gold/20 text-gold-200',
+  'bg-info/20 text-info',
+  'bg-success/20 text-success',
+  'bg-fuchsia-500/20 text-fuchsia-300',
+  'bg-sky-500/20 text-sky-300',
+  'bg-amber-500/20 text-amber-300',
+  'bg-emerald-500/20 text-emerald-300',
+  'bg-rose-500/20 text-rose-300',
+];
+
+function Avatar({
+  first,
+  last,
+}: {
+  first: string;
+  last: string | null;
+}) {
+  const initials =
+    ((first?.[0] ?? '') + (last?.[0] ?? first?.[1] ?? '')).toUpperCase() || '?';
+  let hash = 0;
+  const key = first + (last ?? '');
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) | 0;
+  const tone = AVATAR_TONES[Math.abs(hash) % AVATAR_TONES.length];
+  return (
+    <span
+      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${tone}`}
+    >
+      {initials}
+    </span>
+  );
+}
+
+function PagerBtn({
+  onClick,
+  disabled,
+  icon: Icon,
+}: {
+  onClick: () => void;
+  disabled: boolean;
+  icon: typeof ChevronLeft;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="rounded-lg p-1.5 text-white/60 hover:bg-white/10 hover:text-white disabled:pointer-events-none disabled:opacity-30"
+    >
+      <Icon className="h-4 w-4" />
+    </button>
+  );
+}
+
+/** Enlace wa.me normalizando a Ecuador por defecto. */
+function waLink(phone: string): string {
+  let d = phone.replace(/\D/g, '');
+  if (d.startsWith('0')) d = '593' + d.slice(1);
+  else if (!d.startsWith('593') && d.length <= 10) d = '593' + d;
+  return `https://wa.me/${d}`;
 }
 
 function CreateClientModal({
