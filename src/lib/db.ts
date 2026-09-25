@@ -1,37 +1,64 @@
-import { createClient, type Client, type InValue } from '@libsql/client/web';
+import type { InValue } from '@libsql/client/web';
 
 /**
- * Cliente libSQL (Turso) para el navegador.
+ * Acceso a datos del frontend.
  *
- * ⚠️ SEGURIDAD: en una PWA el token viaja en el bundle. Para producción, mover
- * las escrituras a un backend/proxy o usar tokens de solo lectura. Para el MVP
- * se conecta directo con las variables VITE_TURSO_*.
+ * - Producción: pega al proxy del Worker en POST /api/db. El token de Turso vive
+ *   como secret del Worker, NUNCA en el bundle del navegador.
+ * - Desarrollo (import.meta.env.DEV): usa un cliente directo a Turso (src/lib/db.dev.ts)
+ *   con las VITE_TURSO_* del .env local, para conservar HMR. Ese branch se elimina
+ *   del bundle de producción por dead-code elimination.
+ *
+ * Las firmas query/queryOne/execute/batch se mantienen: los 21 call sites no cambian.
  */
 
-const url = import.meta.env.VITE_TURSO_DATABASE_URL as string | undefined;
-const authToken = import.meta.env.VITE_TURSO_AUTH_TOKEN as string | undefined;
+interface DbResult {
+  rows?: unknown[];
+  rowsAffected?: number;
+  ok?: boolean;
+  error?: string;
+}
 
-let _client: Client | null = null;
-
-export function getDb(): Client {
-  if (!_client) {
-    if (!url) {
-      throw new Error(
-        'Falta VITE_TURSO_DATABASE_URL. Copiá .env.example a .env y completá las credenciales.',
-      );
-    }
-    _client = createClient({ url, authToken });
+async function callApi(payload: unknown): Promise<DbResult> {
+  const res = await fetch('/api/db', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = (await res.json().catch(() => ({}))) as DbResult;
+  if (!res.ok) {
+    throw new Error(data.error ?? `Error de base de datos (${res.status}).`);
   }
-  return _client;
+  return data;
+}
+
+async function execRaw(
+  sql: string,
+  args: InValue[],
+): Promise<{ rows: unknown[]; rowsAffected: number }> {
+  if (import.meta.env.DEV) {
+    const { devExecute } = await import('./db.dev');
+    return devExecute(sql, args);
+  }
+  const data = await callApi({ sql, args });
+  return { rows: data.rows ?? [], rowsAffected: data.rowsAffected ?? 0 };
+}
+
+async function batchRaw(
+  stmts: { sql: string; args?: InValue[] }[],
+): Promise<void> {
+  if (import.meta.env.DEV) {
+    const { devBatch } = await import('./db.dev');
+    return devBatch(stmts);
+  }
+  await callApi({ batch: stmts.map((s) => ({ sql: s.sql, args: s.args ?? [] })) });
 }
 
 /** Ejecuta una consulta y devuelve las filas tipadas como T. */
-export async function query<T>(
-  sql: string,
-  args: InValue[] = [],
-): Promise<T[]> {
-  const rs = await getDb().execute({ sql, args });
-  return rs.rows as unknown as T[];
+export async function query<T>(sql: string, args: InValue[] = []): Promise<T[]> {
+  const { rows } = await execRaw(sql, args);
+  return rows as unknown as T[];
 }
 
 /** Devuelve la primera fila o null. */
@@ -48,16 +75,13 @@ export async function execute(
   sql: string,
   args: InValue[] = [],
 ): Promise<number> {
-  const rs = await getDb().execute({ sql, args });
-  return rs.rowsAffected;
+  const { rowsAffected } = await execRaw(sql, args);
+  return rowsAffected;
 }
 
 /** Transacción con varias sentencias (batch atómico). */
 export async function batch(
   stmts: { sql: string; args?: InValue[] }[],
 ): Promise<void> {
-  await getDb().batch(
-    stmts.map((s) => ({ sql: s.sql, args: s.args ?? [] })),
-    'write',
-  );
+  await batchRaw(stmts);
 }
