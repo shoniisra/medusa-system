@@ -24,6 +24,7 @@ import {
   commissionForItem,
 } from './createSale';
 import { findCustomerByPhone } from '@/features/clients/customerLookup';
+import { CONSUMIDOR_FINAL_LABEL } from '@/config/constants';
 import { qk } from '@/lib/queryClient';
 import {
   Button,
@@ -197,7 +198,10 @@ export function NewSaleTab() {
       <div className="space-y-4 lg:col-span-2">
         {/* Cliente */}
         <Card>
-          <CardHeader title="Cliente" subtitle="Buscá un cliente o dejá mostrador" />
+          <CardHeader
+            title="Cliente"
+            subtitle="Buscá un cliente registrado o dejalo como Consumidor Final"
+          />
 
           {hasClient ? (
             <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
@@ -282,6 +286,17 @@ export function NewSaleTab() {
                     </button>
                   </li>
                 </ul>
+              )}
+
+              {!clientSearch.trim() && (
+                <p className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-xs text-white/50">
+                  <UserRound className="h-4 w-4 shrink-0 text-white/30" />
+                  Sin cliente: la venta se registra como{' '}
+                  <span className="font-medium text-white/80">
+                    {CONSUMIDOR_FINAL_LABEL}
+                  </span>
+                  .
+                </p>
               )}
             </div>
           )}
@@ -392,6 +407,13 @@ export function NewSaleTab() {
         <ConfirmSalePosModal
           orgId={orgId}
           branchId={branchId}
+          customerName={
+            newClient
+              ? fullName(firstName, lastName) || CONSUMIDOR_FINAL_LABEL
+              : selectedCustomer
+                ? fullName(selectedCustomer.first_name, selectedCustomer.last_name)
+                : CONSUMIDOR_FINAL_LABEL
+          }
           customerId={customerId || null}
           newClient={
             newClient
@@ -426,6 +448,7 @@ export function NewSaleTab() {
 function ConfirmSalePosModal({
   orgId,
   branchId,
+  customerName,
   customerId,
   newClient,
   items,
@@ -438,6 +461,7 @@ function ConfirmSalePosModal({
 }: {
   orgId: string;
   branchId: string;
+  customerName: string;
   customerId: string | null;
   newClient: { firstName: string; lastName: string; phone: string } | null;
   items: DraftSaleItem[];
@@ -598,6 +622,10 @@ function ConfirmSalePosModal({
     <Modal open onClose={onClose} title="Confirmar venta">
       <div className="space-y-4">
         <div className="space-y-1 rounded-xl bg-white/5 p-3 text-sm">
+          <div className="flex justify-between text-white/60">
+            <span>Cliente</span>
+            <span className="text-white/80">{customerName}</span>
+          </div>
           <div className="flex justify-between border-t border-white/10 pt-1 font-medium text-white">
             <span>Total a cobrar</span>
             <span className="kpi-gold">{money(total)}</span>

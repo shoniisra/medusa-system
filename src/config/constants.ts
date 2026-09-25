@@ -6,6 +6,13 @@ import type {
 
 export const APP_NAME = 'Medusa Estudio';
 
+/**
+ * Comprador anónimo de mostrador: una venta sin cliente registrado
+ * (`customer_id NULL`). Es un ingreso normal y afecta las finanzas; solo no se
+ * atribuye a un cliente del directorio ni cuenta como cliente estrella.
+ */
+export const CONSUMIDOR_FINAL_LABEL = 'Consumidor Final';
+
 /** Categorías de servicios del salón. */
 export const SERVICE_CATEGORIES = [
   'Manicura',

@@ -4,7 +4,7 @@ import { query, execute } from '@/lib/db';
 import { qk } from '@/lib/queryClient';
 import { money, dateShort } from '@/lib/format';
 import { useBranchId } from '@/store/session';
-import { INVOICE_COLUMNS } from '@/config/constants';
+import { INVOICE_COLUMNS, CONSUMIDOR_FINAL_LABEL } from '@/config/constants';
 import { Card, Badge, EmptyState, Button } from '@/components/ui';
 import type { InvoiceRequestStatus, VInvoiceKanban } from '@/types';
 
@@ -94,7 +94,7 @@ export function InvoicesPage() {
                       <span className="kpi-gold">{money(c.sale_total)}</span>
                     </div>
                     <p className="text-xs text-white/50">
-                      {c.customer_name ?? 'Sin cliente'}
+                      {c.customer_name ?? CONSUMIDOR_FINAL_LABEL}
                       {c.phone ? ` · ${c.phone}` : ''}
                     </p>
                     <p className="text-xs text-white/30">

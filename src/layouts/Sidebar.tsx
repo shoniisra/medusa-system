@@ -17,17 +17,34 @@ import { query } from '@/lib/db';
 import { useBranchId } from '@/store/session';
 import { cn } from '@/lib/cn';
 
-const NAV = [
-  { to: ROUTES.dashboard, label: 'Dashboard', icon: LayoutDashboard, end: true },
-  { to: ROUTES.calendar, label: 'Agenda', icon: CalendarDays },
-  { to: ROUTES.tasks, label: 'Tareas', icon: ClipboardList },
-  { to: ROUTES.pos, label: 'POS (venta sin cita)', icon: ShoppingCart },
-  { to: ROUTES.reminders, label: 'Recordatorios', icon: BellRing },
-  { to: ROUTES.cashflow, label: 'Finanzas', icon: Wallet },
-  { to: ROUTES.staff, label: 'Personal', icon: Users },
-  { to: ROUTES.clients, label: 'Clientes', icon: Contact },
-  { to: ROUTES.invoices, label: 'Facturación', icon: FileText },
-  { to: ROUTES.settings, label: 'Configuración', icon: Settings },
+/** Navegación por secciones; `title` opcional pinta un encabezado de grupo. */
+const NAV_SECTIONS: {
+  title?: string;
+  items: { to: string; label: string; icon: typeof LayoutDashboard; end?: boolean }[];
+}[] = [
+  {
+    items: [
+      { to: ROUTES.dashboard, label: 'Dashboard', icon: LayoutDashboard, end: true },
+      { to: ROUTES.pos, label: 'POS (venta sin cita)', icon: ShoppingCart },
+    ],
+  },
+  {
+    title: 'Citas Agendadas',
+    items: [
+      { to: ROUTES.calendar, label: 'Agenda', icon: CalendarDays },
+      { to: ROUTES.tasks, label: 'Tareas', icon: ClipboardList },
+      { to: ROUTES.reminders, label: 'Recordatorios', icon: BellRing },
+    ],
+  },
+  {
+    items: [
+      { to: ROUTES.cashflow, label: 'Finanzas', icon: Wallet },
+      { to: ROUTES.staff, label: 'Personal', icon: Users },
+      { to: ROUTES.clients, label: 'Clientes', icon: Contact },
+      { to: ROUTES.invoices, label: 'Facturación', icon: FileText },
+      { to: ROUTES.settings, label: 'Configuración', icon: Settings },
+    ],
+  },
 ];
 
 /** Cuenta de citas vencidas (reservadas/atendiendo de días pasados). */
@@ -84,34 +101,43 @@ export function Sidebar() {
         <span className="brand-script text-3xl leading-none">{APP_NAME}</span>
       </div>
 
-      <nav className="flex-1 space-y-1 px-3">
-        {NAV.map(({ to, label, icon: Icon, end }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={end}
-            className={({ isActive }) =>
-              cn(
-                'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors',
-                isActive
-                  ? 'bg-gold/10 text-gold-200 shadow-gold-glow'
-                  : 'text-white/60 hover:bg-white/5 hover:text-white',
-              )
-            }
-          >
-            <Icon className="h-5 w-5" />
-            <span className="flex-1">{label}</span>
-            {to === ROUTES.tasks && overdue > 0 && (
-              <span className="rounded-full bg-danger/20 px-2 py-0.5 text-xs font-medium text-danger">
-                {overdue}
-              </span>
+      <nav className="flex-1 space-y-4 px-3">
+        {NAV_SECTIONS.map((section, si) => (
+          <div key={section.title ?? si} className="space-y-1">
+            {section.title && (
+              <p className="px-3 pb-1 pt-2 text-xs font-medium uppercase tracking-wide text-white/30">
+                {section.title}
+              </p>
             )}
-            {to === ROUTES.reminders && tomorrow > 0 && (
-              <span className="rounded-full bg-gold/20 px-2 py-0.5 text-xs font-medium text-gold-200">
-                {tomorrow}
-              </span>
-            )}
-          </NavLink>
+            {section.items.map(({ to, label, icon: Icon, end }) => (
+              <NavLink
+                key={to}
+                to={to}
+                end={end}
+                className={({ isActive }) =>
+                  cn(
+                    'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors',
+                    isActive
+                      ? 'bg-gold/10 text-gold-200 shadow-gold-glow'
+                      : 'text-white/60 hover:bg-white/5 hover:text-white',
+                  )
+                }
+              >
+                <Icon className="h-5 w-5" />
+                <span className="flex-1">{label}</span>
+                {to === ROUTES.tasks && overdue > 0 && (
+                  <span className="rounded-full bg-danger/20 px-2 py-0.5 text-xs font-medium text-danger">
+                    {overdue}
+                  </span>
+                )}
+                {to === ROUTES.reminders && tomorrow > 0 && (
+                  <span className="rounded-full bg-gold/20 px-2 py-0.5 text-xs font-medium text-gold-200">
+                    {tomorrow}
+                  </span>
+                )}
+              </NavLink>
+            ))}
+          </div>
         ))}
       </nav>
 
