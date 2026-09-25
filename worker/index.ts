@@ -1,4 +1,5 @@
 import { createClient, type Client, type InValue } from '@libsql/client/web';
+import { handleGcalSync } from './gcalSync';
 
 /**
  * Worker de Cloudflare: sirve los assets estáticos de la SPA y expone un proxy
@@ -12,6 +13,8 @@ import { createClient, type Client, type InValue } from '@libsql/client/web';
 interface Env {
   TURSO_DATABASE_URL: string;
   TURSO_AUTH_TOKEN: string;
+  /** Secreto compartido con el Apps Script que sincroniza Google Calendar. */
+  GCAL_SYNC_SECRET: string;
   ASSETS: { fetch: (req: Request) => Promise<Response> };
 }
 
@@ -37,6 +40,18 @@ function getDb(env: Env): Client {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+
+    // Webhook de sincronización desde Google Calendar (vía Apps Script).
+    if (url.pathname === '/api/gcal-sync' && request.method === 'POST') {
+      try {
+        return await handleGcalSync(request, env, getDb(env));
+      } catch (e) {
+        return Response.json(
+          { error: e instanceof Error ? e.message : String(e) },
+          { status: 400 },
+        );
+      }
+    }
 
     if (url.pathname === '/api/db' && request.method === 'POST') {
       try {

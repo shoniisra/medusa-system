@@ -12,6 +12,11 @@ import {
   Landmark,
   Check,
   Trash2,
+  Search,
+  ChevronLeft,
+  ChevronRight,
+  SlidersHorizontal,
+  Scale,
 } from 'lucide-react';
 import { query, queryOne, execute, batch } from '@/lib/db';
 import { qk } from '@/lib/queryClient';
@@ -48,6 +53,16 @@ const ym = (d: Date) => d.toISOString().slice(0, 10).slice(0, 7);
 const monthLabel = (m: string) =>
   new Date(`${m}-01T00:00:00`).toLocaleDateString('es-EC', { month: 'long' });
 
+/**
+ * Marca de un ajuste de saldo (cuadre inicial). Cuenta para el saldo de la
+ * cuenta pero se excluye del P&L (ingresos/egresos de los resúmenes), para poder
+ * cuadrar sin inflar ventas ni gastos.
+ */
+const ADJUST_MARK = '[Ajuste de saldo]';
+/** Filtros SQL para excluir ajustes de las métricas de P&L. */
+const NOT_ADJUST_PAYMENT = `AND COALESCE(reference,'') NOT LIKE '${ADJUST_MARK}%'`;
+const NOT_ADJUST_EXPENSE = `AND COALESCE(description,'') NOT LIKE '${ADJUST_MARK}%'`;
+
 /** Invalida todas las queries de finanzas de una (coincidencia por prefijo). */
 function useInvalidateFinance() {
   const qc = useQueryClient();
@@ -68,13 +83,13 @@ function useInvalidateFinance() {
   };
 }
 
-type TabKey = 'resumen' | 'transacciones' | 'caja' | 'bancos' | 'deudas';
+type TabKey = 'general' | 'resumen' | 'transacciones' | 'cuentas' | 'deudas';
 
 const TABS: { key: TabKey; label: string }[] = [
+  { key: 'general', label: 'Vista general' },
   { key: 'resumen', label: 'Resumen' },
   { key: 'transacciones', label: 'Transacciones' },
-  { key: 'caja', label: 'Caja' },
-  { key: 'bancos', label: 'Cuentas bancarias' },
+  { key: 'cuentas', label: 'Cuentas' },
   { key: 'deudas', label: 'Deudas · Créditos' },
 ];
 
@@ -85,7 +100,7 @@ export function CashflowPage() {
   const orgId = useOrgId();
   const user = useSession((s) => s.user);
   const setCashSession = useSession((s) => s.setCashSession);
-  const [tab, setTab] = useState<TabKey>('resumen');
+  const [tab, setTab] = useState<TabKey>('general');
 
   const session = useQuery({
     queryKey: qk.cashSession(branchId),
@@ -134,12 +149,17 @@ export function CashflowPage() {
         ))}
       </div>
 
-      {tab === 'resumen' && <ResumenTab ctx={ctx} />}
-      {tab === 'transacciones' && <TransactionsSection branchId={branchId} />}
-      {tab === 'caja' && (
-        <CajaTab session={open} loading={session.isLoading} ctx={ctx} />
+      {tab === 'general' && <GeneralTab ctx={ctx} />}
+      {tab === 'resumen' && <MonthlyResumenTab branchId={branchId} />}
+      {tab === 'transacciones' && <TransactionsTab ctx={ctx} />}
+      {tab === 'cuentas' && (
+        <AccountsTab
+          ctx={ctx}
+          isAdmin={isAdmin}
+          session={open}
+          loading={session.isLoading}
+        />
       )}
-      {tab === 'bancos' && <BankAccountsTab ctx={ctx} isAdmin={isAdmin} />}
       {tab === 'deudas' && <DebtsTab ctx={ctx} />}
     </div>
   );
@@ -156,7 +176,7 @@ interface Ctx {
 
 /* ───────────────────────────────── Resumen ──────────────────────────────── */
 
-function ResumenTab({ ctx }: { ctx: Ctx }) {
+function GeneralTab({ ctx }: { ctx: Ctx }) {
   const [modal, setModal] = useState<null | 'income' | 'expense' | 'transfer'>(
     null,
   );
@@ -226,6 +246,7 @@ function SummaryCard({ branchId }: { branchId: string }) {
            FROM payment
           WHERE branch_id = ? AND status = 'confirmed'
             AND substr(paid_at,1,7) IN (?, ?)
+            ${NOT_ADJUST_PAYMENT}
           GROUP BY 1`,
         [branchId, prev, curr],
       );
@@ -234,6 +255,7 @@ function SummaryCard({ branchId }: { branchId: string }) {
            FROM expense
           WHERE branch_id = ? AND status <> 'voided'
             AND substr(expense_date,1,7) IN (?, ?)
+            ${NOT_ADJUST_EXPENSE}
           GROUP BY 1`,
         [branchId, prev, curr],
       );
@@ -408,6 +430,7 @@ function BalanceChartCard({ branchId }: { branchId: string }) {
         `SELECT substr(paid_at,1,7) AS m, SUM(amount) AS s
            FROM payment
           WHERE branch_id = ? AND status = 'confirmed' AND substr(paid_at,1,7) >= ?
+            ${NOT_ADJUST_PAYMENT}
           GROUP BY 1`,
         [branchId, min],
       );
@@ -415,6 +438,7 @@ function BalanceChartCard({ branchId }: { branchId: string }) {
         `SELECT substr(expense_date,1,7) AS m, SUM(amount) AS s
            FROM expense
           WHERE branch_id = ? AND status <> 'voided' AND substr(expense_date,1,7) >= ?
+            ${NOT_ADJUST_EXPENSE}
           GROUP BY 1`,
         [branchId, min],
       );
@@ -1014,46 +1038,281 @@ function TransferModal({ ctx, onClose }: { ctx: Ctx; onClose: () => void }) {
   );
 }
 
-/* ───────────────────────────────── Caja ───────────────────────────────── */
+/* ───────────────────────────────── Cuentas ───────────────────────────────── */
 
-function CajaTab({
+/**
+ * Tab unificado: la caja física y las cuentas bancarias son todas «cuentas».
+ * Permite abrir/cerrar caja, ver el saldo de cada banco y cuadrar cualquier
+ * cuenta con un «Ajuste de saldo» (para conciliar saldos previos al sistema).
+ */
+function AccountsTab({
+  ctx,
+  isAdmin,
   session,
   loading,
-  ctx,
 }: {
+  ctx: Ctx;
+  isAdmin: boolean;
   session: CashSession | null;
   loading: boolean;
-  ctx: Ctx;
 }) {
   const qc = useQueryClient();
   const setCashSession = useSession((s) => s.setCashSession);
   const invalidate = useInvalidateFinance();
+  const accounts = useAccounts(ctx);
+  const [adjust, setAdjust] = useState<AdjustTarget | null>(null);
 
   if (loading) return null;
 
-  if (!session) {
-    return (
-      <OpenForm
-        branchId={ctx.branchId}
-        userId={ctx.userId}
-        onOpened={() =>
-          qc.invalidateQueries({ queryKey: qk.cashSession(ctx.branchId) })
-        }
-      />
-    );
-  }
+  const cashBalance = accounts.data?.cash ?? 0;
 
   return (
     <div className="space-y-6">
-      <OpenSessionCard
-        session={session}
-        onClosed={() => {
-          setCashSession(null);
-          invalidate();
-        }}
-      />
-      <CollectSection sessionId={session.id} userId={ctx.userId} />
+      {/* Caja física */}
+      {!session ? (
+        <OpenForm
+          branchId={ctx.branchId}
+          userId={ctx.userId}
+          onOpened={() =>
+            qc.invalidateQueries({ queryKey: qk.cashSession(ctx.branchId) })
+          }
+        />
+      ) : (
+        <OpenSessionCard
+          session={session}
+          onClosed={() => {
+            setCashSession(null);
+            invalidate();
+          }}
+        />
+      )}
+
+      {/* Listado de cuentas con saldo + ajuste */}
+      <Card>
+        <CardHeader
+          title="Cuentas"
+          subtitle="Saldo actual de la caja y las cuentas bancarias"
+        />
+        <ul className="divide-y divide-white/5">
+          {/* Caja */}
+          <li className="flex items-center justify-between gap-3 py-3">
+            <div className="flex items-center gap-3">
+              <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-gold/10 text-gold-300 ring-1 ring-gold/20">
+                <Wallet className="h-5 w-5" />
+              </span>
+              <div>
+                <p className="text-sm text-white">Caja (efectivo)</p>
+                <p className="text-xs text-white/40">
+                  {session ? 'Sesión abierta' : 'Caja cerrada'}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-semibold text-white">
+                {money(cashBalance)}
+              </span>
+              <button
+                title="Ajustar saldo"
+                disabled={!session}
+                onClick={() =>
+                  setAdjust({ kind: 'cash', name: 'Caja', current: cashBalance })
+                }
+                className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-gold-300 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Scale className="h-4 w-4" />
+              </button>
+            </div>
+          </li>
+
+          {/* Bancos */}
+          {accounts.data?.banks.map((b) => (
+            <li key={b.id} className="flex items-center justify-between gap-3 py-3">
+              <div className="flex items-center gap-3">
+                <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 text-white/60 ring-1 ring-white/10">
+                  <Landmark className="h-5 w-5" />
+                </span>
+                <div>
+                  <p className="text-sm text-white">{b.name}</p>
+                  <p className="text-xs text-white/40">{b.bank_name ?? 'Banco'}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-semibold text-white">
+                  {money(b.balance)}
+                </span>
+                <button
+                  title="Ajustar saldo"
+                  onClick={() =>
+                    setAdjust({
+                      kind: 'bank',
+                      id: b.id,
+                      name: b.name,
+                      current: b.balance,
+                    })
+                  }
+                  className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-gold-300"
+                >
+                  <Scale className="h-4 w-4" />
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+
+        {(!accounts.data || accounts.data.banks.length === 0) && (
+          <EmptyState
+            icon={Landmark}
+            title="Sin cuentas bancarias"
+            description={
+              isAdmin
+                ? 'Agregá cuentas en Configuración → Cuentas bancarias.'
+                : 'Todavía no hay cuentas bancarias configuradas.'
+            }
+          />
+        )}
+        <p className="mt-3 text-xs text-white/40">
+          El ajuste de saldo registra la diferencia como conciliación (no cuenta
+          como venta ni gasto en los resúmenes). Para cuadrar la caja necesitás
+          la sesión abierta.
+        </p>
+      </Card>
+
+      {adjust && (
+        <AdjustBalanceModal
+          target={adjust}
+          ctx={ctx}
+          onClose={() => setAdjust(null)}
+          onSaved={() => {
+            invalidate();
+            setAdjust(null);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+interface AdjustTarget {
+  kind: AccountKind;
+  id?: string;
+  name: string;
+  current: number;
+}
+
+/** Cuadre: lleva una cuenta a su saldo real registrando la diferencia. */
+function AdjustBalanceModal({
+  target,
+  ctx,
+  onClose,
+  onSaved,
+}: {
+  target: AdjustTarget;
+  ctx: Ctx;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [real, setReal] = useState(String(target.current.toFixed(2)));
+  const methods = usePaymentMethods(ctx.orgId, target.kind === 'bank');
+
+  const diff = Number(real) - target.current;
+  const rounded = Math.round(diff * 100) / 100;
+  const label = `${ADJUST_MARK} ${target.name}`;
+
+  const save = useMutation({
+    mutationFn: async () => {
+      if (rounded === 0) return;
+      const now = new Date().toISOString();
+
+      if (target.kind === 'bank') {
+        // Pago con monto firmado atado a la cuenta bancaria. Se excluye del P&L
+        // por la marca [Ajuste de saldo].
+        const method =
+          methods.data?.find((m) => m.method_type === 'transfer') ??
+          methods.data?.[0];
+        if (!method) throw new Error('No hay un método de pago configurado.');
+        await execute(
+          `INSERT INTO payment
+             (id, organization_id, branch_id, sale_id, payment_method_id,
+              bank_account_id, paid_at, amount, status, reference)
+           VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'confirmed', ?)`,
+          [
+            genId(),
+            ctx.orgId,
+            ctx.branchId,
+            method.id,
+            target.id ?? null,
+            now,
+            rounded,
+            label,
+          ],
+        );
+      } else {
+        // Caja: movimiento firmado dentro de la sesión abierta.
+        if (!ctx.sessionId) throw new Error('Abrí la caja para cuadrarla.');
+        const isIn = rounded > 0;
+        await execute(
+          `INSERT INTO cash_movement
+             (id, cash_session_id, branch_id, movement_type, direction, amount,
+              movement_at, description, created_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            genId(),
+            ctx.sessionId,
+            ctx.branchId,
+            isIn ? 'cash_in' : 'cash_out',
+            isIn ? 'in' : 'out',
+            Math.abs(rounded),
+            now,
+            label,
+            ctx.userId,
+          ],
+        );
+      }
+    },
+    onSuccess: onSaved,
+  });
+
+  return (
+    <Modal open onClose={onClose} title={`Ajustar saldo · ${target.name}`}>
+      <div className="space-y-4">
+        <div className="rounded-xl bg-white/5 p-3 text-sm">
+          <div className="flex justify-between text-white/60">
+            <span>Saldo en el sistema</span>
+            <span className="font-medium text-white">{money(target.current)}</span>
+          </div>
+        </div>
+        <Input
+          label="Saldo real (el que tenés hoy)"
+          type="number"
+          step="0.01"
+          value={real}
+          onChange={(e) => setReal(e.target.value)}
+        />
+        {rounded !== 0 && (
+          <p className="text-xs text-white/50">
+            Se registrará un ajuste de{' '}
+            <span
+              className={cn(
+                'font-semibold',
+                rounded > 0 ? 'text-success' : 'text-danger',
+              )}
+            >
+              {rounded > 0 ? '+' : '−'}
+              {money(Math.abs(rounded))}
+            </span>{' '}
+            para cuadrar la cuenta.
+          </p>
+        )}
+        <Button
+          className="w-full"
+          disabled={rounded === 0}
+          loading={save.isPending}
+          onClick={() => save.mutate()}
+        >
+          Cuadrar cuenta
+        </Button>
+      </div>
+    </Modal>
   );
 }
 
@@ -1230,51 +1489,6 @@ function OpenSessionCard({
   );
 }
 
-/* ─────────────────────────── Cuentas bancarias ─────────────────────────── */
-
-function BankAccountsTab({ ctx, isAdmin }: { ctx: Ctx; isAdmin: boolean }) {
-  const accounts = useAccounts(ctx);
-
-  return (
-    <Card>
-      <CardHeader
-        title="Cuentas bancarias"
-        subtitle="Saldo calculado a partir de cobros, gastos y transferencias"
-      />
-      {accounts.data && accounts.data.banks.length > 0 ? (
-        <ul className="divide-y divide-white/5">
-          {accounts.data.banks.map((b) => (
-            <li key={b.id} className="flex items-center justify-between py-3">
-              <div className="flex items-center gap-3">
-                <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 text-white/60 ring-1 ring-white/10">
-                  <Landmark className="h-5 w-5" />
-                </span>
-                <div>
-                  <p className="text-sm text-white">{b.name}</p>
-                  <p className="text-xs text-white/40">{b.bank_name ?? 'Banco'}</p>
-                </div>
-              </div>
-              <span className="text-sm font-semibold text-white">
-                {money(b.balance)}
-              </span>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <EmptyState
-          icon={Landmark}
-          title="Sin cuentas bancarias"
-          description={
-            isAdmin
-              ? 'Agregá cuentas en Configuración → Cuentas bancarias.'
-              : 'Todavía no hay cuentas bancarias configuradas.'
-          }
-        />
-      )}
-    </Card>
-  );
-}
-
 /* ─────────────────────────── Deudas · Créditos ─────────────────────────── */
 
 function DebtsTab({ ctx }: { ctx: Ctx }) {
@@ -1303,6 +1517,8 @@ function DebtsTab({ ctx }: { ctx: Ctx }) {
 
   return (
     <div className="space-y-6">
+      <CollectSection ctx={ctx} />
+
       <div className="grid gap-4 sm:grid-cols-2">
         <Card>
           <Metric label="Por pagar (deudas)" value={money(pend(debts))} tone="danger" />
@@ -1681,6 +1897,557 @@ function TransactionsSection({ branchId }: { branchId: string }) {
         </div>
       )}
     </Card>
+  );
+}
+
+/* ───────────────────────── Resumen mensual (por año) ───────────────────────── */
+
+/** Dona ingresos vs egresos. Verde = ingresos, rojo = egresos. */
+function Donut({ income, expense }: { income: number; expense: number }) {
+  const total = income + expense;
+  const r = 26;
+  const c = 2 * Math.PI * r;
+  const incFrac = total > 0 ? income / total : 0;
+  const incLen = c * incFrac;
+  return (
+    <svg width="64" height="64" viewBox="0 0 64 64" className="shrink-0">
+      <circle
+        cx="32"
+        cy="32"
+        r={r}
+        fill="none"
+        stroke="rgba(255,255,255,0.08)"
+        strokeWidth="9"
+      />
+      {total > 0 && (
+        <>
+          {/* egresos (fondo del anillo) */}
+          <circle
+            cx="32"
+            cy="32"
+            r={r}
+            fill="none"
+            stroke="rgb(244,63,94)"
+            strokeWidth="9"
+          />
+          {/* ingresos por encima */}
+          <circle
+            cx="32"
+            cy="32"
+            r={r}
+            fill="none"
+            stroke="rgb(52,211,153)"
+            strokeWidth="9"
+            strokeDasharray={`${incLen} ${c - incLen}`}
+            strokeDashoffset={c / 4}
+            transform="rotate(-90 32 32)"
+            style={{ transformOrigin: 'center' }}
+          />
+        </>
+      )}
+    </svg>
+  );
+}
+
+function MonthlyResumenTab({ branchId }: { branchId: string }) {
+  const [year, setYear] = useState(new Date().getFullYear());
+
+  const data = useQuery({
+    queryKey: ['fin-monthly', branchId, year],
+    enabled: !!branchId,
+    queryFn: async () => {
+      const from = `${year}-01`;
+      const to = `${year}-12`;
+      const inc = await query<{ m: string; s: number }>(
+        `SELECT substr(paid_at,1,7) AS m, SUM(amount) AS s
+           FROM payment
+          WHERE branch_id = ? AND status = 'confirmed'
+            AND substr(paid_at,1,7) BETWEEN ? AND ?
+            ${NOT_ADJUST_PAYMENT}
+          GROUP BY 1`,
+        [branchId, from, to],
+      );
+      const exp = await query<{ m: string; s: number }>(
+        `SELECT substr(expense_date,1,7) AS m, SUM(amount) AS s
+           FROM expense
+          WHERE branch_id = ? AND status <> 'voided'
+            AND substr(expense_date,1,7) BETWEEN ? AND ?
+            ${NOT_ADJUST_EXPENSE}
+          GROUP BY 1`,
+        [branchId, from, to],
+      );
+      return Array.from({ length: 12 }, (_, i) => {
+        const key = `${year}-${String(i + 1).padStart(2, '0')}`;
+        const income = inc.find((r) => r.m === key)?.s ?? 0;
+        const expense = exp.find((r) => r.m === key)?.s ?? 0;
+        return { key, income, expense, total: income - expense };
+      });
+    },
+  });
+
+  const months = data.data ?? [];
+  const yearIncome = months.reduce((a, m) => a + m.income, 0);
+  const yearExpense = months.reduce((a, m) => a + m.expense, 0);
+  const yearTotal = yearIncome - yearExpense;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-center gap-4">
+        <button
+          onClick={() => setYear((y) => y - 1)}
+          className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+        >
+          <ChevronLeft className="h-5 w-5" />
+        </button>
+        <span className="min-w-[4rem] text-center text-lg font-semibold text-white">
+          {year}
+        </span>
+        <button
+          onClick={() => setYear((y) => y + 1)}
+          className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+        >
+          <ChevronRight className="h-5 w-5" />
+        </button>
+      </div>
+
+      <Card gold>
+        <div className="grid grid-cols-3 gap-3">
+          <Metric label="Ingresos" value={money(yearIncome)} tone="success" />
+          <Metric label="Egresos" value={money(yearExpense)} tone="danger" />
+          <Metric
+            label="Total"
+            value={money(yearTotal)}
+            tone={yearTotal >= 0 ? 'success' : 'danger'}
+          />
+        </div>
+      </Card>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        {months.map((m) => (
+          <Card key={m.key}>
+            <div className="flex items-center gap-4">
+              <Donut income={m.income} expense={m.expense} />
+              <div className="min-w-0 flex-1">
+                <p className="mb-2 text-sm font-medium capitalize text-white">
+                  {monthLabel(m.key)} {year}
+                </p>
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-white/50">Ingresos</span>
+                    <span className="font-medium text-success">
+                      {money(m.income)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-white/50">Egresos</span>
+                    <span className="font-medium text-danger">
+                      {money(m.expense)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between border-t border-white/10 pt-1">
+                    <span className="text-white/50">Total</span>
+                    <span
+                      className={cn(
+                        'font-semibold',
+                        m.total >= 0 ? 'text-success' : 'text-danger',
+                      )}
+                    >
+                      {money(m.total)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────── Transacciones (tab con búsqueda) ─────────────────── */
+
+interface TxFullRow {
+  id: string;
+  direction: CashDirection;
+  category: string;
+  reference: string | null;
+  note: string | null;
+  method_name: string;
+  method_type: PaymentMethod['method_type'];
+  bank_account_id: string | null;
+  amount: number;
+  at: string;
+}
+
+interface TxFilters {
+  tipo: 'all' | 'in' | 'out';
+  category: string; // '' = todas
+  from: string; // fecha desde (YYYY-MM-DD) o ''
+  to: string;
+  min: string;
+  max: string;
+  account: string; // 'all' | 'cash' | bankId
+}
+
+const EMPTY_FILTERS: TxFilters = {
+  tipo: 'all',
+  category: '',
+  from: '',
+  to: '',
+  min: '',
+  max: '',
+  account: 'all',
+};
+
+function TransactionsTab({ ctx }: { ctx: Ctx }) {
+  const [year, setYear] = useState(new Date().getFullYear());
+  const [sortBy, setSortBy] = useState<'date' | 'amount'>('date');
+  const [filters, setFilters] = useState<TxFilters>(EMPTY_FILTERS);
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  const banks = useBankAccounts(ctx.orgId, true);
+
+  const txs = useQuery({
+    queryKey: ['transactions', ctx.branchId, 'year', year],
+    enabled: !!ctx.branchId,
+    queryFn: () =>
+      query<TxFullRow>(
+        `SELECT * FROM (
+           SELECT p.id AS id,
+                  'in' AS direction,
+                  'Cobro / ingreso' AS category,
+                  COALESCE(s.sale_number, p.reference, 'Ingreso') AS reference,
+                  p.reference AS note,
+                  pm.name AS method_name,
+                  pm.method_type AS method_type,
+                  p.bank_account_id AS bank_account_id,
+                  p.amount AS amount,
+                  p.paid_at AS at
+             FROM payment p
+             LEFT JOIN sale s ON s.id = p.sale_id
+             JOIN payment_method pm ON pm.id = p.payment_method_id
+            WHERE p.branch_id = ? AND p.status = 'confirmed'
+              AND substr(p.paid_at, 1, 4) = ?
+           UNION ALL
+           SELECT e.id AS id,
+                  'out' AS direction,
+                  ec.name AS category,
+                  e.description AS reference,
+                  e.receipt_number AS note,
+                  pm.name AS method_name,
+                  pm.method_type AS method_type,
+                  e.bank_account_id AS bank_account_id,
+                  e.amount AS amount,
+                  e.expense_date AS at
+             FROM expense e
+             JOIN expense_category ec ON ec.id = e.expense_category_id
+             JOIN payment_method pm ON pm.id = e.payment_method_id
+            WHERE e.branch_id = ? AND e.status <> 'voided'
+              AND substr(e.expense_date, 1, 4) = ?
+         ) t
+         ORDER BY t.at DESC`,
+        [ctx.branchId, String(year), ctx.branchId, String(year)],
+      ),
+  });
+
+  const allRows = txs.data ?? [];
+
+  const categories = useMemo(
+    () => Array.from(new Set(allRows.map((r) => r.category))).sort(),
+    [allRows],
+  );
+
+  const rows = useMemo(() => {
+    const min = filters.min ? Number(filters.min) : null;
+    const max = filters.max ? Number(filters.max) : null;
+    const out = allRows.filter((r) => {
+      if (filters.tipo !== 'all' && r.direction !== filters.tipo) return false;
+      if (filters.category && r.category !== filters.category) return false;
+      const day = r.at.slice(0, 10);
+      if (filters.from && day < filters.from) return false;
+      if (filters.to && day > filters.to) return false;
+      if (min != null && r.amount < min) return false;
+      if (max != null && r.amount > max) return false;
+      if (filters.account === 'cash' && r.bank_account_id != null) return false;
+      if (
+        filters.account !== 'all' &&
+        filters.account !== 'cash' &&
+        r.bank_account_id !== filters.account
+      )
+        return false;
+      return true;
+    });
+    out.sort((a, b) =>
+      sortBy === 'amount'
+        ? b.amount - a.amount
+        : b.at.localeCompare(a.at),
+    );
+    return out;
+  }, [allRows, filters, sortBy]);
+
+  const totalIn = rows
+    .filter((r) => r.direction === 'in')
+    .reduce((a, r) => a + r.amount, 0);
+  const totalOut = rows
+    .filter((r) => r.direction === 'out')
+    .reduce((a, r) => a + r.amount, 0);
+
+  const activeFilters =
+    filters.tipo !== 'all' ||
+    !!filters.category ||
+    !!filters.from ||
+    !!filters.to ||
+    !!filters.min ||
+    !!filters.max ||
+    filters.account !== 'all';
+
+  const bankName = (id: string) =>
+    banks.data?.find((b) => b.id === id)?.name ?? 'Banco';
+
+  return (
+    <div className="space-y-6">
+      {/* Barra: año, buscar, ordenar */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setYear((y) => y - 1)}
+            className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+          >
+            <ChevronLeft className="h-5 w-5" />
+          </button>
+          <span className="min-w-[4rem] text-center text-lg font-semibold text-white">
+            {year}
+          </span>
+          <button
+            onClick={() => setYear((y) => y + 1)}
+            className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+          >
+            <ChevronRight className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant={activeFilters ? 'gold' : 'outline'}
+            onClick={() => setSearchOpen(true)}
+          >
+            <Search className="h-4 w-4" /> Buscar
+          </Button>
+          <div className="flex items-center gap-1 rounded-xl bg-white/5 p-1">
+            <SlidersHorizontal className="ml-1 h-4 w-4 text-white/40" />
+            {(['date', 'amount'] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => setSortBy(s)}
+                className={cn(
+                  'rounded-lg px-3 py-1 text-xs font-medium transition-colors',
+                  sortBy === s
+                    ? 'bg-gold-400 text-ink-950'
+                    : 'text-white/50 hover:text-white',
+                )}
+              >
+                {s === 'date' ? 'Fecha' : 'Valor'}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {activeFilters && (
+        <button
+          onClick={() => setFilters(EMPTY_FILTERS)}
+          className="text-xs text-gold-300 hover:underline"
+        >
+          Limpiar filtros
+        </button>
+      )}
+
+      <Card>
+        <div className="mb-4 grid grid-cols-3 gap-3">
+          <Metric label="Ingresos" value={money(totalIn)} tone="success" />
+          <Metric label="Egresos" value={money(totalOut)} tone="danger" />
+          <Metric label="Neto" value={money(totalIn - totalOut)} gold />
+        </div>
+
+        {rows.length === 0 ? (
+          <EmptyState icon={Receipt} title="Sin transacciones en el periodo" />
+        ) : (
+          <div className="-mx-2 overflow-x-auto">
+            <table className="w-full min-w-[640px] text-sm">
+              <thead>
+                <tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-white/40">
+                  <th className="px-2 py-2 font-medium">Fecha</th>
+                  <th className="px-2 py-2 font-medium">Tipo</th>
+                  <th className="px-2 py-2 font-medium">Categoría</th>
+                  <th className="px-2 py-2 font-medium">Detalle</th>
+                  <th className="px-2 py-2 font-medium">Cuenta</th>
+                  <th className="px-2 py-2 text-right font-medium">Monto</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {rows.map((r) => {
+                  const isIn = r.direction === 'in';
+                  const acct = r.bank_account_id
+                    ? bankName(r.bank_account_id)
+                    : r.method_type === 'cash'
+                      ? 'Caja'
+                      : r.method_name;
+                  return (
+                    <tr key={r.id} className="text-white/80">
+                      <td className="whitespace-nowrap px-2 py-2 text-white/50">
+                        {dateShort(r.at)}
+                      </td>
+                      <td className="px-2 py-2">
+                        <Badge tone={isIn ? 'success' : 'danger'}>
+                          {isIn ? 'Ingreso' : 'Egreso'}
+                        </Badge>
+                      </td>
+                      <td className="px-2 py-2">{r.category}</td>
+                      <td className="px-2 py-2">
+                        <span className="text-white">{r.reference ?? '—'}</span>
+                        {r.note && r.note !== r.reference && (
+                          <span className="block text-xs text-white/40">
+                            {r.note}
+                          </span>
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap px-2 py-2 text-white/60">
+                        {acct}
+                      </td>
+                      <td
+                        className={`whitespace-nowrap px-2 py-2 text-right font-medium ${
+                          isIn ? 'text-success' : 'text-danger'
+                        }`}
+                      >
+                        {isIn ? '+' : '−'}
+                        {money(r.amount)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      {searchOpen && (
+        <SearchModal
+          initial={filters}
+          categories={categories}
+          banks={banks.data ?? []}
+          onClose={() => setSearchOpen(false)}
+          onApply={(f) => {
+            setFilters(f);
+            setSearchOpen(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function SearchModal({
+  initial,
+  categories,
+  banks,
+  onClose,
+  onApply,
+}: {
+  initial: TxFilters;
+  categories: string[];
+  banks: BankAccount[];
+  onClose: () => void;
+  onApply: (f: TxFilters) => void;
+}) {
+  const [f, setF] = useState<TxFilters>(initial);
+  const set = <K extends keyof TxFilters>(k: K, v: TxFilters[K]) =>
+    setF((prev) => ({ ...prev, [k]: v }));
+
+  return (
+    <Modal open onClose={onClose} title="Buscar transacciones">
+      <div className="space-y-4">
+        <Select
+          label="Tipo"
+          value={f.tipo}
+          onChange={(e) => set('tipo', e.target.value as TxFilters['tipo'])}
+        >
+          <option value="all">Todos</option>
+          <option value="in">Ingreso</option>
+          <option value="out">Egreso</option>
+        </Select>
+        <Select
+          label="Categoría"
+          value={f.category}
+          onChange={(e) => set('category', e.target.value)}
+        >
+          <option value="">Todas</option>
+          {categories.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </Select>
+        <Select
+          label="Cuenta"
+          value={f.account}
+          onChange={(e) => set('account', e.target.value)}
+        >
+          <option value="all">Todas</option>
+          <option value="cash">Caja (efectivo)</option>
+          {banks.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.name}
+            </option>
+          ))}
+        </Select>
+        <div className="grid grid-cols-2 gap-3">
+          <Input
+            label="Desde"
+            type="date"
+            value={f.from}
+            onChange={(e) => set('from', e.target.value)}
+          />
+          <Input
+            label="Hasta"
+            type="date"
+            value={f.to}
+            onChange={(e) => set('to', e.target.value)}
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Input
+            label="Valor mínimo"
+            type="number"
+            min="0"
+            step="0.01"
+            value={f.min}
+            onChange={(e) => set('min', e.target.value)}
+          />
+          <Input
+            label="Valor máximo"
+            type="number"
+            min="0"
+            step="0.01"
+            value={f.max}
+            onChange={(e) => set('max', e.target.value)}
+          />
+        </div>
+        <div className="flex gap-2 pt-1">
+          <Button
+            variant="ghost"
+            className="flex-1"
+            onClick={() => setF(EMPTY_FILTERS)}
+          >
+            Limpiar
+          </Button>
+          <Button className="flex-1" onClick={() => onApply(f)}>
+            Aplicar
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

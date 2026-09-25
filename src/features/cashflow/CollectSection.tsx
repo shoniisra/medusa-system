@@ -3,8 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Wallet, HandCoins } from 'lucide-react';
 import { query, batch } from '@/lib/db';
 import { qk } from '@/lib/queryClient';
-import { genId, money, dateShort, todayISO } from '@/lib/format';
-import { useBranchId, useOrgId } from '@/store/session';
+import { genId, money, dateShort } from '@/lib/format';
 import {
   Button,
   Card,
@@ -15,27 +14,27 @@ import {
   EmptyState,
   Badge,
 } from '@/components/ui';
-import type { PaymentMethod, SaleWithBalance } from '@/types';
+import type { BankAccount, PaymentMethod, SaleWithBalance } from '@/types';
+
+interface CollectCtx {
+  branchId: string;
+  orgId: string;
+  userId: string | null;
+  sessionId: string | null;
+}
 
 /**
- * Cobros / abonos dentro de la caja abierta.
- * Los cobros en efectivo generan un movimiento de caja (ingreso) atado a la
- * sesión, de modo que el efectivo esperado los refleje. Transferencia/tarjeta
- * no tocan la caja física.
+ * Cobros / abonos de ventas con saldo pendiente. El destino del cobro se elige
+ * por cuenta (bancos + caja), igual que el abono de una cita. El efectivo genera
+ * un movimiento de caja atado a la sesión abierta; por eso «Efectivo (caja)»
+ * solo aparece con la caja abierta.
  */
-export function CollectSection({
-  sessionId,
-  userId,
-}: {
-  sessionId: string;
-  userId: string | null;
-}) {
-  const branchId = useBranchId();
+export function CollectSection({ ctx }: { ctx: CollectCtx }) {
   const [target, setTarget] = useState<SaleWithBalance | null>(null);
 
   const sales = useQuery({
-    queryKey: qk.sales(branchId),
-    enabled: !!branchId,
+    queryKey: qk.sales(ctx.branchId),
+    enabled: !!ctx.branchId,
     queryFn: () =>
       query<SaleWithBalance>(
         `SELECT s.*,
@@ -49,7 +48,7 @@ export function CollectSection({
           WHERE s.branch_id = ? AND s.status = 'completed'
           ORDER BY s.sold_at DESC
           LIMIT 100`,
-        [branchId],
+        [ctx.branchId],
       ),
   });
 
@@ -57,10 +56,7 @@ export function CollectSection({
 
   return (
     <Card>
-      <CardHeader
-        title="Cobros / abonos"
-        subtitle="Ventas con saldo pendiente"
-      />
+      <CardHeader title="Cobros / abonos" subtitle="Ventas con saldo pendiente" />
       {pending.length === 0 ? (
         <EmptyState
           icon={Wallet}
@@ -97,8 +93,7 @@ export function CollectSection({
       {target && (
         <PaymentModal
           sale={target}
-          sessionId={sessionId}
-          userId={userId}
+          ctx={ctx}
           onClose={() => setTarget(null)}
         />
       )}
@@ -108,51 +103,64 @@ export function CollectSection({
 
 function PaymentModal({
   sale,
-  sessionId,
-  userId,
+  ctx,
   onClose,
 }: {
   sale: SaleWithBalance;
-  sessionId: string;
-  userId: string | null;
+  ctx: CollectCtx;
   onClose: () => void;
 }) {
-  const orgId = useOrgId();
-  const branchId = useBranchId();
   const qc = useQueryClient();
 
   const [amount, setAmount] = useState(String(sale.balance));
-  const [methodId, setMethodId] = useState('');
+  const [dest, setDest] = useState(''); // 'cash' | bank account id
   const [reference, setReference] = useState('');
 
   const methods = useQuery({
-    queryKey: ['payment-methods', orgId],
-    enabled: !!orgId,
+    queryKey: ['payment-methods', ctx.orgId],
+    enabled: !!ctx.orgId,
     queryFn: () =>
       query<PaymentMethod>(
         'SELECT * FROM payment_method WHERE organization_id = ? AND active = 1 ORDER BY name',
-        [orgId],
+        [ctx.orgId],
+      ),
+  });
+  const banks = useQuery({
+    queryKey: ['bank-accounts', ctx.orgId],
+    enabled: !!ctx.orgId,
+    queryFn: () =>
+      query<BankAccount>(
+        'SELECT * FROM bank_account WHERE organization_id = ? AND active = 1 ORDER BY name',
+        [ctx.orgId],
       ),
   });
 
+  const cashMethod = methods.data?.find((m) => m.method_type === 'cash');
+  const transferMethod = methods.data?.find((m) => m.method_type === 'transfer');
+  const isCash = dest === 'cash';
+  const needsSession = isCash && !ctx.sessionId;
+
   const pay = useMutation({
     mutationFn: async () => {
-      const method = methods.data?.find((m) => m.id === methodId);
+      const method = isCash ? cashMethod : transferMethod;
+      if (!method) throw new Error('No hay un método de pago configurado.');
+      const bankId = isCash ? null : dest;
       const paymentId = genId();
       const now = new Date().toISOString();
 
       const stmts: { sql: string; args: (string | number | null)[] }[] = [
         {
           sql: `INSERT INTO payment
-                  (id, organization_id, branch_id, sale_id, payment_method_id, paid_at,
-                   amount, status, reference)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)`,
+                  (id, organization_id, branch_id, sale_id, payment_method_id,
+                   bank_account_id, paid_at, amount, status, reference)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)`,
           args: [
             paymentId,
-            orgId,
-            branchId,
+            ctx.orgId,
+            ctx.branchId,
             sale.id,
-            methodId,
+            method.id,
+            bankId,
             now,
             Number(amount),
             reference || null,
@@ -161,7 +169,7 @@ function PaymentModal({
       ];
 
       // Solo el efectivo ingresa a la caja física.
-      if (method?.method_type === 'cash') {
+      if (isCash) {
         stmts.push({
           sql: `INSERT INTO cash_movement
                   (id, cash_session_id, branch_id, movement_type, direction, amount,
@@ -169,14 +177,14 @@ function PaymentModal({
                 VALUES (?, ?, ?, 'sale', 'in', ?, ?, ?, ?, ?, ?)`,
           args: [
             genId(),
-            sessionId,
-            branchId,
+            ctx.sessionId,
+            ctx.branchId,
             Number(amount),
             now,
             sale.id,
             paymentId,
             `Cobro ${sale.sale_number}`,
-            userId,
+            ctx.userId,
           ],
         });
       }
@@ -184,9 +192,12 @@ function PaymentModal({
       await batch(stmts);
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: qk.sales(branchId) });
-      qc.invalidateQueries({ queryKey: ['cash-expected', sessionId] });
-      qc.invalidateQueries({ queryKey: ['transactions', branchId, todayISO()] });
+      qc.invalidateQueries({ queryKey: qk.sales(ctx.branchId) });
+      qc.invalidateQueries({ queryKey: ['fin-accounts'] });
+      qc.invalidateQueries({ queryKey: ['transactions'] });
+      if (ctx.sessionId) {
+        qc.invalidateQueries({ queryKey: ['cash-expected', ctx.sessionId] });
+      }
       onClose();
     },
   });
@@ -210,26 +221,36 @@ function PaymentModal({
           onChange={(e) => setAmount(e.target.value)}
         />
         <Select
-          label="Método de pago"
-          value={methodId}
-          onChange={(e) => setMethodId(e.target.value)}
+          label="Cobrar en"
+          value={dest}
+          onChange={(e) => setDest(e.target.value)}
         >
           <option value="">Seleccionar…</option>
-          {methods.data?.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name}
+          {banks.data?.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.name} (transferencia)
             </option>
           ))}
+          <option value="cash">Efectivo (caja)</option>
         </Select>
-        <Input
-          label="Referencia (opcional)"
-          value={reference}
-          onChange={(e) => setReference(e.target.value)}
-          placeholder="Nº transferencia, voucher…"
-        />
+        {!isCash && dest && (
+          <Input
+            label="Referencia (opcional)"
+            value={reference}
+            onChange={(e) => setReference(e.target.value)}
+            placeholder="Nº transferencia, voucher…"
+          />
+        )}
+        {needsSession && (
+          <p className="text-xs text-danger">
+            Para un cobro en efectivo necesitás abrir la caja primero.
+          </p>
+        )}
         <Button
           className="w-full"
-          disabled={!methodId || !amount || Number(amount) <= 0}
+          disabled={
+            !dest || !amount || Number(amount) <= 0 || needsSession
+          }
           loading={pay.isPending}
           onClick={() => pay.mutate()}
         >

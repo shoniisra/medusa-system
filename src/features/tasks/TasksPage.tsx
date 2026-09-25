@@ -136,6 +136,18 @@ export function TasksPage() {
         }
       }
       await batch([
+        // El abono/seña de la cita es un pago (sale_id NULL). Al borrar la cita se
+        // borra también, con su movimiento de caja si fue en efectivo; si no, el
+        // cobro quedaría registrado como ingreso fantasma sin cita detrás.
+        {
+          sql: `DELETE FROM cash_movement WHERE payment_id IN
+                  (SELECT id FROM payment WHERE appointment_id = ? AND sale_id IS NULL)`,
+          args: [a.id],
+        },
+        {
+          sql: 'DELETE FROM payment WHERE appointment_id = ? AND sale_id IS NULL',
+          args: [a.id],
+        },
         { sql: 'DELETE FROM appointment_item WHERE appointment_id = ?', args: [a.id] },
         { sql: 'DELETE FROM appointment WHERE id = ?', args: [a.id] },
       ]);
@@ -143,6 +155,16 @@ export function TasksPage() {
     onSuccess: () => {
       setSelected(null);
       invalidate();
+      // Refrescar finanzas: el abono borrado ya no debe contar en caja/ingresos.
+      for (const key of [
+        ['fin-accounts'],
+        ['fin-summary'],
+        ['fin-exp7'],
+        ['transactions'],
+        ['cash-expected'],
+      ]) {
+        qc.invalidateQueries({ queryKey: key });
+      }
     },
   });
 

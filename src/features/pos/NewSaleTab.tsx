@@ -37,6 +37,7 @@ import {
   PhoneInput,
 } from '@/components/ui';
 import type {
+  BankAccount,
   CashSession,
   DraftCommission,
   DraftSaleItem,
@@ -473,11 +474,21 @@ function ConfirmSalePosModal({
   onDone: () => void;
 }) {
   const userId = useSession((s) => s.user?.id ?? null);
-  const [methodId, setMethodId] = useState('');
+  // Destino del cobro: una cuenta bancaria (transferencia) o "cash" (efectivo).
+  const [dest, setDest] = useState('');
   const [reference, setReference] = useState('');
   const [error, setError] = useState('');
 
-  const methods = useQuery({
+  const banks = useQuery({
+    queryKey: ['bank-accounts', orgId],
+    enabled: !!orgId,
+    queryFn: () =>
+      query<BankAccount>(
+        'SELECT * FROM bank_account WHERE organization_id = ? AND active = 1 ORDER BY name',
+        [orgId],
+      ),
+  });
+  const payMethods = useQuery({
     queryKey: ['payment-methods', orgId],
     enabled: !!orgId,
     queryFn: () =>
@@ -500,8 +511,16 @@ function ConfirmSalePosModal({
       ),
   });
   const sessionId = cash.data?.id ?? null;
-  const method = methods.data?.find((m) => m.id === methodId);
-  const isCash = method?.method_type === 'cash';
+
+  const cashMethod = payMethods.data?.find((m) => m.method_type === 'cash');
+  const transferMethod = payMethods.data?.find(
+    (m) => m.method_type === 'transfer',
+  );
+  const firstBankId = banks.data?.[0]?.id ?? '';
+  // Por defecto: primera cuenta bancaria; si no hay, efectivo.
+  const effectiveDest = dest || firstBankId || 'cash';
+  const isCash = effectiveDest === 'cash';
+  const method = isCash ? cashMethod : transferMethod;
 
   const confirm = useMutation({
     mutationFn: async () => {
@@ -568,20 +587,27 @@ function ConfirmSalePosModal({
         total,
       });
 
+      if (!method)
+        throw new Error(
+          `No hay un método de pago ${isCash ? 'en efectivo' : 'por transferencia'} configurado.`,
+        );
+
       const now = new Date().toISOString();
+      const bankId = isCash ? null : effectiveDest;
       const stmts: { sql: string; args: (string | number | null)[] }[] = [];
       const paymentId = genId();
       stmts.push({
         sql: `INSERT INTO payment
-                (id, organization_id, branch_id, sale_id, payment_method_id, paid_at,
-                 amount, status, reference)
-              VALUES (?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)`,
+                (id, organization_id, branch_id, sale_id, payment_method_id,
+                 bank_account_id, paid_at, amount, status, reference)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)`,
         args: [
           paymentId,
           orgId,
           branchId,
           saleId,
-          methodId,
+          method.id,
+          bankId,
           now,
           total,
           reference || null,
@@ -616,7 +642,7 @@ function ConfirmSalePosModal({
       setError(e instanceof Error ? e.message : 'No se pudo confirmar la venta.'),
   });
 
-  const canConfirm = !confirm.isPending && !!methodId && total > 0;
+  const canConfirm = !confirm.isPending && !!method && total > 0;
 
   return (
     <Modal open onClose={onClose} title="Confirmar venta">
@@ -633,24 +659,26 @@ function ConfirmSalePosModal({
         </div>
 
         <Select
-          label="Forma de pago"
-          value={methodId}
-          onChange={(e) => setMethodId(e.target.value)}
+          label="Cobrar en"
+          value={effectiveDest}
+          onChange={(e) => setDest(e.target.value)}
         >
-          <option value="">Seleccionar…</option>
-          {methods.data?.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name}
+          {banks.data?.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.name} (transferencia)
             </option>
           ))}
+          <option value="cash">Efectivo (caja)</option>
         </Select>
 
-        <Input
-          label="Referencia (opcional)"
-          value={reference}
-          onChange={(e) => setReference(e.target.value)}
-          placeholder="Nº transferencia, voucher…"
-        />
+        {!isCash && (
+          <Input
+            label="Referencia (opcional)"
+            value={reference}
+            onChange={(e) => setReference(e.target.value)}
+            placeholder="Nº transferencia, voucher…"
+          />
+        )}
 
         {isCash && !sessionId && (
           <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
