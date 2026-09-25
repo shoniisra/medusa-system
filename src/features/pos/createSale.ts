@@ -1,17 +1,27 @@
-import { batch } from '@/lib/db';
+import { batch, query } from '@/lib/db';
 import { genId } from '@/lib/format';
-import type { DraftSaleItem } from '@/types';
+import { DEFAULT_COMMISSION_RATE } from '@/config/constants';
+import type { CommissionType, DraftSaleItem } from '@/types';
 
 export interface CreateSaleInput {
   orgId: string;
   branchId: string;
   userId: string | null;
   customerId: string | null;
+  /** Cita de origen, si la venta nace de una cita atendida. Da trazabilidad. */
+  appointmentId?: string | null;
   requiresInvoice: boolean;
   items: DraftSaleItem[];
   subtotal: number;
   discountTotal: number;
   total: number;
+  /**
+   * Fecha del servicio (`sold_at`). Por defecto ahora. Para ventas retroactivas
+   * (citas de días pasados) se pasa el día real de la cita, de modo que ventas
+   * y comisiones caigan en ese día. El cobro se registra aparte, con la fecha de
+   * hoy, contra la caja abierta.
+   */
+  soldAt?: string;
 }
 
 /**
@@ -22,21 +32,23 @@ export interface CreateSaleInput {
 export async function createSale(input: CreateSaleInput): Promise<string> {
   const saleId = genId();
   const now = new Date().toISOString();
+  const soldAt = input.soldAt ?? now;
   const saleNumber = `V-${Date.now()}`;
 
   const stmts: { sql: string; args: (string | number | null)[] }[] = [
     {
       sql: `INSERT INTO sale
-              (id, organization_id, branch_id, customer_id, sale_number, sold_at,
+              (id, organization_id, branch_id, customer_id, appointment_id, sale_number, sold_at,
                status, subtotal, discount_total, tax_total, total, requires_invoice, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, 'completed', ?, ?, 0, ?, ?, ?)`,
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, 0, ?, ?, ?)`,
       args: [
         saleId,
         input.orgId,
         input.branchId,
         input.customerId,
+        input.appointmentId ?? null,
         saleNumber,
-        now,
+        soldAt,
         input.subtotal,
         input.discountTotal,
         input.total,
@@ -120,4 +132,59 @@ export function resolveCommission(
 ): number {
   if (type === 'percentage') return Math.round(basis * rate) / 100;
   return rate;
+}
+
+export interface CommissionRule {
+  commission_type: CommissionType;
+  commission_value: number;
+}
+
+/**
+ * Carga las reglas de comisión vigentes por colaborador+servicio
+ * (`staff_service_commission`). Devuelve un Map con clave `${staffId}:${serviceId}`.
+ * Lo que no tenga regla usa el % por defecto.
+ */
+export async function loadCommissionRules(): Promise<Map<string, CommissionRule>> {
+  const today = new Date().toISOString().slice(0, 10);
+  const rows = await query<{
+    staff_member_id: string;
+    service_id: string;
+    commission_type: CommissionType;
+    commission_value: number;
+  }>(
+    `SELECT staff_member_id, service_id, commission_type, commission_value
+       FROM staff_service_commission
+      WHERE active = 1
+        AND date(effective_from) <= date(?)
+        AND (effective_to IS NULL OR date(effective_to) >= date(?))`,
+    [today, today],
+  );
+  const m = new Map<string, CommissionRule>();
+  for (const r of rows) {
+    m.set(`${r.staff_member_id}:${r.service_id}`, {
+      commission_type: r.commission_type,
+      commission_value: r.commission_value,
+    });
+  }
+  return m;
+}
+
+/**
+ * Regla de comisión para un colaborador+servicio: la configurada si existe,
+ * si no el % por defecto. `basis` es el valor final de la línea.
+ */
+export function commissionForItem(
+  staffId: string,
+  serviceId: string,
+  basis: number,
+  rules: Map<string, CommissionRule>,
+): { commission_type: CommissionType; commission_rate: number; commission_amount: number } {
+  const rule = rules.get(`${staffId}:${serviceId}`);
+  const type = rule?.commission_type ?? 'percentage';
+  const rate = rule?.commission_value ?? DEFAULT_COMMISSION_RATE;
+  return {
+    commission_type: type,
+    commission_rate: rate,
+    commission_amount: resolveCommission(type, rate, basis),
+  };
 }

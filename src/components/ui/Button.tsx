@@ -12,9 +12,9 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variants: Record<Variant, string> = {
-  gold: 'bg-gold-400 text-ink-950 hover:bg-gold-300 shadow-gold-glow font-semibold',
-  ghost: 'bg-white/5 text-white/90 hover:bg-white/10',
-  outline: 'border border-white/15 text-white/90 hover:bg-white/5',
+  gold: 'bg-gradient-to-b from-gold-300 to-gold-500 text-ink-950 hover:from-gold-200 hover:to-gold-400 shadow-gold-glow font-semibold',
+  ghost: 'bg-white/5 text-white/90 hover:bg-white/10 border border-white/5',
+  outline: 'border border-white/15 text-white/90 hover:bg-white/5 hover:border-white/25',
   danger: 'bg-danger/90 text-white hover:bg-danger',
 };
 
@@ -30,7 +30,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       ref={ref}
       disabled={disabled || loading}
       className={cn(
-        'inline-flex items-center justify-center gap-2 rounded-xl transition-colors',
+        'inline-flex items-center justify-center gap-2 rounded-xl transition-all active:scale-[0.98]',
         'disabled:cursor-not-allowed disabled:opacity-50',
         variants[variant],
         sizes[size],

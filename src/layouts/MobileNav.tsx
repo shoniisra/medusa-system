@@ -1,20 +1,20 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
-  ShoppingBag,
   Wallet,
   CalendarDays,
-  FileText,
+  ClipboardList,
+  Contact,
 } from 'lucide-react';
 import { ROUTES } from '@/config/constants';
 import { cn } from '@/lib/cn';
 
 const NAV = [
   { to: ROUTES.dashboard, label: 'Inicio', icon: LayoutDashboard, end: true },
-  { to: ROUTES.pos, label: 'Venta', icon: ShoppingBag },
-  { to: ROUTES.cashflow, label: 'Caja', icon: Wallet },
   { to: ROUTES.calendar, label: 'Agenda', icon: CalendarDays },
-  { to: ROUTES.invoices, label: 'Facturas', icon: FileText },
+  { to: ROUTES.tasks, label: 'Tareas', icon: ClipboardList },
+  { to: ROUTES.cashflow, label: 'Finanzas', icon: Wallet },
+  { to: ROUTES.clients, label: 'Clientes', icon: Contact },
 ];
 
 /** Barra de navegación inferior para móvil. */

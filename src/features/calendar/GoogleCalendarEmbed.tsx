@@ -10,7 +10,14 @@ import { Card, EmptyState } from '@/components/ui';
  * Requiere que la sucursal tenga `google_calendar_id` y que el calendario esté
  * compartido con —o sea público para— quien lo mira.
  */
-export function GoogleCalendarEmbed() {
+export function GoogleCalendarEmbed({
+  className = 'h-[600px]',
+  mode = 'WEEK',
+}: {
+  className?: string;
+  /** Vista del calendario embebido: día, semana, mes o agenda. */
+  mode?: 'DAY' | 'WEEK' | 'MONTH' | 'AGENDA';
+}) {
   const branchId = useBranchId();
 
   const branch = useQuery({
@@ -39,14 +46,14 @@ export function GoogleCalendarEmbed() {
 
   const src = `https://calendar.google.com/calendar/embed?src=${encodeURIComponent(
     calId,
-  )}&ctz=${encodeURIComponent(DEFAULT_TIMEZONE)}&mode=WEEK`;
+  )}&ctz=${encodeURIComponent(DEFAULT_TIMEZONE)}&mode=${mode}`;
 
   return (
     <Card className="overflow-hidden p-0">
       <iframe
         title="Google Calendar"
         src={src}
-        className="h-[600px] w-full rounded-2xl border-0"
+        className={`w-full rounded-2xl border-0 ${className}`}
         loading="lazy"
       />
     </Card>

@@ -1,46 +1,118 @@
+import { useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  TrendingUp,
-  Banknote,
-  Receipt,
-  Wallet,
   CalendarDays,
   CalendarPlus,
   Trophy,
   Users,
-  UserX,
   Clock,
   ArrowLeftRight,
   CreditCard,
+  Banknote,
   CalendarClock,
+  Wallet,
+  BarChart3,
+  MessageCircle,
+  Cake,
+  Check,
+  GripVertical,
 } from 'lucide-react';
+import { query, execute } from '@/lib/db';
+import { cn } from '@/lib/cn';
 import { useDashboard } from './useDashboard';
 import { useDashboardMetrics } from './useDashboardMetrics';
+import { useMonthlySales } from './useMonthlySales';
+import { FinanceOverview, MiniBarChart, Gauge } from './FinanceOverview';
 import { StatCard, Card, CardHeader, Badge, Button, EmptyState } from '@/components/ui';
-import { money, dateShort, timeShort, todayISO, percent } from '@/lib/format';
-import { useSession } from '@/store/session';
+import { money, dateShort, timeShort, todayISO } from '@/lib/format';
+import { useSession, useOrgId } from '@/store/session';
 import { ROUTES, APPOINTMENT_STATUS } from '@/config/constants';
 import type { AppointmentStatus } from '@/types';
+
+const SECTION_KEYS = [
+  'stats',
+  'chart',
+  'appointments',
+  'rankings',
+  'availability',
+] as const;
+type SectionKey = (typeof SECTION_KEYS)[number];
+const ORDER_STORAGE_KEY = 'medusa-dashboard-order';
+
+/** Orden de las secciones del dashboard, persistido por navegador. */
+function useSectionOrder() {
+  const [order, setOrder] = useState<SectionKey[]>(() => {
+    try {
+      const raw = localStorage.getItem(ORDER_STORAGE_KEY);
+      if (raw) {
+        const saved = (JSON.parse(raw) as string[]).filter((k): k is SectionKey =>
+          (SECTION_KEYS as readonly string[]).includes(k),
+        );
+        const missing = SECTION_KEYS.filter((k) => !saved.includes(k));
+        return [...saved, ...missing];
+      }
+    } catch {
+      /* localStorage no disponible → orden por defecto */
+    }
+    return [...SECTION_KEYS];
+  });
+
+  const move = (from: SectionKey, to: SectionKey) => {
+    setOrder((prev) => {
+      if (from === to) return prev;
+      const arr = [...prev];
+      const fi = arr.indexOf(from);
+      const ti = arr.indexOf(to);
+      if (fi < 0 || ti < 0) return prev;
+      arr.splice(fi, 1);
+      arr.splice(ti, 0, from);
+      try {
+        localStorage.setItem(ORDER_STORAGE_KEY, JSON.stringify(arr));
+      } catch {
+        /* ignore */
+      }
+      return arr;
+    });
+  };
+
+  return { order, move };
+}
 
 export function DashboardPage() {
   const branchName = useSession((s) => s.branch?.name ?? '');
   const navigate = useNavigate();
+  const qc = useQueryClient();
 
   const { data, isLoading } = useDashboard();
   const m = useDashboardMetrics();
+  const monthly = useMonthlySales();
+  const { order, move } = useSectionOrder();
 
-  const sales = data?.sales;
+  // Marca una cita como atendida desde la tarjeta de próximas citas.
+  const attend = useMutation({
+    mutationFn: (id: string) =>
+      execute(
+        "UPDATE appointment SET status = 'attended', updated_at = ? WHERE id = ?",
+        [new Date().toISOString(), id],
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['dashboard-metrics'] });
+      qc.invalidateQueries({ queryKey: ['appointments'] });
+    },
+  });
+  const orderOf = (k: SectionKey) => order.indexOf(k) + 1;
+
   const col = data?.collections;
-  const exp = data?.expenses;
   const cash = data?.cashSession;
   const expected = data?.cashExpected ?? 0;
   const counted = cash?.counted_cash ?? null;
 
   const met = m.data;
-  const monthProfit = (met?.month.received ?? 0) - (met?.month.expenses ?? 0);
+  const attendance = met ? Math.max(0, 100 - met.noShowRate) : 0;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8">
+    <div className="mx-auto flex max-w-6xl flex-col gap-6">
       {/* Encabezado + acciones */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -61,107 +133,102 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {/* ── HOY ── */}
-      <section className="space-y-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-white/40">
-          Hoy
-        </h2>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
-          <StatCard
-            gold
-            tone="gold"
-            label="Ventas del día"
-            value={isLoading ? '—' : money(sales?.total_sales)}
-            icon={TrendingUp}
-            hint={`${sales?.sales_count ?? 0} ventas`}
-          />
-          <StatCard
-            tone="success"
-            label="Dinero recibido"
-            value={isLoading ? '—' : money(col?.total_received)}
-            icon={Banknote}
-          />
-          <StatCard
-            tone="danger"
-            label="Egresos del día"
-            value={isLoading ? '—' : money(exp?.total_expenses)}
-            icon={Receipt}
-          />
-          <StatCard
-            label="Efectivo esperado"
-            value={isLoading ? '—' : money(expected)}
-            icon={Wallet}
-            hint={counted != null ? `Contado: ${money(counted)}` : 'Sin contar'}
-          />
-          <StatCard
-            label="Citas hoy"
-            value={
-              m.isLoading
-                ? '—'
-                : `${met?.todayAttended ?? 0} / ${met?.todayPending ?? 0}`
-            }
-            icon={CalendarClock}
-            hint="Atendidas / Pendientes"
-          />
-        </div>
-      </section>
+      {/* Resumen financiero con tabs día/semana/mes */}
+      <FinanceOverview />
 
-      {/* ── MES ── */}
-      <section className="space-y-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-white/40">
-          Este mes
-        </h2>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <StatCard
-            gold
-            tone="gold"
-            label="Ventas del mes"
-            value={m.isLoading ? '—' : money(met?.month.sales)}
-            icon={TrendingUp}
+      <SortableSection id="stats" order={orderOf('stats')} onMove={move}>
+      {/* Quick stats de hoy */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatCard
+          label="Citas hoy"
+          value={
+            m.isLoading
+              ? '—'
+              : `${met?.todayAttended ?? 0} / ${met?.todayPending ?? 0}`
+          }
+          icon={CalendarClock}
+          hint="Atendidas / Pendientes"
+        />
+        <StatCard
+          label="Efectivo esperado"
+          value={isLoading ? '—' : money(expected)}
+          icon={Wallet}
+          hint={counted != null ? `Contado: ${money(counted)}` : 'Sin contar'}
+        />
+        <StatCard
+          tone="success"
+          glow="green"
+          label="Recibido hoy"
+          value={isLoading ? '—' : money(col?.total_received)}
+          icon={Banknote}
+        />
+        <StatCard
+          tone="gold"
+          gold
+          glow="gold"
+          label="Ventas del mes"
+          value={m.isLoading ? '—' : money(met?.month.sales)}
+          icon={BarChart3}
+        />
+      </div>
+      </SortableSection>
+
+      <SortableSection id="chart" order={orderOf('chart')} onMove={move}>
+      {/* Gráfico mensual + gauge de asistencia */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardHeader
+            title="Resumen de ventas mensuales"
+            subtitle="Últimos 6 meses"
           />
-          <StatCard
-            tone="success"
-            label="Recibido del mes"
-            value={m.isLoading ? '—' : money(met?.month.received)}
-            icon={Banknote}
+          {monthly.data && monthly.data.length > 0 ? (
+            <MiniBarChart data={monthly.data} />
+          ) : (
+            <EmptyState icon={BarChart3} title="Sin datos de ventas" />
+          )}
+          {met && (
+            <div className="mt-4 grid grid-cols-3 gap-3 border-t border-white/5 pt-4">
+              <MiniStat
+                icon={Banknote}
+                label="Efectivo (mes)"
+                value={money(met.month.cash)}
+              />
+              <MiniStat
+                icon={ArrowLeftRight}
+                label="Transfer. (mes)"
+                value={money(met.month.transfer)}
+              />
+              <MiniStat
+                icon={CreditCard}
+                label="Tarjeta (mes)"
+                value={money(met.month.card)}
+              />
+            </div>
+          )}
+        </Card>
+
+        <Card gold>
+          <CardHeader
+            title="Asistencia del mes"
+            subtitle="Citas cumplidas vs no-show"
           />
-          <StatCard
-            tone="danger"
-            label="Egresos del mes"
-            value={m.isLoading ? '—' : money(met?.month.expenses)}
-            icon={Receipt}
-          />
-          <StatCard
-            label="Ganancia del mes"
-            value={m.isLoading ? '—' : money(monthProfit)}
-            tone={monthProfit >= 0 ? 'success' : 'danger'}
-            icon={Wallet}
-            hint="Recibido − egresos"
-          />
-        </div>
-        {/* Desglose de ingresos del mes */}
-        {met && (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <MiniStat
-              icon={Banknote}
-              label="Efectivo (mes)"
-              value={money(met.month.cash)}
-            />
-            <MiniStat
-              icon={ArrowLeftRight}
-              label="Transferencias (mes)"
-              value={money(met.month.transfer)}
-            />
-            <MiniStat
-              icon={CreditCard}
-              label="Tarjeta (mes)"
-              value={money(met.month.card)}
+          <div className="flex flex-col items-center justify-center py-4">
+            <Gauge
+              value={attendance}
+              label={`${met?.noShowCount ?? 0} no-show de ${met?.monthAppointments ?? 0}`}
+              tone={attendance >= 80 ? 'emerald' : attendance >= 60 ? 'gold' : 'rose'}
             />
           </div>
-        )}
-      </section>
+        </Card>
+      </div>
+      </SortableSection>
 
-      {/* ── PRÓXIMAS CITAS + CAJA ── */}
+      <SortableSection
+        id="appointments"
+        order={orderOf('appointments')}
+        onMove={move}
+      >
+      {/* Próximas citas + Estado de caja */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader
@@ -203,7 +270,31 @@ export function DashboardPage() {
                         </p>
                       </div>
                     </div>
-                    <Badge tone={meta.tone}>{meta.label}</Badge>
+                    <div className="flex items-center gap-2">
+                      {a.phone && (
+                        <a
+                          href={waReminder(
+                            a.phone,
+                            a.customer_name,
+                            a.start_at,
+                          )}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Recordar por WhatsApp"
+                          className="rounded-lg p-1.5 text-emerald-400 hover:bg-emerald-400/10"
+                        >
+                          <MessageCircle className="h-4 w-4" />
+                        </a>
+                      )}
+                      <Badge tone={meta.tone}>{meta.label}</Badge>
+                      <Button
+                        size="sm"
+                        loading={attend.isPending && attend.variables === a.id}
+                        onClick={() => attend.mutate(a.id)}
+                      >
+                        <Check className="h-4 w-4" /> Atender
+                      </Button>
+                    </div>
                   </li>
                 );
               })}
@@ -258,12 +349,13 @@ export function DashboardPage() {
           )}
         </Card>
       </div>
+      </SortableSection>
 
-      {/* ── RANKINGS ── */}
+      <SortableSection id="rankings" order={orderOf('rankings')} onMove={move}>
+      {/* Rankings */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {/* Vendedor del mes */}
         <Card>
-          <CardHeader title="Vendedor del mes" subtitle="Por ingresos generados" />
+          <CardHeader title="Estilista del mes" subtitle="Por ingresos generados" />
           {met?.topSeller ? (
             <>
               <div className="mb-3 flex items-center gap-3">
@@ -296,7 +388,6 @@ export function DashboardPage() {
           )}
         </Card>
 
-        {/* Top clientes */}
         <Card>
           <CardHeader title="Top clientes" subtitle="Los que más han gastado" />
           {met && met.topCustomers.length > 0 ? (
@@ -326,24 +417,16 @@ export function DashboardPage() {
           )}
         </Card>
 
-        {/* Inasistencia */}
-        <Card>
-          <CardHeader title="Inasistencia" subtitle="No-show del mes" />
-          <div className="flex flex-col items-center justify-center py-4">
-            <div className="flex h-24 w-24 items-center justify-center rounded-full border-4 border-danger/40">
-              <UserX className="h-7 w-7 text-danger" />
-            </div>
-            <p className="mt-3 text-3xl font-bold text-danger">
-              {m.isLoading ? '—' : percent(met?.noShowRate)}
-            </p>
-            <p className="text-xs text-white/40">
-              {met?.noShowCount ?? 0} de {met?.monthAppointments ?? 0} citas
-            </p>
-          </div>
-        </Card>
+        <BirthdaysCard />
       </div>
+      </SortableSection>
 
-      {/* ── DISPONIBILIDAD HOY POR ESTILISTA ── */}
+      <SortableSection
+        id="availability"
+        order={orderOf('availability')}
+        onMove={move}
+      >
+      {/* Disponibilidad hoy por estilista */}
       <Card>
         <CardHeader
           title="Disponibilidad de hoy"
@@ -384,6 +467,56 @@ export function DashboardPage() {
           />
         )}
       </Card>
+      </SortableSection>
+    </div>
+  );
+}
+
+/** Sección reordenable por drag & drop. El orden se aplica con CSS `order`. */
+function SortableSection({
+  id,
+  order,
+  onMove,
+  children,
+}: {
+  id: SectionKey;
+  order: number;
+  onMove: (from: SectionKey, to: SectionKey) => void;
+  children: ReactNode;
+}) {
+  const [over, setOver] = useState(false);
+  return (
+    <div
+      style={{ order }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setOver(false);
+        const from = e.dataTransfer.getData('text/plain') as SectionKey;
+        if (from) onMove(from, id);
+      }}
+      className={cn(
+        'group relative rounded-2xl transition-shadow',
+        over && 'ring-2 ring-gold-400/60',
+      )}
+    >
+      <button
+        type="button"
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData('text/plain', id);
+          e.dataTransfer.effectAllowed = 'move';
+        }}
+        title="Arrastrar para reordenar"
+        className="absolute -top-2 right-2 z-10 hidden cursor-grab rounded-lg bg-ink-800 p-1.5 text-white/40 shadow hover:text-white active:cursor-grabbing group-hover:flex"
+      >
+        <GripVertical className="h-4 w-4" />
+      </button>
+      {children}
     </div>
   );
 }
@@ -398,14 +531,109 @@ function MiniStat({
   value: string;
 }) {
   return (
-    <div className="glass-card flex items-center justify-between p-3">
-      <span className="flex items-center gap-2 text-sm text-white/50">
+    <div className="flex items-center justify-between rounded-xl bg-white/[0.03] p-3">
+      <span className="flex items-center gap-2 text-xs text-white/50">
         <Icon className="h-4 w-4 text-gold-300/70" />
         {label}
       </span>
       <span className="text-sm font-medium text-white">{value}</span>
     </div>
   );
+}
+
+interface BirthdayRow {
+  id: string;
+  name: string;
+  phone: string | null;
+  day: number;
+}
+
+/** Clientes que cumplen años este mes. */
+function BirthdaysCard() {
+  const orgId = useOrgId();
+  const month = String(new Date().getMonth() + 1).padStart(2, '0');
+  const today = new Date().getDate();
+
+  const rows = useQuery({
+    queryKey: ['birthdays', orgId, month],
+    enabled: !!orgId,
+    queryFn: () =>
+      query<BirthdayRow>(
+        `SELECT id,
+                first_name || CASE WHEN last_name IS NOT NULL THEN ' ' || last_name ELSE '' END AS name,
+                phone,
+                CAST(substr(birth_date,9,2) AS INTEGER) AS day
+           FROM customer
+          WHERE organization_id = ? AND active = 1 AND birth_date IS NOT NULL
+            AND substr(birth_date,6,2) = ?
+          ORDER BY day`,
+        [orgId, month],
+      ),
+  });
+
+  return (
+    <Card>
+      <CardHeader title="Cumpleaños del mes" subtitle="Clientes que cumplen años" />
+      {rows.data && rows.data.length > 0 ? (
+        <ul className="space-y-2">
+          {rows.data.map((b) => (
+            <li key={b.id} className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2 text-sm text-white/80">
+                <Cake
+                  className={
+                    b.day === today
+                      ? 'h-4 w-4 text-gold-300'
+                      : 'h-4 w-4 text-white/30'
+                  }
+                />
+                {b.name}
+                <span className="text-xs text-white/30">día {b.day}</span>
+              </span>
+              {b.phone && (
+                <a
+                  href={waBirthday(b.phone, b.name)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Saludar por WhatsApp"
+                  className="rounded-lg p-1.5 text-emerald-400 hover:bg-emerald-400/10"
+                >
+                  <MessageCircle className="h-4 w-4" />
+                </a>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <EmptyState icon={Cake} title="Sin cumpleaños este mes" />
+      )}
+    </Card>
+  );
+}
+
+function normalizePhone(phone: string): string {
+  let d = phone.replace(/\D/g, '');
+  if (d.startsWith('0')) d = '593' + d.slice(1);
+  else if (!d.startsWith('593')) d = '593' + d;
+  return d;
+}
+
+function waBirthday(phone: string, name: string | null): string {
+  const saludo = name ? `¡Feliz cumpleaños, ${name.split(' ')[0]}!` : '¡Feliz cumpleaños!';
+  const text = `${saludo} 🎉 De parte de todo el equipo de Medusa Estudio. Te esperamos para consentirte 💇✨`;
+  return `https://wa.me/${normalizePhone(phone)}?text=${encodeURIComponent(text)}`;
+}
+
+/** Arma un enlace wa.me con mensaje de recordatorio precargado (EC por defecto). */
+function waReminder(
+  phone: string,
+  name: string | null,
+  startAt: string,
+): string {
+  const saludo = name ? `Hola ${name.split(' ')[0]}` : 'Hola';
+  const text = `${saludo} 👋 Te recordamos tu cita en Medusa Estudio el ${dateShort(
+    startAt,
+  )} a las ${timeShort(startAt)}. ¿La confirmás? 💇`;
+  return `https://wa.me/${normalizePhone(phone)}?text=${encodeURIComponent(text)}`;
 }
 
 function RowKV({ label, value }: { label: string; value: string }) {

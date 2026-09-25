@@ -1,9 +1,11 @@
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { UserPlus, X } from 'lucide-react';
 import { usePosDraft } from '@/store/posDraft';
 import { useStaff } from './useCatalog';
-import { resolveCommission } from './createSale';
+import { resolveCommission, loadCommissionRules } from './createSale';
 import { money, fullName } from '@/lib/format';
+import { DEFAULT_COMMISSION_RATE } from '@/config/constants';
 import { Button, Select, Input, Badge } from '@/components/ui';
 import type { CommissionType, DraftSaleItem, ParticipationRole } from '@/types';
 
@@ -20,8 +22,29 @@ export function CommissionEditor({ item }: { item: DraftSaleItem }) {
   const [staffId, setStaffId] = useState('');
   const [role, setRole] = useState<ParticipationRole>('primary');
   const [type, setType] = useState<CommissionType>('percentage');
-  const [rate, setRate] = useState('50');
+  const [rate, setRate] = useState(String(DEFAULT_COMMISSION_RATE));
   const [reduces, setReduces] = useState(false);
+
+  // Reglas configuradas por colaborador+servicio (para autocompletar el valor).
+  const rules = useQuery({
+    queryKey: ['commission-rules'],
+    queryFn: loadCommissionRules,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  // Al elegir colaborador, precarga tipo/valor desde la config (o el % por defecto).
+  function pickStaff(id: string) {
+    setStaffId(id);
+    if (!id || !item.service_id) return;
+    const rule = rules.data?.get(`${id}:${item.service_id}`);
+    if (rule) {
+      setType(rule.commission_type);
+      setRate(String(rule.commission_value));
+    } else {
+      setType('percentage');
+      setRate(String(DEFAULT_COMMISSION_RATE));
+    }
+  }
 
   function add() {
     if (!staffId) return;
@@ -35,7 +58,7 @@ export function CommissionEditor({ item }: { item: DraftSaleItem }) {
       reduces_primary_amount: reduces,
     });
     setStaffId('');
-    setRate(type === 'percentage' ? '50' : '0');
+    setRate(type === 'percentage' ? String(DEFAULT_COMMISSION_RATE) : '0');
   }
 
   const staffName = (id: string) => {
@@ -93,7 +116,7 @@ export function CommissionEditor({ item }: { item: DraftSaleItem }) {
       {/* Alta de comisión */}
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <div className="col-span-2">
-          <Select value={staffId} onChange={(e) => setStaffId(e.target.value)}>
+          <Select value={staffId} onChange={(e) => pickStaff(e.target.value)}>
             <option value="">Colaborador…</option>
             {staff.data?.map((s) => (
               <option key={s.id} value={s.id}>

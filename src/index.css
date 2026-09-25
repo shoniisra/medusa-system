@@ -15,11 +15,16 @@
 
   body {
     @apply bg-ink-950 text-white/90 font-sans antialiased;
-    background-image: radial-gradient(
-      120% 100% at 20% 0%,
-      #17171b 0%,
-      #0b0b0d 55%
-    );
+    /* Fondo negro profundo + halo dorado ambiental arriba a la derecha,
+       como el prototipo. */
+    background-image:
+      radial-gradient(
+        70% 55% at 100% 0%,
+        rgba(217, 173, 58, 0.18) 0%,
+        rgba(217, 173, 58, 0.05) 30%,
+        transparent 60%
+      ),
+      radial-gradient(120% 100% at 15% 0%, #131317 0%, #08080a 55%);
     background-attachment: fixed;
   }
 
@@ -36,13 +41,133 @@
 }
 
 @layer components {
-  /* Tarjeta glassmorphism con borde tenue y sombra suave. */
+  /* Tarjeta glassmorphism moderna: gradiente sutil, brillo superior,
+     sombra profunda y realce al pasar el cursor. */
   .glass-card {
-    @apply rounded-2xl border border-white/10 bg-white/[0.04] shadow-glass backdrop-blur-xl;
+    @apply relative overflow-hidden rounded-3xl border border-white/[0.1]
+      backdrop-blur-xl transition-all duration-300;
+    background-image:
+      radial-gradient(
+        120% 100% at 100% 0%,
+        rgba(255, 255, 255, 0.1) 0%,
+        rgba(255, 255, 255, 0.03) 30%,
+        transparent 60%
+      ),
+      linear-gradient(
+        160deg,
+        rgba(255, 255, 255, 0.05) 0%,
+        rgba(255, 255, 255, 0.02) 45%,
+        rgba(255, 255, 255, 0.01) 100%
+      );
+    box-shadow:
+      0 1px 0 0 rgba(255, 255, 255, 0.08) inset,
+      0 18px 40px -20px rgba(0, 0, 0, 0.7);
+  }
+
+  /* Realce sólo cuando la tarjeta es interactiva (link/botón). */
+  .glass-card-hover:hover {
+    @apply border-white/[0.14] -translate-y-0.5;
+    box-shadow:
+      0 1px 0 0 rgba(255, 255, 255, 0.1) inset,
+      0 26px 50px -22px rgba(0, 0, 0, 0.8);
   }
 
   .glass-card-gold {
-    @apply glass-card border-gold/25 shadow-gold-glow;
+    @apply glass-card border-gold/40;
+    background-image:
+      radial-gradient(
+        130% 120% at 100% 0%,
+        rgba(217, 173, 58, 0.22) 0%,
+        rgba(217, 173, 58, 0.06) 35%,
+        transparent 65%
+      ),
+      linear-gradient(
+        160deg,
+        rgba(255, 255, 255, 0.07) 0%,
+        rgba(255, 255, 255, 0.02) 45%,
+        rgba(255, 255, 255, 0.015) 100%
+      );
+    box-shadow:
+      0 1px 0 0 rgba(217, 173, 58, 0.35) inset,
+      0 18px 44px -20px rgba(0, 0, 0, 0.7),
+      0 0 60px -6px rgba(217, 173, 58, 0.5);
+  }
+
+  /* Tarjeta destacada con resplandor de color desde una esquina, como la
+     referencia: gradiente amplio y saturado + halo de color por fuera del
+     borde. El glow vive en ::before para que el contenido quede encima. */
+  .glass-card-glow::before {
+    content: '';
+    @apply pointer-events-none absolute inset-0;
+  }
+  .glass-card-glow-gold {
+    @apply border-gold/45;
+    box-shadow:
+      0 1px 0 0 rgba(217, 173, 58, 0.4) inset,
+      0 18px 44px -20px rgba(0, 0, 0, 0.7),
+      0 0 55px -4px rgba(217, 173, 58, 0.55);
+  }
+  .glass-card-glow-gold::before {
+    background: radial-gradient(
+      135% 130% at 105% 115%,
+      rgba(217, 173, 58, 0.6) 0%,
+      rgba(217, 173, 58, 0.32) 28%,
+      rgba(217, 173, 58, 0.1) 52%,
+      transparent 72%
+    );
+  }
+  .glass-card-glow-green {
+    @apply border-success/40;
+    box-shadow:
+      0 1px 0 0 rgba(62, 207, 142, 0.35) inset,
+      0 18px 44px -20px rgba(0, 0, 0, 0.7),
+      0 0 55px -4px rgba(62, 207, 142, 0.5);
+  }
+  .glass-card-glow-green::before {
+    background: radial-gradient(
+      135% 130% at -5% 115%,
+      rgba(62, 207, 142, 0.6) 0%,
+      rgba(62, 207, 142, 0.3) 28%,
+      rgba(62, 207, 142, 0.09) 52%,
+      transparent 72%
+    );
+  }
+  .glass-card-glow > * {
+    @apply relative z-10;
+  }
+
+  /* Tarjeta hero protagonista (Resumen financiero): fondo negro rico con
+     tinte dorado, borde dorado y halo exterior más presente. */
+  .finance-hero {
+    @apply relative border border-gold/25 backdrop-blur-xl transition-all duration-300;
+    background-image:
+      radial-gradient(
+        130% 120% at 100% 0%,
+        rgba(217, 173, 58, 0.16) 0%,
+        rgba(217, 173, 58, 0.05) 35%,
+        transparent 62%
+      ),
+      linear-gradient(
+        165deg,
+        rgba(255, 255, 255, 0.06) 0%,
+        rgba(255, 255, 255, 0.02) 45%,
+        rgba(10, 10, 12, 0.4) 100%
+      );
+    box-shadow:
+      0 1px 0 0 rgba(217, 173, 58, 0.3) inset,
+      0 30px 60px -28px rgba(0, 0, 0, 0.85),
+      0 0 70px -10px rgba(217, 173, 58, 0.4);
+  }
+
+  /* Contenedor de ícono estilo referencia: cuadrado redondeado con borde
+     tenue y anillo interno. */
+  .icon-badge {
+    @apply inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl
+      border border-white/10 bg-white/[0.05] text-gold-300;
+    box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.06) inset;
+  }
+  .icon-badge-gold {
+    @apply border-gold/30 bg-gold/[0.12] text-gold-200;
   }
 
   /* Números y KPIs en oro con leve resplandor. */

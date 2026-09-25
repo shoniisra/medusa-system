@@ -1,0 +1,84 @@
+/* Tema oscuro para react-big-calendar (paleta ink/gold de Medusa). */
+.medusa-rbc {
+  --rbc-bg: rgb(19 20 28);
+  --rbc-line: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+}
+.medusa-rbc .rbc-toolbar {
+  margin-bottom: 12px;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.medusa-rbc .rbc-toolbar button {
+  color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--rbc-line);
+  border-radius: 8px;
+  padding: 6px 12px;
+}
+.medusa-rbc .rbc-toolbar button:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+.medusa-rbc .rbc-toolbar button.rbc-active,
+.medusa-rbc .rbc-toolbar button.rbc-active:hover {
+  background: #f4c752;
+  color: #1a1205;
+  border-color: #f4c752;
+}
+.medusa-rbc .rbc-toolbar-label {
+  font-weight: 600;
+  color: #fff;
+  text-transform: capitalize;
+}
+.medusa-rbc .rbc-month-view,
+.medusa-rbc .rbc-time-view,
+.medusa-rbc .rbc-time-header,
+.medusa-rbc .rbc-time-content,
+.medusa-rbc .rbc-header,
+.medusa-rbc .rbc-day-bg,
+.medusa-rbc .rbc-month-row,
+.medusa-rbc .rbc-timeslot-group,
+.medusa-rbc .rbc-time-slot,
+.medusa-rbc .rbc-time-gutter,
+.medusa-rbc .rbc-day-slot {
+  border-color: var(--rbc-line) !important;
+}
+.medusa-rbc .rbc-header {
+  padding: 8px 4px;
+  color: rgba(255, 255, 255, 0.6);
+  font-weight: 500;
+  text-transform: capitalize;
+}
+.medusa-rbc .rbc-off-range-bg {
+  background: rgba(0, 0, 0, 0.25);
+}
+.medusa-rbc .rbc-today {
+  background: rgba(244, 199, 82, 0.08);
+}
+.medusa-rbc .rbc-time-gutter,
+.medusa-rbc .rbc-label {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 12px;
+}
+.medusa-rbc .rbc-event {
+  border: none;
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+.medusa-rbc .rbc-event.rbc-selected {
+  outline: 2px solid #f4c752;
+}
+.medusa-rbc .rbc-show-more {
+  color: #f4c752;
+  background: transparent;
+}
+.medusa-rbc .rbc-current-time-indicator {
+  background: #f4c752;
+}
+.medusa-rbc .rbc-addons-dnd .rbc-addons-dnd-resize-ns-icon,
+.medusa-rbc .rbc-addons-dnd .rbc-addons-dnd-resize-ew-icon {
+  border-color: rgba(255, 255, 255, 0.5);
+}

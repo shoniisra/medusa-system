@@ -350,6 +350,47 @@ export interface CashMovement {
 
 export type ExpenseStatus = 'pending' | 'confirmed' | 'voided';
 
+/** Dónde vive el dinero: caja física o una cuenta bancaria. */
+export type AccountKind = 'cash' | 'bank';
+
+/** Transferencia de dinero entre caja y/o cuentas bancarias. */
+export interface AccountTransfer {
+  id: ID;
+  organization_id: ID;
+  branch_id: ID;
+  transfer_date: ISODate;
+  amount: number;
+  from_kind: AccountKind;
+  from_bank_account_id: ID | null;
+  to_kind: AccountKind;
+  to_bank_account_id: ID | null;
+  cash_session_id: ID | null;
+  description: string | null;
+  created_by: ID | null;
+  created_at: ISODateTime;
+}
+
+/** 'debt' = por pagar (le debemos); 'credit' = por cobrar (nos deben). */
+export type DebtCreditKind = 'debt' | 'credit';
+export type DebtCreditStatus = 'open' | 'settled' | 'voided';
+
+/** Cuenta por pagar o por cobrar. */
+export interface DebtCredit {
+  id: ID;
+  organization_id: ID;
+  branch_id: ID;
+  kind: DebtCreditKind;
+  counterparty: string;
+  description: string | null;
+  amount: number;
+  paid_amount: number;
+  due_date: ISODate | null;
+  status: DebtCreditStatus;
+  created_by: ID | null;
+  created_at: ISODateTime;
+  updated_at: ISODateTime;
+}
+
 export interface ExpenseCategory {
   id: ID;
   organization_id: ID;
