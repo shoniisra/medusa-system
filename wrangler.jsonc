@@ -1,0 +1,11 @@
+{
+  // SPA estática (Vite + PWA). El backend es Turso accedido desde el cliente,
+  // así que no hay Worker server-side: solo servimos los assets de dist/.
+  "name": "medusa-system",
+  "compatibility_date": "2026-09-25",
+  "assets": {
+    "directory": "./dist",
+    // Devuelve index.html para rutas del client-side router (react-router).
+    "not_found_handling": "single-page-application"
+  }
+}
