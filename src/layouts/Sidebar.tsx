@@ -9,7 +9,6 @@ import {
   ClipboardList,
   FileText,
   Settings,
-  Scissors,
   BellRing,
 } from 'lucide-react';
 import { ROUTES, APP_NAME } from '@/config/constants';
@@ -75,7 +74,11 @@ export function Sidebar() {
   return (
     <aside className="hidden w-64 shrink-0 flex-col border-r border-white/5 bg-ink-900/80 backdrop-blur-xl lg:flex">
       <div className="flex items-center gap-2 px-6 py-6">
-        <Scissors className="h-6 w-6 text-gold-300" />
+        <img
+          src="/medusa-logo.jpg"
+          alt="Medusa Estudio"
+          className="h-8 w-8 rounded-lg"
+        />
         <span className="brand-script text-3xl leading-none">{APP_NAME}</span>
       </div>
 

@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CalendarDays,
   CalendarPlus,
@@ -26,6 +26,7 @@ import { useMonthlySales } from './useMonthlySales';
 import { FinanceOverview, MiniBarChart, Gauge } from './FinanceOverview';
 import { StatCard, Card, CardHeader, Badge, Button, EmptyState } from '@/components/ui';
 import { money, dateShort, timeShort, todayISO } from '@/lib/format';
+import { phoneToWaDigits } from '@/lib/phone';
 import { useSession, useOrgId } from '@/store/session';
 import { ROUTES, APPOINTMENT_STATUS } from '@/config/constants';
 import type { AppointmentStatus } from '@/types';
@@ -89,18 +90,25 @@ export function DashboardPage() {
   const monthly = useMonthlySales();
   const { order, move } = useSectionOrder();
 
-  // Marca una cita como atendida desde la tarjeta de próximas citas.
-  const attend = useMutation({
-    mutationFn: (id: string) =>
+  // "Atender" desde próximas citas: igual que en la agenda. Una cita reservada
+  // pasa a "Atendiendo" (confirmed) y se abre la ficha de atención; si ya está
+  // atendiendo, lleva directo a la ficha para finalizar y cobrar.
+  const startAttention = (a: { id: string; status: string }) => {
+    if (a.status === 'reserved') {
       execute(
-        "UPDATE appointment SET status = 'attended', updated_at = ? WHERE id = ?",
-        [new Date().toISOString(), id],
-      ),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['dashboard-metrics'] });
-      qc.invalidateQueries({ queryKey: ['appointments'] });
-    },
-  });
+        "UPDATE appointment SET status = 'confirmed', updated_at = ? WHERE id = ?",
+        [new Date().toISOString(), a.id],
+      )
+        .then(() => {
+          qc.invalidateQueries({ queryKey: ['dashboard-metrics'] });
+          qc.invalidateQueries({ queryKey: ['appointments'] });
+        })
+        .catch(() => {
+          /* si falla, igual seguimos a la ficha */
+        });
+    }
+    navigate(`${ROUTES.appointment}/${a.id}?atender=1`);
+  };
   const orderOf = (k: SectionKey) => order.indexOf(k) + 1;
 
   const col = data?.collections;
@@ -287,13 +295,20 @@ export function DashboardPage() {
                         </a>
                       )}
                       <Badge tone={meta.tone}>{meta.label}</Badge>
-                      <Button
-                        size="sm"
-                        loading={attend.isPending && attend.variables === a.id}
-                        onClick={() => attend.mutate(a.id)}
-                      >
-                        <Check className="h-4 w-4" /> Atender
-                      </Button>
+                      {(a.status === 'reserved' ||
+                        a.status === 'confirmed') && (
+                        <Button
+                          size="sm"
+                          onClick={() =>
+                            startAttention({ id: a.id, status: a.status })
+                          }
+                        >
+                          <Check className="h-4 w-4" />{' '}
+                          {a.status === 'confirmed'
+                            ? 'Finalizar y Cobrar'
+                            : 'Atender'}
+                        </Button>
+                      )}
                     </div>
                   </li>
                 );
@@ -611,10 +626,7 @@ function BirthdaysCard() {
 }
 
 function normalizePhone(phone: string): string {
-  let d = phone.replace(/\D/g, '');
-  if (d.startsWith('0')) d = '593' + d.slice(1);
-  else if (!d.startsWith('593')) d = '593' + d;
-  return d;
+  return phoneToWaDigits(phone);
 }
 
 function waBirthday(phone: string, name: string | null): string {

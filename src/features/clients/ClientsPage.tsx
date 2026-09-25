@@ -41,8 +41,11 @@ import {
   Modal,
   Badge,
   EmptyState,
+  PhoneInput,
 } from '@/components/ui';
 import { ROUTES } from '@/config/constants';
+import { phoneToWaDigits } from '@/lib/phone';
+import { findCustomerByPhone } from './customerLookup';
 import type { Customer, CustomerColorRecord } from '@/types';
 
 /* ═══════════════════════════ Lista de clientes ═══════════════════════════ */
@@ -433,12 +436,9 @@ function PagerBtn({
   );
 }
 
-/** Enlace wa.me normalizando a Ecuador por defecto. */
+/** Enlace wa.me desde el teléfono canónico. */
 function waLink(phone: string): string {
-  let d = phone.replace(/\D/g, '');
-  if (d.startsWith('0')) d = '593' + d.slice(1);
-  else if (!d.startsWith('593') && d.length <= 10) d = '593' + d;
-  return `https://wa.me/${d}`;
+  return `https://wa.me/${phoneToWaDigits(phone)}`;
 }
 
 function CreateClientModal({
@@ -457,9 +457,21 @@ function CreateClientModal({
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [birth, setBirth] = useState('');
+  const [dup, setDup] = useState<{ id: string; name: string } | null>(null);
 
   const save = useMutation({
     mutationFn: async () => {
+      const canonical = phone.trim() || null;
+      if (canonical) {
+        const hit = await findCustomerByPhone(orgId, canonical);
+        if (hit) {
+          const err = new Error('DUP') as Error & {
+            hit: { id: string; name: string };
+          };
+          err.hit = { id: hit.id, name: fullName(hit.first_name, hit.last_name) };
+          throw err;
+        }
+      }
       const id = genId();
       await execute(
         `INSERT INTO customer
@@ -470,12 +482,15 @@ function CreateClientModal({
           orgId,
           firstName.trim(),
           lastName.trim() || null,
-          phone.trim() || null,
+          canonical,
           email.trim() || null,
           birth || null,
         ],
       );
       return id;
+    },
+    onError: (e: Error & { hit?: { id: string; name: string } }) => {
+      if (e.hit) setDup(e.hit);
     },
     onSuccess: (id) => {
       qc.invalidateQueries({ queryKey: ['clients', orgId] });
@@ -485,6 +500,7 @@ function CreateClientModal({
       setPhone('');
       setEmail('');
       setBirth('');
+      setDup(null);
       onClose();
       navigate(`${ROUTES.client}/${id}`);
     },
@@ -505,12 +521,31 @@ function CreateClientModal({
             onChange={(e) => setLastName(e.target.value)}
           />
         </div>
-        <Input
+        <PhoneInput
           label="WhatsApp"
           value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-          placeholder="09…"
+          onChange={(v) => {
+            setPhone(v);
+            setDup(null);
+          }}
         />
+        {dup && (
+          <div className="flex items-center justify-between gap-2 rounded-xl border border-danger/30 bg-danger/10 p-3 text-sm">
+            <span className="text-danger">
+              Ese número ya es de <b>{dup.name}</b>.
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                navigate(`${ROUTES.client}/${dup.id}`);
+              }}
+              className="shrink-0 rounded-lg bg-danger/20 px-2.5 py-1 text-xs font-medium text-danger hover:bg-danger/30"
+            >
+              Abrir ficha
+            </button>
+          </div>
+        )}
         <Input
           label="Email"
           type="email"
@@ -754,6 +789,7 @@ function ClientForm({
   onSaved: () => void;
 }) {
   const staff = useStaff();
+  const navigate = useNavigate();
   const [firstName, setFirstName] = useState(customer.first_name);
   const [lastName, setLastName] = useState(customer.last_name ?? '');
   const [phone, setPhone] = useState(customer.phone ?? '');
@@ -763,10 +799,25 @@ function ClientForm({
   const [notes, setNotes] = useState(customer.notes ?? '');
   const [allergies, setAllergies] = useState(customer.allergies ?? '');
   const [hairNotes, setHairNotes] = useState(customer.hair_notes ?? '');
+  const [dup, setDup] = useState<{ id: string; name: string } | null>(null);
 
   const save = useMutation({
-    mutationFn: () =>
-      execute(
+    mutationFn: async () => {
+      const canonical = phone.trim() || null;
+      if (canonical) {
+        const hit = await findCustomerByPhone(
+          customer.organization_id,
+          canonical,
+        );
+        if (hit && hit.id !== customer.id) {
+          const err = new Error('DUP') as Error & {
+            hit: { id: string; name: string };
+          };
+          err.hit = { id: hit.id, name: fullName(hit.first_name, hit.last_name) };
+          throw err;
+        }
+      }
+      return execute(
         `UPDATE customer SET
            first_name = ?, last_name = ?, phone = ?, email = ?, birth_date = ?,
            preferred_staff_id = ?, notes = ?, allergies = ?, hair_notes = ?,
@@ -775,7 +826,7 @@ function ClientForm({
         [
           firstName.trim(),
           lastName.trim() || null,
-          phone.trim() || null,
+          canonical,
           email.trim() || null,
           birth || null,
           preferred || null,
@@ -785,7 +836,11 @@ function ClientForm({
           new Date().toISOString(),
           customer.id,
         ],
-      ),
+      );
+    },
+    onError: (e: Error & { hit?: { id: string; name: string } }) => {
+      if (e.hit) setDup(e.hit);
+    },
     onSuccess: onSaved,
   });
 
@@ -805,11 +860,28 @@ function ClientForm({
             onChange={(e) => setLastName(e.target.value)}
           />
         </div>
-        <Input
+        <PhoneInput
           label="WhatsApp"
           value={phone}
-          onChange={(e) => setPhone(e.target.value)}
+          onChange={(v) => {
+            setPhone(v);
+            setDup(null);
+          }}
         />
+        {dup && (
+          <div className="flex items-center justify-between gap-2 rounded-xl border border-danger/30 bg-danger/10 p-3 text-sm">
+            <span className="text-danger">
+              Ese número ya es de <b>{dup.name}</b>.
+            </span>
+            <button
+              type="button"
+              onClick={() => navigate(`${ROUTES.client}/${dup.id}`)}
+              className="shrink-0 rounded-lg bg-danger/20 px-2.5 py-1 text-xs font-medium text-danger hover:bg-danger/30"
+            >
+              Abrir ficha
+            </button>
+          </div>
+        )}
         <Input
           label="Email"
           type="email"

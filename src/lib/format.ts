@@ -23,7 +23,11 @@ export const percent = (n: number | null | undefined): string =>
 /** ISO → "23 sep 2026". */
 export const dateShort = (iso: string | null | undefined): string => {
   if (!iso) return '—';
-  const d = new Date(iso);
+  // Una fecha solo-día ("YYYY-MM-DD") se interpreta como local, no como UTC
+  // (new Date("2026-09-25") sería UTC medianoche y retrocedería 1 día en UTC−5).
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(iso)
+    ? new Date(`${iso}T00:00:00`)
+    : new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
   return d.toLocaleDateString(LOCALE, {
     day: '2-digit',

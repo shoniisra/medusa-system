@@ -1,31 +1,45 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useLocation,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
+  ArrowRight,
   Plus,
   Trash2,
   Scissors,
   Package,
   Check,
   UserRound,
-  Stethoscope,
-  Clock,
   AlertTriangle,
   Search,
   UserPlus,
   X,
-  ChevronLeft,
-  ChevronRight,
 } from 'lucide-react';
+import { Calendar, dateFnsLocalizer, type View } from 'react-big-calendar';
+import { format, parse, startOfWeek, getDay } from 'date-fns';
+import { es } from 'date-fns/locale';
+import 'react-big-calendar/lib/css/react-big-calendar.css';
+import './agenda-calendar.css';
 import { query, queryOne, batch, execute } from '@/lib/db';
-import { genId, money, fullName, toLocalNaive, dateShort } from '@/lib/format';
+import {
+  genId,
+  money,
+  num,
+  fullName,
+  toLocalNaive,
+  dateShort,
+  timeShort,
+} from '@/lib/format';
 import { useOrgId, useBranchId, useSession } from '@/store/session';
 import { useCustomers, useServices, useProducts, useStaff } from '@/features/pos/useCatalog';
 import {
   DEFAULT_SERVICE_MINUTES,
   toMinutes,
-  fromMinutes,
   hoursForDate,
   overlaps,
   type Interval,
@@ -47,7 +61,9 @@ import {
   EmptyState,
   Badge,
   Modal,
+  PhoneInput,
 } from '@/components/ui';
+import { findCustomerByPhone } from '@/features/clients/customerLookup';
 import {
   createSale,
   loadCommissionRules,
@@ -89,13 +105,6 @@ function todayLocalISO(): string {
   return toLocalNaive(new Date()).slice(0, 10);
 }
 
-/** Suma n días a una fecha "YYYY-MM-DD" (local). */
-function addDaysISO(iso: string, n: number): string {
-  const d = new Date(`${iso}T00:00:00`);
-  d.setDate(d.getDate() + n);
-  return toLocalNaive(d).slice(0, 10);
-}
-
 /** Etiqueta corta de día: { wd: 'lun', dm: '24 sep' }. */
 function dayLabel(iso: string): { wd: string; dm: string } {
   const d = new Date(`${iso}T00:00:00`);
@@ -105,22 +114,37 @@ function dayLabel(iso: string): { wd: string; dm: string } {
   };
 }
 
-/** Slots sugeridos cada 30 min (07:00–21:00). */
-const TIME_SLOTS: string[] = (() => {
-  const out: string[] = [];
-  for (let m = 7 * 60; m <= 21 * 60; m += 30) out.push(fromMinutes(m));
-  return out;
-})();
+/** Localizer español para react-big-calendar (selector de día y hora). */
+const rbcLocalizer = dateFnsLocalizer({
+  format,
+  parse,
+  startOfWeek: (d: Date) => startOfWeek(d, { weekStartsOn: 1 }),
+  getDay,
+  locales: { es },
+});
+
+const rbcMessages = {
+  today: 'Hoy',
+  previous: '‹',
+  next: '›',
+  week: 'Semana',
+  day: 'Día',
+  date: 'Fecha',
+  time: 'Hora',
+  event: 'Cita',
+  noEventsInRange: 'Sin citas.',
+};
+
+/** "YYYY-MM-DD" local de un Date. */
+function ymdLocal(d: Date): string {
+  return toLocalNaive(d).slice(0, 10);
+}
 
 /* ═══════════════════════════ Nueva cita ═══════════════════════════ */
 
-interface DraftServiceRow {
-  tempId: string;
-  serviceId: string;
-  name: string;
-  price: number;
-  duration: number;
-  discount: number;
+/** Categoría de servicio elegida al agendar, con su estilista (opcional). */
+interface DraftCat {
+  category: string;
   staffId: string;
 }
 
@@ -133,8 +157,10 @@ function NewAppointment() {
   const [params] = useSearchParams();
 
   const customers = useCustomers();
-  const services = useServices();
   const staff = useStaff();
+
+  // Paso del asistente: 1) qué y cuándo · 2) cliente y confirmación.
+  const [step, setStep] = useState<1 | 2>(1);
 
   // Cliente
   const [newClient, setNewClient] = useState(false);
@@ -151,28 +177,29 @@ function NewAppointment() {
   const [time, setTime] = useState('10:00');
   const [deposit, setDeposit] = useState('0');
   const [customDeposit, setCustomDeposit] = useState(false);
+  // El abono debe elegirse explícitamente (5/10/20/Otro) antes de agendar.
+  const [depositChosen, setDepositChosen] = useState(false);
 
-  // Servicios
-  const [rows, setRows] = useState<DraftServiceRow[]>([]);
-  const [category, setCategory] = useState('');
-  const [serviceId, setServiceId] = useState('');
-  const [staffId, setStaffId] = useState('');
+  // Categorías elegidas (con estilista opcional por categoría).
+  const [cats, setCats] = useState<DraftCat[]>([]);
   const [error, setError] = useState('');
   const [conflicts, setConflicts] = useState<string[]>([]);
 
-  const filteredServices = useMemo(
-    () =>
-      (services.data ?? []).filter((s) => !category || s.category === category),
-    [services.data, category],
+  // Vista del calendario: en móvil arranca en "Día"; en escritorio en "Semana".
+  const [calView, setCalView] = useState<View>(() =>
+    typeof window !== 'undefined' &&
+    window.matchMedia('(max-width: 768px)').matches
+      ? 'day'
+      : 'week',
   );
 
-  // ── Cliente: buscador con foco automático y creación al vuelo ──
   const hasClient = !!customerId || newClient;
   const selectedCustomer = customers.data?.find((c) => c.id === customerId);
 
+  // ── Cliente: buscador con foco automático y creación al vuelo ──
   useEffect(() => {
-    if (!hasClient) searchRef.current?.focus();
-  }, [hasClient]);
+    if (step === 2 && !hasClient) searchRef.current?.focus();
+  }, [step, hasClient]);
 
   const clientMatches = useMemo(() => {
     const q = clientSearch.trim().toLowerCase();
@@ -212,30 +239,28 @@ function NewAppointment() {
     setTimeout(() => searchRef.current?.focus(), 0);
   }
 
-  // Se agrega automáticamente cuando servicio + estilista están completos.
-  function addRowWith(sid: string, stid: string) {
-    const s = services.data?.find((x) => x.id === sid);
-    if (!s || !stid) return;
-    setRows((r) => [
-      ...r,
-      {
-        tempId: genId(),
-        serviceId: s.id,
-        name: s.name,
-        price: s.base_price,
-        duration: s.duration_minutes ?? DEFAULT_SERVICE_MINUTES,
-        discount: 0,
-        staffId: stid,
-      },
-    ]);
-    setServiceId('');
-    setStaffId('');
+  // ── Categorías ──
+  function toggleCat(category: string) {
+    setCats((cs) =>
+      cs.some((c) => c.category === category)
+        ? cs.filter((c) => c.category !== category)
+        : [...cs, { category, staffId: '' }],
+    );
     setConflicts([]);
   }
+  function setCatStaff(category: string, staffId: string) {
+    setCats((cs) =>
+      cs.map((c) => (c.category === category ? { ...c, staffId } : c)),
+    );
+    setConflicts([]);
+  }
+  const isCatOn = (category: string) => cats.some((c) => c.category === category);
 
-  const subtotal = rows.reduce((a, r) => a + r.price, 0);
-  const discountTotal = rows.reduce((a, r) => a + r.discount, 0);
-  const total = Math.max(0, subtotal - discountTotal);
+  const staffName = (sid: string) => {
+    const s = staff.data?.find((x) => x.id === sid);
+    return s ? fullName(s.first_name, s.last_name) : 'Sin asignar';
+  };
+
   const dep = Number(deposit) || 0;
 
   // Cobro de la seña al reservar: destino (banco por defecto principal, o caja).
@@ -272,64 +297,96 @@ function NewAppointment() {
   });
   const cashMethod = payMethods.data?.find((m) => m.method_type === 'cash');
   const transferMethod = payMethods.data?.find((m) => m.method_type === 'transfer');
-  // Principal = primera cuenta bancaria activa. Efectivo si no hay cuentas.
   const firstBankId = banks.data?.[0]?.id ?? '';
   const effectiveDest = depositDest || firstBankId || 'cash';
   const depositIsCash = effectiveDest === 'cash';
 
-  // Bloques por colaborador: los servicios del mismo estilista se apilan; los de
-  // estilistas distintos corren en paralelo. El tiempo reservado (lo que se
-  // bloquea en Google) es el bloque más largo.
+  // Tiempo reservado: sin servicios todavía, se estima DEFAULT_SERVICE_MINUTES por
+  // categoría, apilando las del mismo estilista (las de distinto van en paralelo).
   const staffBlocks = useMemo(() => {
     const m = new Map<string, number>();
-    for (const r of rows) {
-      const k = r.staffId || '__none';
-      m.set(k, (m.get(k) ?? 0) + r.duration);
+    for (const c of cats) {
+      const k = c.staffId || '__none';
+      m.set(k, (m.get(k) ?? 0) + DEFAULT_SERVICE_MINUTES);
     }
     return m;
-  }, [rows]);
-  const reservedMinutes = rows.length
-    ? Math.max(...staffBlocks.values())
-    : 0;
+  }, [cats]);
+  const reservedMinutes = cats.length ? Math.max(...staffBlocks.values()) : 0;
 
-  const dayStrip = useMemo(
-    () => Array.from({ length: 14 }, (_, i) => addDaysISO(todayLocalISO(), i)),
-    [],
+  // Citas de la semana visible (para pintar disponibilidad en el calendario y
+  // chequear solapes del día elegido). Una sola consulta por semana.
+  const weekStart = useMemo(
+    () => startOfWeek(new Date(`${date}T00:00:00`), { weekStartsOn: 1 }),
+    [date],
   );
+  const weekFrom = ymdLocal(weekStart);
+  const weekTo = ymdLocal(new Date(weekStart.getTime() + 6 * 86400000));
 
-  const staffName = (sid: string) => {
-    const s = staff.data?.find((x) => x.id === sid);
-    return s ? fullName(s.first_name, s.last_name) : 'Sin asignar';
-  };
-
-  // Citas del día (para el chequeo y el timeline visual). Una sola consulta.
-  const dayAppts = useQuery({
-    queryKey: ['day-availability', branchId, date],
+  const weekAppts = useQuery({
+    queryKey: ['week-availability', branchId, weekFrom],
+    enabled: !!branchId,
     queryFn: () =>
-      query<{ start_at: string; end_at: string; staff_id: string }>(
-        `SELECT a.start_at, a.end_at, ai.assigned_staff_id AS staff_id
+      query<{
+        id: string;
+        start_at: string;
+        end_at: string;
+        staff_id: string | null;
+        staff_color: string | null;
+        cust: string | null;
+      }>(
+        `SELECT a.id, a.start_at, a.end_at,
+                ai.assigned_staff_id AS staff_id,
+                s.color AS staff_color,
+                c.first_name AS cust
            FROM appointment a
            JOIN appointment_item ai ON ai.appointment_id = a.id
+           LEFT JOIN staff_member s ON s.id = ai.assigned_staff_id
+           LEFT JOIN customer c ON c.id = a.customer_id
           WHERE a.branch_id = ?
             AND a.status NOT IN ('cancelled', 'no_show')
-            AND substr(a.start_at, 1, 10) = ?
-            AND ai.assigned_staff_id IS NOT NULL
+            AND substr(a.start_at, 1, 10) BETWEEN ? AND ?
           GROUP BY a.id, ai.assigned_staff_id`,
-        [branchId, date],
+        [branchId, weekFrom, weekTo],
       ),
-    enabled: !!branchId && !!date,
   });
 
   const bookedByStaff = useMemo(() => {
     const m = new Map<string, Interval[]>();
-    for (const r of dayAppts.data ?? []) {
+    for (const r of weekAppts.data ?? []) {
       if (!r.staff_id) continue;
+      if (r.start_at.slice(0, 10) !== date) continue;
       const arr = m.get(r.staff_id) ?? [];
       arr.push({ startMin: naiveToMin(r.start_at), endMin: naiveToMin(r.end_at) });
       m.set(r.staff_id, arr);
     }
     return m;
-  }, [dayAppts.data]);
+  }, [weekAppts.data, date]);
+
+  // Eventos del calendario: citas ocupadas (color del estilista, atenuadas) + el
+  // bloque propuesto en dorado.
+  const calEvents = useMemo(() => {
+    const busy = (weekAppts.data ?? []).map((r) => ({
+      id: r.id,
+      title: r.cust || 'Ocupado',
+      start: new Date(r.start_at),
+      end: new Date(r.end_at),
+      color: r.staff_color || '#64748b',
+      proposed: false,
+    }));
+    const start = new Date(`${date}T${time}:00`);
+    const end = new Date(
+      start.getTime() + (reservedMinutes || DEFAULT_SERVICE_MINUTES) * 60000,
+    );
+    busy.push({
+      id: '__proposed',
+      title: 'Tu cita',
+      start,
+      end,
+      color: '#f4c752',
+      proposed: true,
+    });
+    return busy;
+  }, [weekAppts.data, date, time, reservedMinutes]);
 
   /** Revisa horario del local + solape por estilista. Devuelve avisos. */
   function checkAvailability(): string[] {
@@ -343,9 +400,7 @@ function NewAppointment() {
       startMin < toMinutes(hours.open) ||
       startMin + reservedMinutes > toMinutes(hours.close)
     ) {
-      warnings.push(
-        `Fuera del horario del local (${hours.open}–${hours.close}).`,
-      );
+      warnings.push(`Fuera del horario del local (${hours.open}–${hours.close}).`);
     }
 
     for (const [key, dur] of staffBlocks) {
@@ -360,11 +415,21 @@ function NewAppointment() {
 
   const save = useMutation({
     mutationFn: async () => {
-      if (rows.length === 0) throw new Error('Agregá al menos un servicio.');
+      if (cats.length === 0) throw new Error('Elegí al menos una categoría.');
       if (!newClient && !customerId)
         throw new Error('Elegí un cliente o creá uno nuevo.');
       if (newClient && !firstName.trim())
         throw new Error('El nombre del cliente es obligatorio.');
+
+      const newPhone = newClient ? phone.trim() : '';
+      if (newClient && newPhone) {
+        const hit = await findCustomerByPhone(orgId, newPhone);
+        if (hit) {
+          throw new Error(
+            `Ese número ya es de ${fullName(hit.first_name, hit.last_name)}. Buscalo en la lista en vez de crear uno nuevo.`,
+          );
+        }
+      }
 
       const start = new Date(`${date}T${time}:00`);
       const end = new Date(
@@ -379,8 +444,8 @@ function NewAppointment() {
       const clientLabel = newClient
         ? fullName(firstName, lastName)
         : fullName(
-            customers.data?.find((c) => c.id === customerId)?.first_name ?? '',
-            customers.data?.find((c) => c.id === customerId)?.last_name,
+            selectedCustomer?.first_name ?? '',
+            selectedCustomer?.last_name,
           );
 
       // Google Calendar: se sincroniza siempre que esté configurado.
@@ -392,17 +457,17 @@ function NewAppointment() {
           [branchId],
         );
         calendarId = branchRow?.google_calendar_id ?? null;
-        const firstStaff = staff.data?.find((x) => x.id === rows[0].staffId);
+        const firstAssigned = cats.find((c) => c.staffId)?.staffId ?? null;
+        const firstStaff = staff.data?.find((x) => x.id === firstAssigned);
         try {
-          const descLines = rows.map(
-            (r) => `• ${r.name} (${staffName(r.staffId)}) — ${money(r.price)}`,
+          const descLines = cats.map(
+            (c) => `• ${c.category} — ${staffName(c.staffId)}`,
           );
           descLines.push('');
-          descLines.push(`Total: ${money(total)}`);
           descLines.push(`Abono: ${money(dep)}`);
-          descLines.push(`Saldo: ${money(Math.max(0, total - dep))}`);
+          descLines.push('Detalle y total: se cargan al atender.');
           googleEventId = await createCalendarEvent({
-            summary: `${rows.map((r) => r.name).join(', ')} — ${clientLabel} (abono ${money(dep)})`,
+            summary: `${cats.map((c) => c.category).join(', ')} — ${clientLabel} (abono ${money(dep)})`,
             description: descLines.join('\n'),
             startLocal,
             endLocal,
@@ -410,7 +475,6 @@ function NewAppointment() {
             colorHex: firstStaff?.color,
           });
         } catch {
-          // Si Google falla (permiso/red), igual guardamos la cita local.
           googleEventId = null;
         }
       }
@@ -422,7 +486,7 @@ function NewAppointment() {
         stmts.push({
           sql: `INSERT INTO customer (id, organization_id, first_name, last_name, phone)
                 VALUES (?, ?, ?, ?, ?)`,
-          args: [custId, orgId, firstName.trim(), lastName.trim() || null, phone.trim() || null],
+          args: [custId, orgId, firstName.trim(), lastName.trim() || null, newPhone || null],
         });
       }
 
@@ -447,22 +511,16 @@ function NewAppointment() {
         ],
       });
 
-      for (const r of rows) {
+      // Una fila por categoría: sin servicio todavía (service_id/product_id NULL),
+      // el estilista queda asignado y el detalle se completa en Atención.
+      for (const c of cats) {
         stmts.push({
           sql: `INSERT INTO appointment_item
-                  (id, appointment_id, service_id, product_id, description, quantity,
-                   list_unit_price, discount_amount, final_unit_price, assigned_staff_id)
-                VALUES (?, ?, ?, NULL, ?, 1, ?, ?, ?, ?)`,
-          args: [
-            genId(),
-            apptId,
-            r.serviceId,
-            r.name,
-            r.price,
-            r.discount,
-            Math.max(0, r.price - r.discount),
-            r.staffId || null,
-          ],
+                  (id, appointment_id, service_id, product_id, category, description,
+                   quantity, list_unit_price, discount_amount, final_unit_price,
+                   assigned_staff_id)
+                VALUES (?, ?, NULL, NULL, ?, ?, 1, 0, 0, 0, ?)`,
+          args: [genId(), apptId, c.category, c.category, c.staffId || null],
         });
       }
 
@@ -525,11 +583,9 @@ function NewAppointment() {
       setError(e instanceof Error ? e.message : 'No se pudo agendar.'),
   });
 
-  // Al confirmar: valida disponibilidad; si hay avisos, los muestra y espera
-  // que el usuario decida (modificar o agendar igual).
   function attemptSchedule(force: boolean) {
     setError('');
-    if (rows.length === 0) return;
+    if (cats.length === 0) return;
     if (!force) {
       const warnings = checkAvailability();
       if (warnings.length) {
@@ -541,12 +597,133 @@ function NewAppointment() {
     save.mutate();
   }
 
-  return (
-    <div className="mx-auto max-w-6xl space-y-6">
-      <Header title="Agendar cita" onBack={() => navigate(ROUTES.calendar)} />
+  const canContinue = cats.length > 0;
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="space-y-4 lg:col-span-2">
+  return (
+    <div className="mx-auto w-full max-w-5xl space-y-5 pb-24">
+      <Header
+        title="Agendar cita"
+        onBack={() =>
+          step === 2 ? setStep(1) : navigate(ROUTES.calendar)
+        }
+      />
+
+      {/* Indicador de pasos */}
+      <div className="flex items-center gap-2 text-sm">
+        <StepDot n={1} label="Qué y cuándo" active={step === 1} done={step > 1} />
+        <span className="h-px flex-1 bg-white/10" />
+        <StepDot n={2} label="Cliente y abono" active={step === 2} done={false} />
+      </div>
+
+      {step === 1 && (
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+          {/* Categorías + estilista */}
+          <Card>
+            <CardHeader
+              title="¿Qué se va a hacer?"
+              subtitle="Tocá una o varias categorías. El detalle se carga al atender."
+            />
+            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+              {SERVICE_CATEGORIES.map((c) => {
+                const on = isCatOn(c);
+                return (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => toggleCat(c)}
+                    className={cn(
+                      'flex min-h-[64px] items-center justify-center rounded-2xl border p-3 text-center text-sm font-medium transition active:scale-[0.97]',
+                      on
+                        ? 'border-gold/60 bg-gold/15 text-gold-100 shadow-gold-glow'
+                        : 'border-white/10 bg-white/[0.03] text-white/75 hover:bg-white/[0.06]',
+                    )}
+                  >
+                    {c}
+                  </button>
+                );
+              })}
+            </div>
+
+            {cats.length > 0 && (
+              <div className="mt-4 space-y-2">
+                <p className="text-xs font-medium text-white/50">
+                  Estilista por categoría (opcional)
+                </p>
+                {cats.map((c) => (
+                  <div
+                    key={c.category}
+                    className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-2.5"
+                  >
+                    <span className="min-w-[92px] shrink-0 text-sm font-medium text-white">
+                      {c.category}
+                    </span>
+                    <div className="flex-1">
+                      <Select
+                        value={c.staffId}
+                        onChange={(e) => setCatStaff(c.category, e.target.value)}
+                      >
+                        <option value="">Sin asignar</option>
+                        {staff.data?.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {fullName(s.first_name, s.last_name)}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => toggleCat(c.category)}
+                      className="rounded-lg p-2 text-white/40 hover:bg-white/10 hover:text-white"
+                      title="Quitar"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+
+          {/* Disponibilidad: React Big Calendar */}
+          <Card>
+            <CardHeader
+              title="¿Cuándo?"
+              subtitle="Tocá un hueco libre. En dorado, tu cita."
+            />
+            <SlotPicker
+              events={calEvents}
+              date={new Date(`${date}T${time}:00`)}
+              view={calView}
+              onView={setCalView}
+              onNavigate={(d) => {
+                setDate(ymdLocal(d));
+                setConflicts([]);
+              }}
+              onSelectSlot={(start) => {
+                setDate(ymdLocal(start));
+                setTime(
+                  `${String(start.getHours()).padStart(2, '0')}:${String(
+                    start.getMinutes(),
+                  ).padStart(2, '0')}`,
+                );
+                setConflicts([]);
+              }}
+            />
+            <p className="mt-3 flex items-center justify-between text-sm">
+              <span className="text-white/50">Elegido</span>
+              <span className="font-medium text-white">
+                {dayLabel(date).wd} {dayLabel(date).dm} · {time} ·{' '}
+                <span className="text-white/50">
+                  {fmtDuration(reservedMinutes || DEFAULT_SERVICE_MINUTES)}
+                </span>
+              </span>
+            </p>
+          </Card>
+        </div>
+      )}
+
+      {step === 2 && (
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
           {/* Cliente */}
           <Card>
             <CardHeader title="Cliente" />
@@ -591,7 +768,6 @@ function NewAppointment() {
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
                   <input
                     ref={searchRef}
-                    autoFocus
                     value={clientSearch}
                     onChange={(e) => setClientSearch(e.target.value)}
                     onKeyDown={(e) => {
@@ -612,15 +788,13 @@ function NewAppointment() {
                       <li key={c.id}>
                         <button
                           onClick={() => pickExisting(c)}
-                          className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-white/10"
+                          className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left hover:bg-white/10"
                         >
                           <span className="text-sm text-white/90">
                             {fullName(c.first_name, c.last_name)}
                           </span>
                           {c.phone && (
-                            <span className="text-xs text-white/40">
-                              {c.phone}
-                            </span>
+                            <span className="text-xs text-white/40">{c.phone}</span>
                           )}
                         </button>
                       </li>
@@ -629,15 +803,12 @@ function NewAppointment() {
                     <li>
                       <button
                         onClick={startNewClient}
-                        className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-gold-200 hover:bg-white/10"
+                        className="flex w-full items-center gap-2 px-3 py-3 text-left text-gold-200 hover:bg-white/10"
                       >
                         <UserPlus className="h-4 w-4 shrink-0" />
                         <span className="text-sm">
                           {clientMatches.length === 0 ? (
-                            <>
-                              Enter para crear «{clientSearch.trim()}» como
-                              cliente nuevo
-                            </>
+                            <>Crear «{clientSearch.trim()}» como cliente nuevo</>
                           ) : (
                             <>Crear «{clientSearch.trim()}» como cliente nuevo</>
                           )}
@@ -650,274 +821,32 @@ function NewAppointment() {
             )}
 
             {newClient && (
-              <Input
-                ref={phoneRef}
-                className="mt-3"
-                label="WhatsApp"
-                placeholder="Ej. 0991234567"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-              />
+              <div className="mt-3">
+                <PhoneInput
+                  ref={phoneRef}
+                  label="WhatsApp"
+                  value={phone}
+                  onChange={setPhone}
+                />
+              </div>
             )}
           </Card>
 
-          {/* Servicios */}
-          <Card>
+          {/* Pago / abono */}
+          <Card gold>
             <CardHeader
-              title="Servicios"
-              subtitle="Elegí servicio y estilista: se agrega solo"
+              title="Pago"
+              subtitle="Elegí el abono para reservar la cita"
             />
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <Select
-                label="Categoría"
-                value={category}
-                onChange={(e) => {
-                  setCategory(e.target.value);
-                  setServiceId('');
-                }}
-              >
-                <option value="">Todas</option>
-                {SERVICE_CATEGORIES.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </Select>
-              <Select
-                label="Servicio"
-                value={serviceId}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (v && staffId) addRowWith(v, staffId);
-                  else setServiceId(v);
-                }}
-              >
-                <option value="">Seleccionar…</option>
-                {filteredServices.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} · {money(s.base_price)} ·{' '}
-                    {fmtDuration(s.duration_minutes ?? DEFAULT_SERVICE_MINUTES)}
-                  </option>
-                ))}
-              </Select>
-              <Select
-                label="Estilista"
-                value={staffId}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (v && serviceId) addRowWith(serviceId, v);
-                  else setStaffId(v);
-                }}
-              >
-                <option value="">Sin asignar</option>
-                {staff.data?.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {fullName(s.first_name, s.last_name)}
-                  </option>
-                ))}
-              </Select>
-            </div>
-
-            <div className="mt-4">
-              {rows.length === 0 ? (
-                <EmptyState
-                  icon={Scissors}
-                  title="Sin servicios"
-                  description="Agregá uno o más servicios a la cita."
-                />
-              ) : (
-                <ul className="divide-y divide-white/5">
-                  {rows.map((r) => (
-                    <li
-                      key={r.tempId}
-                      className="flex items-center justify-between gap-3 py-3"
-                    >
-                      <div className="flex min-w-0 flex-1 items-center gap-3">
-                        <span
-                          className="h-10 w-1.5 shrink-0 rounded-full"
-                          style={{
-                            backgroundColor:
-                              staff.data?.find((s) => s.id === r.staffId)
-                                ?.color || '#64748b',
-                          }}
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium text-white">
-                            {r.name}
-                            <span className="ml-2 inline-flex items-center gap-0.5 text-xs font-normal text-white/40">
-                              <Clock className="h-3 w-3" /> {fmtDuration(r.duration)}
-                            </span>
-                          </p>
-                          <div className="mt-1 max-w-[220px]">
-                            <Select
-                              value={r.staffId}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setRows((rs) =>
-                                  rs.map((x) =>
-                                    x.tempId === r.tempId
-                                      ? { ...x, staffId: v }
-                                      : x,
-                                  ),
-                                );
-                                setConflicts([]);
-                              }}
-                            >
-                              <option value="">Sin asignar</option>
-                              {staff.data?.map((s) => (
-                                <option key={s.id} value={s.id}>
-                                  {fullName(s.first_name, s.last_name)}
-                                </option>
-                              ))}
-                            </Select>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-3">
-                        <span className="kpi-gold text-sm">
-                          {money(r.price)}
-                        </span>
-                        <button
-                          onClick={() =>
-                            setRows((rs) =>
-                              rs.filter((x) => x.tempId !== r.tempId),
-                            )
-                          }
-                          className="text-white/40 hover:text-danger"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </Card>
-
-          {/* Disponibilidad del día */}
-          <Card>
-            <CardHeader
-              title="Disponibilidad"
-              subtitle="Elegí día y hora; tocá un hueco libre en la barra"
-            />
-
-            {/* Controles de fecha / hora */}
-            <div className="mb-3 flex flex-wrap items-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setDate(addDaysISO(date, -1));
-                  setConflicts([]);
-                }}
-                disabled={date <= todayLocalISO()}
-                className="rounded-lg border border-white/10 p-2.5 text-white/60 hover:bg-white/10 hover:text-white disabled:opacity-30"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </button>
-              <Input
-                label="Fecha"
-                type="date"
-                min={todayLocalISO()}
-                value={date}
-                onChange={(e) => {
-                  setDate(e.target.value);
-                  setConflicts([]);
-                }}
-                className="w-40"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  setDate(addDaysISO(date, 1));
-                  setConflicts([]);
-                }}
-                className="rounded-lg border border-white/10 p-2.5 text-white/60 hover:bg-white/10 hover:text-white"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </button>
-              <div className="w-28">
-                <Select
-                  label="Hora"
-                  value={time}
-                  onChange={(e) => {
-                    setTime(e.target.value);
-                    setConflicts([]);
-                  }}
-                >
-                  {!TIME_SLOTS.includes(time) && (
-                    <option value={time}>{time}</option>
-                  )}
-                  {TIME_SLOTS.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-            </div>
-
-            {/* Tira de días (navegación horizontal) */}
-            <div className="mb-4 flex gap-1.5 overflow-x-auto pb-1">
-              {dayStrip.map((d) => {
-                const lbl = dayLabel(d);
-                const active = d === date;
-                return (
-                  <button
-                    key={d}
-                    type="button"
-                    onClick={() => {
-                      setDate(d);
-                      setConflicts([]);
-                    }}
-                    className={cn(
-                      'flex min-w-[52px] shrink-0 flex-col items-center rounded-lg border px-2 py-1.5 text-center transition',
-                      active
-                        ? 'border-gold/50 bg-gold/15 text-gold-100'
-                        : 'border-white/10 text-white/60 hover:bg-white/5',
-                    )}
-                  >
-                    <span className="text-[10px] uppercase">{lbl.wd}</span>
-                    <span className="text-xs font-medium">{lbl.dm}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <AvailabilityTimeline
-              date={date}
-              loading={dayAppts.isLoading}
-              staffList={staff.data ?? []}
-              bookedByStaff={bookedByStaff}
-              proposalStart={toMinutes(time)}
-              proposalByStaff={staffBlocks}
-              onPick={(hhmm) => {
-                setTime(hhmm);
-                setConflicts([]);
-              }}
-            />
-          </Card>
-        </div>
-
-        {/* Resumen */}
-        <div className="lg:col-span-1">
-          <Card gold className="sticky top-4">
-            <CardHeader title="Resumen" />
             <div className="space-y-4">
-              <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm">
-                <span className="text-white/50">Cuándo</span>
-                <span className="font-medium text-white">
-                  {dayLabel(date).dm} · {time}
-                </span>
-              </div>
-
               <div>
-                <span className="mb-1 block text-xs font-medium text-white/60">
-                  Abono
+                <span className="mb-2 block text-sm font-medium text-white/80">
+                  Abono <span className="text-danger">*</span>
                 </span>
-                <div className="flex flex-wrap gap-2">
+                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
                   {[5, 10, 20].map((v) => {
-                    const active = !customDeposit && deposit === String(v);
+                    const active =
+                      depositChosen && !customDeposit && deposit === String(v);
                     return (
                       <button
                         key={v}
@@ -925,11 +854,12 @@ function NewAppointment() {
                         onClick={() => {
                           setDeposit(String(v));
                           setCustomDeposit(false);
+                          setDepositChosen(true);
                         }}
                         className={cn(
-                          'rounded-lg border px-3 py-1.5 text-sm transition',
+                          'min-h-[52px] rounded-xl border text-base font-semibold transition active:scale-[0.97]',
                           active
-                            ? 'border-gold/50 bg-gold/15 text-gold-100'
+                            ? 'border-gold/60 bg-gold/15 text-gold-100 shadow-gold-glow'
                             : 'border-white/10 text-white/70 hover:bg-white/5',
                         )}
                       >
@@ -942,11 +872,12 @@ function NewAppointment() {
                     onClick={() => {
                       setCustomDeposit(true);
                       setDeposit('0');
+                      setDepositChosen(true);
                     }}
                     className={cn(
-                      'rounded-lg border px-3 py-1.5 text-sm transition',
-                      customDeposit
-                        ? 'border-gold/50 bg-gold/15 text-gold-100'
+                      'min-h-[52px] rounded-xl border text-base font-semibold transition active:scale-[0.97]',
+                      depositChosen && customDeposit
+                        ? 'border-gold/60 bg-gold/15 text-gold-100 shadow-gold-glow'
                         : 'border-white/10 text-white/70 hover:bg-white/5',
                     )}
                   >
@@ -960,53 +891,84 @@ function NewAppointment() {
                     min="0"
                     step="0.01"
                     autoFocus
-                    placeholder="Valor del abono"
+                    placeholder="Valor del abono (0 = sin abono)"
                     value={deposit}
                     onChange={(e) => setDeposit(e.target.value)}
                   />
                 )}
-
-                {dep > 0 && (
-                  <div className="mt-3 space-y-1">
-                    <span className="block text-xs font-medium text-white/60">
-                      Cobrar seña en
-                    </span>
-                    <Select
-                      value={effectiveDest}
-                      onChange={(e) => setDepositDest(e.target.value)}
-                    >
-                      {banks.data?.map((b) => (
-                        <option key={b.id} value={b.id}>
-                          {b.name} (transferencia)
-                        </option>
-                      ))}
-                      <option value="cash">Efectivo (caja)</option>
-                    </Select>
-                    {depositIsCash && !openCash.data && (
-                      <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
-                        <AlertTriangle className="h-3.5 w-3.5" /> No hay caja
-                        abierta: la seña se registra pero no entra al efectivo.
-                      </p>
-                    )}
-                  </div>
+                {!depositChosen && (
+                  <p className="mt-2 text-xs text-white/40">
+                    Tocá una opción de abono para poder agendar.
+                  </p>
                 )}
               </div>
 
-              <SummaryRows
-                subtotal={subtotal}
-                discountTotal={discountTotal}
-                total={total}
-                deposit={dep}
-                reservedMinutes={reservedMinutes}
-              />
+              {dep > 0 && (
+                <div className="space-y-1">
+                  <span className="block text-xs font-medium text-white/60">
+                    Cobrar seña en
+                  </span>
+                  <Select
+                    value={effectiveDest}
+                    onChange={(e) => setDepositDest(e.target.value)}
+                  >
+                    {banks.data?.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name} (transferencia)
+                      </option>
+                    ))}
+                    <option value="cash">Efectivo (caja)</option>
+                  </Select>
+                  {depositIsCash && !openCash.data && (
+                    <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
+                      <AlertTriangle className="h-3.5 w-3.5" /> No hay caja
+                      abierta: la seña se registra pero no entra al efectivo.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          </Card>
 
-              {isGoogleCalendarEnabled() ? (
+          {/* Resumen (ancho completo) */}
+          <Card className="lg:col-span-2">
+            <CardHeader title="Resumen" />
+            <div className="space-y-4">
+              <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-white/50">Cuándo</span>
+                  <span className="font-medium text-white">
+                    {dayLabel(date).wd} {dayLabel(date).dm} · {time}
+                  </span>
+                </div>
+                <div className="mt-2 flex items-center justify-between text-sm">
+                  <span className="text-white/50">Tiempo reservado</span>
+                  <span className="font-medium text-white">
+                    {fmtDuration(reservedMinutes || DEFAULT_SERVICE_MINUTES)}
+                  </span>
+                </div>
+                {depositChosen && (
+                  <div className="mt-2 flex items-center justify-between text-sm">
+                    <span className="text-white/50">Abono</span>
+                    <span className="kpi-gold font-medium">{money(dep)}</span>
+                  </div>
+                )}
+                <ul className="mt-3 space-y-1.5 border-t border-white/10 pt-3">
+                  {cats.map((c) => (
+                    <li
+                      key={c.category}
+                      className="flex items-center justify-between text-sm"
+                    >
+                      <span className="text-white/80">{c.category}</span>
+                      <span className="text-white/50">{staffName(c.staffId)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              {isGoogleCalendarEnabled() && (
                 <p className="text-xs text-white/40">
-                  Se reservarán {fmtDuration(reservedMinutes)} en Google Calendar.
-                </p>
-              ) : (
-                <p className="text-xs text-white/30">
-                  Configurá VITE_GOOGLE_CLIENT_ID para sincronizar con Google.
+                  Se reservarán {fmtDuration(reservedMinutes || DEFAULT_SERVICE_MINUTES)} en Google Calendar.
                 </p>
               )}
 
@@ -1025,14 +987,14 @@ function NewAppointment() {
                   <div className="mt-3 flex gap-2">
                     <Button
                       variant="outline"
-                      size="sm"
+                      size="lg"
                       className="flex-1"
                       onClick={() => setConflicts([])}
                     >
                       Modificar
                     </Button>
                     <Button
-                      size="sm"
+                      size="lg"
                       className="flex-1"
                       loading={save.isPending}
                       onClick={() => attemptSchedule(true)}
@@ -1042,22 +1004,170 @@ function NewAppointment() {
                   </div>
                 </div>
               )}
-
-              {conflicts.length === 0 && (
-                <Button
-                  className="w-full"
-                  size="lg"
-                  disabled={rows.length === 0}
-                  loading={save.isPending}
-                  onClick={() => attemptSchedule(false)}
-                >
-                  <Check className="h-4 w-4" /> Agendar cita
-                </Button>
-              )}
             </div>
           </Card>
         </div>
+      )}
+
+      {/* Barra de acción fija (alcance táctil) */}
+      <div className="fixed inset-x-0 bottom-0 z-20 border-t border-white/10 bg-ink-950/90 px-4 py-3 backdrop-blur lg:px-8">
+        <div className="mx-auto flex w-full max-w-5xl items-center gap-3">
+          {step === 1 ? (
+            <>
+              <p className="flex-1 text-sm text-white/50">
+                {cats.length === 0
+                  ? 'Elegí al menos una categoría'
+                  : `${cats.length} categoría${cats.length > 1 ? 's' : ''} · ${dayLabel(date).dm} ${time}`}
+              </p>
+              <Button
+                size="lg"
+                disabled={!canContinue}
+                onClick={() => setStep(2)}
+              >
+                Continuar <ArrowRight className="h-4 w-4" />
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                variant="outline"
+                size="lg"
+                onClick={() => setStep(1)}
+              >
+                <ArrowLeft className="h-4 w-4" /> Atrás
+              </Button>
+              {conflicts.length === 0 && (
+                <>
+                  <p className="hidden flex-1 text-sm text-white/50 sm:block">
+                    {!hasClient
+                      ? 'Elegí el cliente'
+                      : !depositChosen
+                        ? 'Elegí el abono'
+                        : 'Todo listo para agendar'}
+                  </p>
+                  <Button
+                    className="flex-1 sm:flex-none"
+                    size="lg"
+                    disabled={cats.length === 0 || !hasClient || !depositChosen}
+                    loading={save.isPending}
+                    onClick={() => attemptSchedule(false)}
+                  >
+                    <Check className="h-4 w-4" /> Agendar cita
+                  </Button>
+                </>
+              )}
+            </>
+          )}
+        </div>
       </div>
+    </div>
+  );
+}
+
+/** Punto/etiqueta de un paso del asistente. */
+function StepDot({
+  n,
+  label,
+  active,
+  done,
+}: {
+  n: number;
+  label: string;
+  active: boolean;
+  done: boolean;
+}) {
+  return (
+    <span className="flex items-center gap-2">
+      <span
+        className={cn(
+          'flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold',
+          active
+            ? 'bg-gold text-ink-950'
+            : done
+              ? 'bg-gold/25 text-gold-100'
+              : 'bg-white/10 text-white/50',
+        )}
+      >
+        {done ? <Check className="h-4 w-4" /> : n}
+      </span>
+      <span
+        className={cn(
+          'text-sm',
+          active ? 'font-medium text-white' : 'text-white/50',
+        )}
+      >
+        {label}
+      </span>
+    </span>
+  );
+}
+
+/** Selector de día y hora con react-big-calendar (semana/día, táctil). */
+function SlotPicker({
+  events,
+  date,
+  view,
+  onView,
+  onNavigate,
+  onSelectSlot,
+}: {
+  events: {
+    id: string;
+    title: string;
+    start: Date;
+    end: Date;
+    color: string;
+    proposed: boolean;
+  }[];
+  date: Date;
+  view: View;
+  onView: (v: View) => void;
+  onNavigate: (d: Date) => void;
+  onSelectSlot: (start: Date) => void;
+}) {
+  const eventPropGetter = useCallback((event: object) => {
+    const e = event as { color: string; proposed: boolean };
+    return e.proposed
+      ? {
+          style: {
+            backgroundColor: '#f4c752',
+            color: '#1a1205',
+            fontWeight: 700,
+            border: '2px solid #f4c752',
+          },
+        }
+      : {
+          style: {
+            backgroundColor: e.color || '#64748b',
+            color: '#0b0c12',
+            fontWeight: 600,
+            opacity: 0.5,
+          },
+        };
+  }, []);
+
+  return (
+    <div className="medusa-rbc" style={{ height: 540 }}>
+      <Calendar
+        localizer={rbcLocalizer}
+        culture="es"
+        events={events}
+        date={date}
+        view={view}
+        onView={onView}
+        onNavigate={onNavigate}
+        views={['week', 'day']}
+        step={30}
+        timeslots={1}
+        min={new Date(1970, 0, 1, 7, 0)}
+        max={new Date(1970, 0, 1, 21, 0)}
+        selectable
+        longPressThreshold={80}
+        onSelectSlot={(slot) => onSelectSlot(new Date(slot.start))}
+        messages={rbcMessages}
+        eventPropGetter={eventPropGetter}
+        style={{ height: '100%' }}
+      />
     </div>
   );
 }
@@ -1072,6 +1182,8 @@ interface ApptHead {
   end_at: string;
   customer_id: string | null;
   customer_name: string | null;
+  created_at: string | null;
+  created_by_name: string | null;
   google_calendar_id: string | null;
   google_calendar_event_id: string | null;
 }
@@ -1080,6 +1192,7 @@ interface ItemRow {
   id: string;
   service_id: string | null;
   product_id: string | null;
+  category: string | null;
   description: string;
   quantity: number;
   list_unit_price: number;
@@ -1093,21 +1206,29 @@ interface ItemRow {
 
 function EditAppointment({ id }: { id: string }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const qc = useQueryClient();
   const services = useServices();
   const products = useProducts();
   const staff = useStaff();
+
+  // Volver a la pantalla de origen (tareas, agenda, dashboard, clientes…). Si se
+  // entró por link directo (sin historial) cae a la agenda.
+  const goBack = () =>
+    location.key !== 'default' ? navigate(-1) : navigate(ROUTES.calendar);
 
   const head = useQuery({
     queryKey: ['appointment-head', id],
     queryFn: () =>
       queryOne<ApptHead>(
         `SELECT a.id, a.status, a.deposit_amount, a.start_at, a.end_at,
-                a.customer_id,
+                a.customer_id, a.created_at,
                 a.google_calendar_id, a.google_calendar_event_id,
-                c.first_name || CASE WHEN c.last_name IS NOT NULL THEN ' ' || c.last_name ELSE '' END AS customer_name
+                c.first_name || CASE WHEN c.last_name IS NOT NULL THEN ' ' || c.last_name ELSE '' END AS customer_name,
+                u.full_name AS created_by_name
            FROM appointment a
            LEFT JOIN customer c ON c.id = a.customer_id
+           LEFT JOIN app_user u ON u.id = a.created_by
           WHERE a.id = ?`,
         [id],
       ),
@@ -1117,7 +1238,7 @@ function EditAppointment({ id }: { id: string }) {
     queryKey: ['appointment-items', id],
     queryFn: () =>
       query<ItemRow>(
-        `SELECT ai.id, ai.service_id, ai.product_id, ai.description, ai.quantity,
+        `SELECT ai.id, ai.service_id, ai.product_id, ai.category, ai.description, ai.quantity,
                 ai.list_unit_price, ai.discount_amount, ai.final_unit_price,
                 ai.assigned_staff_id,
                 s.first_name || CASE WHEN s.last_name IS NOT NULL THEN ' ' || s.last_name ELSE '' END AS staff_name,
@@ -1145,12 +1266,9 @@ function EditAppointment({ id }: { id: string }) {
   const depositPaid = deposits.data?.paid ?? 0;
 
   const serviceItems = (items.data ?? []).filter((i) => i.service_id);
-  const productItems = (items.data ?? []).filter((i) => i.product_id);
 
-  // Si se llega con ?atender=1 desde la agenda, se abre directo en modo atención.
-  const [params] = useSearchParams();
-  const [attending, setAttending] = useState(() => params.get('atender') === '1');
-  const showProducts = attending || productItems.length > 0;
+  // Panel de alta activo debajo de la tabla de detalle.
+  const [adding, setAdding] = useState<'service' | 'product' | null>(null);
 
   const orgId = useOrgId();
   const branchId = useBranchId();
@@ -1192,6 +1310,7 @@ function EditAppointment({ id }: { id: string }) {
     onSuccess: () => {
       setServiceId('');
       setStaffId('');
+      setAdding(null);
       invalidate();
     },
   });
@@ -1256,6 +1375,7 @@ function EditAppointment({ id }: { id: string }) {
     onSuccess: () => {
       setProductId('');
       setQty('1');
+      setAdding(null);
       invalidate();
     },
   });
@@ -1264,6 +1384,34 @@ function EditAppointment({ id }: { id: string }) {
     mutationFn: (itemId: string) =>
       execute('DELETE FROM appointment_item WHERE id = ?', [itemId]),
     onSuccess: invalidate,
+  });
+
+  // Edición en línea de una celda del detalle (descripción, precios, cantidad).
+  const updateItem = useMutation({
+    mutationFn: ({
+      itemId,
+      patch,
+    }: {
+      itemId: string;
+      patch: Record<string, number | string>;
+    }) => {
+      const cols = Object.keys(patch);
+      const sets = cols.map((c) => `${c} = ?`).join(', ');
+      const args = [...cols.map((c) => patch[c]), itemId];
+      return execute(
+        `UPDATE appointment_item SET ${sets} WHERE id = ?`,
+        args,
+      );
+    },
+    onSuccess: invalidate,
+  });
+
+  // Reglas de comisión vigentes: mismo cálculo que al confirmar la venta, para
+  // mostrar el % del estilista por línea y el resumen de comisiones.
+  const commissionRules = useQuery({
+    queryKey: ['commission-rules', orgId],
+    enabled: !!orgId,
+    queryFn: () => loadCommissionRules(),
   });
 
   const setStatus = useMutation({
@@ -1279,18 +1427,11 @@ function EditAppointment({ id }: { id: string }) {
     },
   });
 
-  const saveDeposit = useMutation({
-    mutationFn: (amount: number) =>
-      execute(
-        'UPDATE appointment SET deposit_amount = ?, deposit_required = ?, updated_at = ? WHERE id = ?',
-        [amount, amount > 0 ? 1 : 0, new Date().toISOString(), id],
-      ),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['appointment-head', id] });
-    },
-  });
-
   const all = items.data ?? [];
+  // Vendibles: solo servicios/productos reales. Las filas de categoría (sin
+  // servicio ni producto) son la intención de la reserva y no van a la venta
+  // (violarían el CHECK de sale_item y sumarían líneas en $0).
+  const sellableItems = all.filter((i) => i.service_id || i.product_id);
   const subtotal = all.reduce((a, i) => a + i.list_unit_price * i.quantity, 0);
   const discountTotal = all.reduce(
     (a, i) => a + i.discount_amount * i.quantity,
@@ -1311,8 +1452,8 @@ function EditAppointment({ id }: { id: string }) {
   if (head.isLoading) return null;
   if (!head.data) {
     return (
-      <div className="mx-auto max-w-6xl space-y-6">
-        <Header title="Cita" onBack={() => navigate(ROUTES.calendar)} />
+      <div className="space-y-6">
+        <Header title="Cita" onBack={goBack} />
         <Card>
           <EmptyState icon={UserRound} title="Cita no encontrada" />
         </Card>
@@ -1321,105 +1462,391 @@ function EditAppointment({ id }: { id: string }) {
   }
 
   const meta = APPOINTMENT_STATUS[head.data.status];
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  const fechaLarga = new Date(head.data.start_at).toLocaleDateString('es-EC', {
+    weekday: 'long',
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+  });
+
+  // created_at viene de la base como "YYYY-MM-DD HH:MM:SS" en UTC (sin zona):
+  // lo normalizo a ISO-UTC para que dateShort/timeShort lo pasen a hora local.
+  const createdIso = head.data.created_at
+    ? head.data.created_at.includes('T')
+      ? head.data.created_at
+      : `${head.data.created_at.replace(' ', 'T')}Z`
+    : null;
+
+  const rules = commissionRules.data;
+  const itemCommission = (i: ItemRow) =>
+    i.service_id && i.assigned_staff_id && rules
+      ? commissionForItem(
+          i.assigned_staff_id,
+          i.service_id,
+          i.final_unit_price * i.quantity,
+          rules,
+        )
+      : null;
+
+  const commissionByStaff = (() => {
+    const m = new Map<
+      string,
+      { id: string; name: string; color: string | null; amount: number }
+    >();
+    for (const i of serviceItems) {
+      const c = itemCommission(i);
+      if (!c || !i.assigned_staff_id) continue;
+      const prev = m.get(i.assigned_staff_id);
+      if (prev) prev.amount += c.commission_amount;
+      else
+        m.set(i.assigned_staff_id, {
+          id: i.assigned_staff_id,
+          name: i.staff_name ?? 'Sin nombre',
+          color: i.staff_color,
+          amount: c.commission_amount,
+        });
+    }
+    return [...m.values()];
+  })();
+  const totalCommission = commissionByStaff.reduce((a, s) => a + s.amount, 0);
+
+  const totalServicios = serviceItems.reduce(
+    (a, i) => a + i.final_unit_price * i.quantity,
+    0,
+  );
+  const totalProductos = all
+    .filter((i) => i.product_id)
+    .reduce((a, i) => a + i.final_unit_price * i.quantity, 0);
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <div className="space-y-6">
       <Header
         title="Atención de cita"
-        onBack={() => navigate(ROUTES.calendar)}
+        onBack={goBack}
         right={<Badge tone={meta.tone}>{meta.label}</Badge>}
       />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
+          {/* Cliente + datos de la cita */}
           <Card>
-            <CardHeader
-              title={head.data.customer_name ?? 'Sin cliente'}
-              subtitle="Cliente"
-              action={
-                !showProducts ? (
-                  <Button size="sm" onClick={() => setAttending(true)}>
-                    <Stethoscope className="h-4 w-4" /> Atender
-                  </Button>
-                ) : undefined
-              }
-            />
-          </Card>
-
-          {/* Servicios */}
-          <Card>
-            <CardHeader
-              title="Servicios"
-              subtitle="Elegí servicio y estilista: se agrega solo"
-            />
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <Select
-                label="Categoría"
-                value={category}
-                onChange={(e) => {
-                  setCategory(e.target.value);
-                  setServiceId('');
-                }}
-              >
-                <option value="">Todas</option>
-                {SERVICE_CATEGORIES.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </Select>
-              <Select
-                label="Servicio"
-                value={serviceId}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (v && staffId) addService.mutate({ sid: v, stid: staffId });
-                  else setServiceId(v);
-                }}
-              >
-                <option value="">Seleccionar…</option>
-                {filteredServices.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} · {money(s.base_price)}
-                  </option>
-                ))}
-              </Select>
-              <Select
-                label="Estilista"
-                value={staffId}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (v && serviceId)
-                    addService.mutate({ sid: serviceId, stid: v });
-                  else setStaffId(v);
-                }}
-              >
-                <option value="">Sin asignar</option>
-                {staff.data?.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {fullName(s.first_name, s.last_name)}
-                  </option>
-                ))}
-              </Select>
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-xs uppercase tracking-wide text-white/40">
+                  Cliente
+                </p>
+                <h2 className="truncate text-xl font-semibold text-white">
+                  {head.data.customer_name ?? 'Sin cliente'}
+                </h2>
+              </div>
+              <div className="flex flex-wrap gap-x-8 gap-y-1 text-sm">
+                <div>
+                  <span className="text-white/40">Fecha </span>
+                  <span className="text-white capitalize">{fechaLarga}</span>
+                </div>
+                <div>
+                  <span className="text-white/40">Hora </span>
+                  <span className="text-white">
+                    {timeShort(head.data.start_at)} – {timeShort(head.data.end_at)}
+                  </span>
+                </div>
+                {reservedMinutes > 0 && (
+                  <div>
+                    <span className="text-white/40">Duración </span>
+                    <span className="text-white">
+                      {fmtDuration(reservedMinutes)}
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
 
-            <ItemList
-              rows={serviceItems}
-              emptyIcon={Scissors}
-              emptyTitle="Sin servicios"
-              onRemove={(itemId) => removeItem.mutate(itemId)}
-              staffOptions={staff.data ?? []}
-              onReassign={(itemId, newStaff) =>
-                reassign.mutate({ itemId, staffId: newStaff })
-              }
-            />
+            {/* Datos del agendamiento del turno */}
+            <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 border-t border-white/10 pt-3 text-xs text-white/40">
+              <span>
+                Agendado el{' '}
+                <span className="text-white/70">
+                  {dateShort(createdIso)}
+                  {createdIso ? ` · ${timeShort(createdIso)}` : ''}
+                </span>
+              </span>
+              <span>
+                Agendado por{' '}
+                <span className="text-white/70">
+                  {head.data.created_by_name ?? 'Sistema'}
+                </span>
+              </span>
+            </div>
           </Card>
 
-          {/* Productos (solo al atender) */}
-          {showProducts && (
-            <Card>
-              <CardHeader title="Productos" />
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {/* Detalle de venta */}
+          <Card>
+            <CardHeader
+              title="Detalle de venta"
+              subtitle="Clic en una celda para editar el precio, descuento o descripción"
+            />
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr className="text-left text-xs uppercase tracking-wide text-white/40 [&>th]:pb-2 [&>th]:font-medium">
+                    <th className="w-1" />
+                    <th>Descripción</th>
+                    <th>Estilista responsable</th>
+                    <th className="text-right">% Estilista</th>
+                    <th className="text-right">Cant.</th>
+                    <th className="text-right">P. sugerido</th>
+                    <th className="text-right">Descuento</th>
+                    <th className="text-right">P. a cobrar</th>
+                    <th className="w-8" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {all.length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={9}
+                        className="py-8 text-center text-white/40"
+                      >
+                        Sin ítems. Agregá un servicio o producto abajo.
+                      </td>
+                    </tr>
+                  )}
+                  {all.map((i) => {
+                    const c = itemCommission(i);
+                    return (
+                      <tr key={i.id} className="align-middle">
+                        <td className="py-1 pr-1">
+                          <span
+                            className="block h-8 w-1.5 rounded-full"
+                            style={{
+                              backgroundColor:
+                                i.service_id || i.category
+                                  ? i.staff_color || '#64748b'
+                                  : 'transparent',
+                            }}
+                          />
+                        </td>
+                        <td className="py-1 pr-2">
+                          <InlineEdit
+                            value={i.description}
+                            align="left"
+                            onCommit={(v) =>
+                              v.trim() &&
+                              updateItem.mutate({
+                                itemId: i.id,
+                                patch: { description: v.trim() },
+                              })
+                            }
+                          />
+                        </td>
+                        <td className="py-1 pr-2">
+                          {i.service_id || i.category ? (
+                            <Select
+                              value={i.assigned_staff_id ?? ''}
+                              onChange={(e) =>
+                                reassign.mutate({
+                                  itemId: i.id,
+                                  staffId: e.target.value || null,
+                                })
+                              }
+                            >
+                              <option value="">Sin asignar</option>
+                              {(staff.data ?? []).map((s) => (
+                                <option key={s.id} value={s.id}>
+                                  {fullName(s.first_name, s.last_name)}
+                                </option>
+                              ))}
+                            </Select>
+                          ) : (
+                            <span className="text-white/30">—</span>
+                          )}
+                        </td>
+                        <td className="whitespace-nowrap py-1 text-right text-white/70">
+                          {c
+                            ? c.commission_type === 'percentage'
+                              ? `${num(c.commission_rate)}% · ${money(c.commission_amount)}`
+                              : money(c.commission_amount)
+                            : '—'}
+                        </td>
+                        <td className="py-1 text-right">
+                          {i.product_id ? (
+                            <InlineEdit
+                              value={i.quantity}
+                              type="number"
+                              min={1}
+                              onCommit={(v) =>
+                                updateItem.mutate({
+                                  itemId: i.id,
+                                  patch: {
+                                    quantity: Math.max(
+                                      1,
+                                      Math.floor(Number(v) || 1),
+                                    ),
+                                  },
+                                })
+                              }
+                            />
+                          ) : (
+                            <span className="pr-1.5 text-white/50">1</span>
+                          )}
+                        </td>
+                        <td className="py-1 pr-1.5 text-right text-white/50">
+                          {money(i.list_unit_price)}
+                        </td>
+                        <td className="py-1 text-right">
+                          <InlineEdit
+                            value={i.discount_amount}
+                            type="number"
+                            display={money(i.discount_amount)}
+                            onCommit={(v) => {
+                              // Descuento nunca negativo; el neto se recalcula.
+                              const disc = Math.max(0, round2(Number(v) || 0));
+                              updateItem.mutate({
+                                itemId: i.id,
+                                patch: {
+                                  discount_amount: disc,
+                                  final_unit_price: round2(
+                                    i.list_unit_price - disc,
+                                  ),
+                                },
+                              });
+                            }}
+                          />
+                        </td>
+                        <td className="py-1 text-right">
+                          <InlineEdit
+                            value={i.final_unit_price}
+                            type="number"
+                            display={money(i.final_unit_price)}
+                            onCommit={(v) => {
+                              // Si sube por encima del sugerido es un incremento:
+                              // el descuento queda en 0 (nunca negativo).
+                              const fin = round2(Number(v) || 0);
+                              updateItem.mutate({
+                                itemId: i.id,
+                                patch: {
+                                  final_unit_price: fin,
+                                  discount_amount: Math.max(
+                                    0,
+                                    round2(i.list_unit_price - fin),
+                                  ),
+                                },
+                              });
+                            }}
+                          />
+                        </td>
+                        <td className="py-1 pl-1 text-right">
+                          <button
+                            onClick={() => removeItem.mutate(i.id)}
+                            className="text-white/40 hover:text-danger"
+                            title="Eliminar"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                {all.length > 0 && (
+                  <tfoot>
+                    <tr className="border-t-2 border-white/10 text-sm font-semibold [&>td]:pt-3">
+                      <td />
+                      <td className="text-white/50" colSpan={2}>
+                        Totales
+                      </td>
+                      <td className="whitespace-nowrap text-right text-white/70">
+                        {money(totalCommission)}
+                      </td>
+                      <td colSpan={3} />
+                      <td className="kpi-gold text-right">{money(total)}</td>
+                      <td />
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
+
+            {/* Agregar ítems */}
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant={adding === 'service' ? 'gold' : 'outline'}
+                onClick={() =>
+                  setAdding(adding === 'service' ? null : 'service')
+                }
+              >
+                <Scissors className="h-4 w-4" /> Agregar servicio
+              </Button>
+              <Button
+                size="sm"
+                variant={adding === 'product' ? 'gold' : 'outline'}
+                onClick={() =>
+                  setAdding(adding === 'product' ? null : 'product')
+                }
+              >
+                <Package className="h-4 w-4" /> Agregar producto
+              </Button>
+            </div>
+
+            {adding === 'service' && (
+              <div className="mt-3 grid grid-cols-1 gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3 sm:grid-cols-3">
+                <Select
+                  label="Categoría"
+                  value={category}
+                  onChange={(e) => {
+                    setCategory(e.target.value);
+                    setServiceId('');
+                  }}
+                >
+                  <option value="">Todas</option>
+                  {SERVICE_CATEGORIES.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </Select>
+                <Select
+                  label="Servicio"
+                  value={serviceId}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v && staffId)
+                      addService.mutate({ sid: v, stid: staffId });
+                    else setServiceId(v);
+                  }}
+                >
+                  <option value="">Seleccionar…</option>
+                  {filteredServices.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} · {money(s.base_price)}
+                    </option>
+                  ))}
+                </Select>
+                <Select
+                  label="Estilista"
+                  value={staffId}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v && serviceId)
+                      addService.mutate({ sid: serviceId, stid: v });
+                    else setStaffId(v);
+                  }}
+                >
+                  <option value="">Sin asignar</option>
+                  {staff.data?.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {fullName(s.first_name, s.last_name)}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            )}
+
+            {adding === 'product' && (
+              <div className="mt-3 grid grid-cols-2 gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3 sm:grid-cols-4">
                 <div className="sm:col-span-2">
                   <Select
                     label="Producto"
@@ -1449,15 +1876,8 @@ function EditAppointment({ id }: { id: string }) {
                   <Plus className="h-4 w-4" /> Agregar
                 </Button>
               </div>
-
-              <ItemList
-                rows={productItems}
-                emptyIcon={Package}
-                emptyTitle="Sin productos"
-                onRemove={(itemId) => removeItem.mutate(itemId)}
-              />
-            </Card>
-          )}
+            )}
+          </Card>
         </div>
 
         {/* Resumen */}
@@ -1502,50 +1922,90 @@ function EditAppointment({ id }: { id: string }) {
                 </div>
               )}
 
-              {depositPaid > 0 && (
-                <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm">
-                  <span className="text-white/50">Seña cobrada</span>
-                  <span className="font-medium text-emerald-300">
-                    {money(depositPaid)}
+              {/* Totales */}
+              <div className="space-y-2 border-t border-white/10 pt-4 text-sm">
+                <Row label="Subtotal" value={money(subtotal)} />
+                <Row label="Total servicios" value={money(totalServicios)} />
+                <Row label="Total productos" value={money(totalProductos)} />
+                <Row label="Descuentos" value={`−${money(discountTotal)}`} />
+                <div className="flex items-center justify-between border-t border-white/10 pt-2">
+                  <span className="font-medium text-white/70">Total</span>
+                  <span
+                    className={cn(
+                      'font-semibold',
+                      depositPaid > 0 ? 'text-white' : 'kpi-gold text-2xl',
+                    )}
+                  >
+                    {money(total)}
                   </span>
                 </div>
-              )}
+                {depositPaid > 0 && (
+                  <>
+                    <Row
+                      label="Abono ya pagado"
+                      value={`−${money(depositPaid)}`}
+                    />
+                    <div className="flex items-center justify-between border-t border-white/10 pt-2">
+                      <span className="font-medium text-white/70">
+                        Saldo a cobrar
+                      </span>
+                      <span className="kpi-gold text-2xl">
+                        {money(Math.max(0, total - depositPaid))}
+                      </span>
+                    </div>
+                  </>
+                )}
+              </div>
 
-              <SummaryRows
-                subtotal={subtotal}
-                discountTotal={discountTotal}
-                total={total}
-                deposit={depositPaid}
-                reservedMinutes={reservedMinutes}
-              />
+              {/* Comisiones estilistas */}
+              {commissionByStaff.length > 0 && (
+                <div className="space-y-2 border-t border-white/10 pt-4 text-sm">
+                  <p className="text-xs font-medium uppercase tracking-wide text-white/40">
+                    Comisiones estilistas
+                  </p>
+                  {commissionByStaff.map((s) => (
+                    <div
+                      key={s.id}
+                      className="flex items-center justify-between"
+                    >
+                      <span className="flex items-center gap-2 text-white/70">
+                        <span
+                          className="h-2.5 w-2.5 rounded-full"
+                          style={{ backgroundColor: s.color || '#64748b' }}
+                        />
+                        {s.name}
+                      </span>
+                      <span className="text-white">{money(s.amount)}</span>
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between border-t border-white/10 pt-2">
+                    <span className="font-medium text-white/70">
+                      Total comisiones
+                    </span>
+                    <span className="font-semibold text-white">
+                      {money(totalCommission)}
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {head.data.status !== 'attended' && (
                 <Button
                   className="w-full"
-                  disabled={all.length === 0}
+                  disabled={sellableItems.length === 0}
                   onClick={() => setConfirmOpen(true)}
                 >
-                  <Check className="h-4 w-4" /> Confirmar Venta
+                  <Check className="h-4 w-4" /> Confirmar venta
                 </Button>
               )}
 
-              <div className="flex gap-2">
-                <Button
-                  variant="ghost"
-                  className="flex-1"
-                  loading={saveDeposit.isPending}
-                  onClick={() => saveDeposit.mutate(depositPaid)}
-                >
-                  Guardar
-                </Button>
-                <Button
-                  variant="outline"
-                  className="flex-1"
-                  onClick={() => navigate(ROUTES.calendar)}
-                >
-                  Volver
-                </Button>
-              </div>
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => navigate(ROUTES.calendar)}
+              >
+                Volver
+              </Button>
             </div>
           </Card>
         </div>
@@ -1560,7 +2020,7 @@ function EditAppointment({ id }: { id: string }) {
           customerId={head.data.customer_id}
           customerName={head.data.customer_name}
           serviceDate={head.data.start_at}
-          items={all}
+          items={sellableItems}
           subtotal={subtotal}
           discountTotal={discountTotal}
           total={total}
@@ -1832,8 +2292,9 @@ function ConfirmSaleModal({
 }) {
   const qc = useQueryClient();
   // Saldo a cobrar = total − seña ya pagada.
+  // El monto a cobrar es el saldo (total − seña) y no es editable: se cobra
+  // exactamente lo que resta de la venta.
   const balance = Math.max(0, total - depositPaid);
-  const [amount, setAmount] = useState(String(balance));
   const [methodId, setMethodId] = useState('');
   const [reference, setReference] = useState('');
   const [error, setError] = useState('');
@@ -1940,7 +2401,7 @@ function ConfirmSaleModal({
       });
 
       const now = new Date().toISOString();
-      const pay = Number(amount);
+      const pay = balance;
       const stmts: { sql: string; args: (string | number | null)[] }[] = [];
 
       // La seña ya cobrada se atribuye a esta venta (deja de ser "otro ingreso").
@@ -2013,7 +2474,7 @@ function ConfirmSaleModal({
   const canConfirm =
     items.length > 0 &&
     !confirm.isPending &&
-    (Number(amount) === 0 || (!!methodId && Number(amount) > 0));
+    (balance === 0 || (!!methodId && balance > 0));
 
   return (
     <Modal open onClose={onClose} title="Confirmar venta">
@@ -2034,15 +2495,6 @@ function ConfirmSaleModal({
             <span className="kpi-gold">{money(balance)}</span>
           </div>
         </div>
-
-        <Input
-          label="Monto a cobrar"
-          type="number"
-          min="0"
-          step="0.01"
-          value={amount}
-          onChange={(e) => setAmount(e.target.value)}
-        />
 
         <Select
           label="Forma de pago"
@@ -2122,123 +2574,64 @@ function Header({
   );
 }
 
-interface StaffOpt {
-  id: string;
-  first_name: string;
-  last_name: string | null;
-}
-
-function ItemList({
-  rows,
-  emptyIcon,
-  emptyTitle,
-  onRemove,
-  staffOptions,
-  onReassign,
+/** Celda con edición en línea: muestra un valor y, al hacer clic, un input. */
+function InlineEdit({
+  value,
+  display,
+  type = 'text',
+  align = 'right',
+  min,
+  onCommit,
 }: {
-  rows: ItemRow[];
-  emptyIcon: typeof Scissors;
-  emptyTitle: string;
-  onRemove: (id: string) => void;
-  staffOptions?: StaffOpt[];
-  onReassign?: (itemId: string, staffId: string | null) => void;
+  value: string | number;
+  display?: string;
+  type?: 'text' | 'number';
+  align?: 'left' | 'right';
+  min?: number;
+  onCommit: (v: string) => void;
 }) {
-  if (rows.length === 0) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(String(value));
+
+  if (!editing) {
     return (
-      <div className="mt-4">
-        <EmptyState icon={emptyIcon} title={emptyTitle} />
-      </div>
+      <button
+        type="button"
+        onClick={() => {
+          setDraft(String(value));
+          setEditing(true);
+        }}
+        title="Clic para editar"
+        className={cn(
+          'w-full rounded-md px-1.5 py-1 hover:bg-white/10',
+          align === 'right' ? 'text-right' : 'text-left',
+        )}
+      >
+        {display ?? String(value)}
+      </button>
     );
   }
   return (
-    <ul className="mt-4 divide-y divide-white/5">
-      {rows.map((i) => (
-        <li key={i.id} className="flex items-center justify-between gap-3 py-3">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            {i.service_id && (
-              <span
-                className="h-10 w-1.5 shrink-0 rounded-full"
-                style={{ backgroundColor: i.staff_color || '#64748b' }}
-              />
-            )}
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-white">
-                {i.description}
-                {i.service_id ? (
-                  <span className="ml-2 text-xs font-normal text-white/40">
-                    {fmtDuration(i.duration ?? DEFAULT_SERVICE_MINUTES)}
-                  </span>
-                ) : null}
-              </p>
-              {i.service_id && onReassign && staffOptions ? (
-                <div className="mt-1 max-w-[220px]">
-                  <Select
-                    value={i.assigned_staff_id ?? ''}
-                    onChange={(e) =>
-                      onReassign(i.id, e.target.value || null)
-                    }
-                  >
-                    <option value="">Sin asignar</option>
-                    {staffOptions.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {fullName(s.first_name, s.last_name)}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-              ) : (
-                <p className="text-xs text-white/40">
-                  {i.quantity} × {money(i.final_unit_price)}
-                  {i.service_id && i.staff_name ? ` · ${i.staff_name}` : ''}
-                </p>
-              )}
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-3">
-            <span className="kpi-gold text-sm">
-              {money(i.final_unit_price * i.quantity)}
-            </span>
-            <button
-              onClick={() => onRemove(i.id)}
-              className="text-white/40 hover:text-danger"
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
-          </div>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function SummaryRows({
-  subtotal,
-  discountTotal,
-  total,
-  deposit,
-  reservedMinutes,
-}: {
-  subtotal: number;
-  discountTotal: number;
-  total: number;
-  deposit: number;
-  reservedMinutes?: number;
-}) {
-  const saldo = Math.max(0, total - deposit);
-  return (
-    <div className="space-y-2 border-t border-white/10 pt-4 text-sm">
-      {reservedMinutes != null && (
-        <Row label="Tiempo reservado" value={fmtDuration(reservedMinutes)} />
+    <input
+      autoFocus
+      type={type}
+      step={type === 'number' ? '0.01' : undefined}
+      min={min}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        setEditing(false);
+        if (draft !== String(value)) onCommit(draft);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+        else if (e.key === 'Escape') setEditing(false);
+      }}
+      className={cn(
+        'w-full rounded-md border border-gold/50 bg-ink-800 px-1.5 py-1 text-white outline-none',
+        align === 'right' ? 'text-right' : 'text-left',
       )}
-      <Row label="Subtotal" value={money(subtotal)} />
-      <Row label="Descuentos" value={`−${money(discountTotal)}`} />
-      <Row label="Abono" value={`−${money(deposit)}`} />
-      <div className="flex items-center justify-between border-t border-white/10 pt-2">
-        <span className="font-medium text-white/70">Saldo</span>
-        <span className="kpi-gold text-2xl">{money(saldo)}</span>
-      </div>
-      <p className="text-right text-xs text-white/40">Total {money(total)}</p>
-    </div>
+    />
   );
 }
 
@@ -2247,136 +2640,6 @@ function Row({ label, value }: { label: string; value: string }) {
     <div className="flex items-center justify-between">
       <span className="text-white/50">{label}</span>
       <span className="text-white">{value}</span>
-    </div>
-  );
-}
-
-interface StaffLite {
-  id: string;
-  first_name: string;
-  last_name: string | null;
-  color?: string | null;
-}
-
-/** Línea de tiempo por estilista: ocupado (rojo) vs libre; el bloque propuesto
- *  se dibuja en dorado (o rojo si choca). Clic en la barra fija la hora. */
-function AvailabilityTimeline({
-  date,
-  loading,
-  staffList,
-  bookedByStaff,
-  proposalStart,
-  proposalByStaff,
-  onPick,
-}: {
-  date: string;
-  loading: boolean;
-  staffList: StaffLite[];
-  bookedByStaff: Map<string, Interval[]>;
-  proposalStart: number;
-  proposalByStaff: Map<string, number>;
-  onPick: (hhmm: string) => void;
-}) {
-  const hours = hoursForDate(date);
-  if (!hours) {
-    return (
-      <p className="text-sm text-white/40">El local está cerrado ese día.</p>
-    );
-  }
-  if (loading) {
-    return <p className="text-sm text-white/40">Cargando disponibilidad…</p>;
-  }
-  if (staffList.length === 0) {
-    return <p className="text-sm text-white/40">Sin estilistas activos.</p>;
-  }
-
-  const dayStart = toMinutes(hours.open);
-  const dayEnd = toMinutes(hours.close);
-  const span = Math.max(1, dayEnd - dayStart);
-  const clamp = (m: number) => Math.min(dayEnd, Math.max(dayStart, m));
-  const pct = (m: number) => ((clamp(m) - dayStart) / span) * 100;
-
-  const ticks: number[] = [];
-  for (let m = dayStart; m <= dayEnd; m += 60) ticks.push(m);
-
-  return (
-    <div className="space-y-2">
-      <div className="relative ml-28 h-4 text-[10px] text-white/30">
-        {ticks.map((t) => (
-          <span
-            key={t}
-            className="absolute -translate-x-1/2"
-            style={{ left: `${pct(t)}%` }}
-          >
-            {fromMinutes(t)}
-          </span>
-        ))}
-      </div>
-
-      {staffList.map((s) => {
-        const booked = bookedByStaff.get(s.id) ?? [];
-        const dur = proposalByStaff.get(s.id);
-        const pEnd = dur != null ? proposalStart + dur : null;
-        const conflict = pEnd != null && overlaps(booked, proposalStart, pEnd);
-        return (
-          <div key={s.id} className="flex items-center gap-2">
-            <div className="flex w-28 shrink-0 items-center gap-1.5">
-              <span
-                className="h-2.5 w-2.5 shrink-0 rounded-full"
-                style={{ backgroundColor: s.color || '#64748b' }}
-              />
-              <span className="truncate text-xs text-white/70">
-                {fullName(s.first_name, s.last_name)}
-              </span>
-            </div>
-            <div
-              className="relative h-7 flex-1 cursor-pointer overflow-hidden rounded-md bg-white/5"
-              onClick={(e) => {
-                const r = e.currentTarget.getBoundingClientRect();
-                const p = (e.clientX - r.left) / r.width;
-                const m = Math.round((dayStart + p * span) / 30) * 30;
-                onPick(fromMinutes(clamp(m)));
-              }}
-            >
-              {booked.map((b, i) => (
-                <div
-                  key={i}
-                  className="absolute inset-y-0 bg-rose-500/40"
-                  style={{
-                    left: `${pct(b.startMin)}%`,
-                    width: `${Math.max(0, pct(b.endMin) - pct(b.startMin))}%`,
-                  }}
-                />
-              ))}
-              {dur != null && pEnd != null && (
-                <div
-                  className={cn(
-                    'absolute inset-y-0 rounded-sm border-2',
-                    conflict
-                      ? 'border-rose-400 bg-rose-400/20'
-                      : 'border-gold bg-gold/25',
-                  )}
-                  style={{
-                    left: `${pct(proposalStart)}%`,
-                    width: `${Math.max(2, pct(pEnd) - pct(proposalStart))}%`,
-                  }}
-                />
-              )}
-            </div>
-          </div>
-        );
-      })}
-
-      <p className="ml-28 flex items-center gap-4 text-[11px] text-white/40">
-        <span className="flex items-center gap-1">
-          <span className="inline-block h-2 w-3 rounded-sm bg-rose-500/40" />
-          Ocupado
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="inline-block h-2 w-3 rounded-sm border border-gold bg-gold/25" />
-          Tu cita
-        </span>
-      </p>
     </div>
   );
 }

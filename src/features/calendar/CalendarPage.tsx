@@ -153,7 +153,7 @@ export function CalendarPage() {
                 s.id AS staff_id,
                 s.first_name || CASE WHEN s.last_name IS NOT NULL THEN ' ' || s.last_name ELSE '' END AS staff_name,
                 s.color AS staff_color,
-                sv.name AS service_name
+                COALESCE(sv.name, ai.category) AS service_name
            FROM appointment a
            LEFT JOIN customer c ON c.id = a.customer_id
            LEFT JOIN appointment_item ai

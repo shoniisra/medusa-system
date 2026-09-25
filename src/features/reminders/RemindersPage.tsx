@@ -4,6 +4,7 @@ import { MessageCircle, Check, BellRing } from 'lucide-react';
 import { query } from '@/lib/db';
 import { useBranchId } from '@/store/session';
 import { timeShort, dateShort } from '@/lib/format';
+import { phoneToWaDigits } from '@/lib/phone';
 import { APPOINTMENT_STATUS } from '@/config/constants';
 import { Card, CardHeader, Badge, Button, EmptyState } from '@/components/ui';
 import { cn } from '@/lib/cn';
@@ -29,10 +30,7 @@ function tomorrowYmd(): string {
 }
 
 function normalizePhone(phone: string): string {
-  let d = phone.replace(/\D/g, '');
-  if (d.startsWith('0')) d = '593' + d.slice(1);
-  else if (!d.startsWith('593')) d = '593' + d;
-  return d;
+  return phoneToWaDigits(phone);
 }
 
 /** Número válido: al menos 9 dígitos (celular EC = 10 con el 0 inicial). */

@@ -1,4 +1,5 @@
 import { useRef, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/cn';
 
@@ -17,7 +18,9 @@ export function Modal({ open, onClose, title, children, className }: ModalProps)
   const pressedBackdrop = useRef(false);
 
   if (!open) return null;
-  return (
+  // Portal a <body>: evita que un ancestro con backdrop-filter/overflow (ej.
+  // .glass-card) actúe como containing block y confine/recorte el modal.
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 backdrop-blur-md"
       onMouseDown={(e) => {
@@ -50,6 +53,7 @@ export function Modal({ open, onClose, title, children, className }: ModalProps)
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
