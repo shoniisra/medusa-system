@@ -9,10 +9,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
   ArrowRight,
-  Plus,
-  Trash2,
-  Scissors,
-  Package,
   Check,
   UserRound,
   AlertTriangle,
@@ -29,7 +25,6 @@ import { query, queryOne, batch, execute } from '@/lib/db';
 import {
   genId,
   money,
-  num,
   fullName,
   toLocalNaive,
   dateShort,
@@ -69,6 +64,7 @@ import {
   loadCommissionRules,
   commissionForItem,
 } from '@/features/pos/createSale';
+import { SaleItemsEditor } from '@/features/pos/SaleItemsEditor';
 import type {
   AppointmentStatus,
   BankAccount,
@@ -1267,28 +1263,11 @@ function EditAppointment({ id }: { id: string }) {
 
   const serviceItems = (items.data ?? []).filter((i) => i.service_id);
 
-  // Panel de alta activo debajo de la tabla de detalle.
-  const [adding, setAdding] = useState<'service' | 'product' | null>(null);
-
   const orgId = useOrgId();
   const branchId = useBranchId();
   const userId = useSession((s) => s.user?.id ?? null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [voidOpen, setVoidOpen] = useState(false);
-
-  // Alta de servicio
-  const [category, setCategory] = useState('');
-  const [serviceId, setServiceId] = useState('');
-  const [staffId, setStaffId] = useState('');
-  // Alta de producto
-  const [productId, setProductId] = useState('');
-  const [qty, setQty] = useState('1');
-
-  const filteredServices = useMemo(
-    () =>
-      (services.data ?? []).filter((s) => !category || s.category === category),
-    [services.data, category],
-  );
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['appointment-items', id] });
@@ -1307,12 +1286,7 @@ function EditAppointment({ id }: { id: string }) {
         [genId(), id, s.id, s.name, s.base_price, s.base_price, stid || null],
       );
     },
-    onSuccess: () => {
-      setServiceId('');
-      setStaffId('');
-      setAdding(null);
-      invalidate();
-    },
+    onSuccess: invalidate,
   });
 
   // Reasignar estilista de un ítem. En atención NO se consulta disponibilidad;
@@ -1360,8 +1334,8 @@ function EditAppointment({ id }: { id: string }) {
   });
 
   const addProduct = useMutation({
-    mutationFn: async () => {
-      const p = products.data?.find((x) => x.id === productId);
+    mutationFn: async ({ pid, qty }: { pid: string; qty: number }) => {
+      const p = products.data?.find((x) => x.id === pid);
       if (!p) return;
       const q = Number(qty) || 1;
       await execute(
@@ -1372,12 +1346,7 @@ function EditAppointment({ id }: { id: string }) {
         [genId(), id, p.id, p.name, q, p.base_price, p.base_price],
       );
     },
-    onSuccess: () => {
-      setProductId('');
-      setQty('1');
-      setAdding(null);
-      invalidate();
-    },
+    onSuccess: invalidate,
   });
 
   const removeItem = useMutation({
@@ -1462,7 +1431,6 @@ function EditAppointment({ id }: { id: string }) {
   }
 
   const meta = APPOINTMENT_STATUS[head.data.status];
-  const round2 = (n: number) => Math.round(n * 100) / 100;
 
   const fechaLarga = new Date(head.data.start_at).toLocaleDateString('es-EC', {
     weekday: 'long',
@@ -1582,302 +1550,20 @@ function EditAppointment({ id }: { id: string }) {
           </Card>
 
           {/* Detalle de venta */}
-          <Card>
-            <CardHeader
-              title="Detalle de venta"
-              subtitle="Clic en una celda para editar el precio, descuento o descripción"
-            />
-            <div className="overflow-x-auto">
-              <table className="w-full border-collapse text-sm">
-                <thead>
-                  <tr className="text-left text-xs uppercase tracking-wide text-white/40 [&>th]:pb-2 [&>th]:font-medium">
-                    <th className="w-1" />
-                    <th>Descripción</th>
-                    <th>Estilista responsable</th>
-                    <th className="text-right">% Estilista</th>
-                    <th className="text-right">Cant.</th>
-                    <th className="text-right">P. sugerido</th>
-                    <th className="text-right">Descuento</th>
-                    <th className="text-right">P. a cobrar</th>
-                    <th className="w-8" />
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {all.length === 0 && (
-                    <tr>
-                      <td
-                        colSpan={9}
-                        className="py-8 text-center text-white/40"
-                      >
-                        Sin ítems. Agregá un servicio o producto abajo.
-                      </td>
-                    </tr>
-                  )}
-                  {all.map((i) => {
-                    const c = itemCommission(i);
-                    return (
-                      <tr key={i.id} className="align-middle">
-                        <td className="py-1 pr-1">
-                          <span
-                            className="block h-8 w-1.5 rounded-full"
-                            style={{
-                              backgroundColor:
-                                i.service_id || i.category
-                                  ? i.staff_color || '#64748b'
-                                  : 'transparent',
-                            }}
-                          />
-                        </td>
-                        <td className="py-1 pr-2">
-                          <InlineEdit
-                            value={i.description}
-                            align="left"
-                            onCommit={(v) =>
-                              v.trim() &&
-                              updateItem.mutate({
-                                itemId: i.id,
-                                patch: { description: v.trim() },
-                              })
-                            }
-                          />
-                        </td>
-                        <td className="py-1 pr-2">
-                          {i.service_id || i.category ? (
-                            <Select
-                              value={i.assigned_staff_id ?? ''}
-                              onChange={(e) =>
-                                reassign.mutate({
-                                  itemId: i.id,
-                                  staffId: e.target.value || null,
-                                })
-                              }
-                            >
-                              <option value="">Sin asignar</option>
-                              {(staff.data ?? []).map((s) => (
-                                <option key={s.id} value={s.id}>
-                                  {fullName(s.first_name, s.last_name)}
-                                </option>
-                              ))}
-                            </Select>
-                          ) : (
-                            <span className="text-white/30">—</span>
-                          )}
-                        </td>
-                        <td className="whitespace-nowrap py-1 text-right text-white/70">
-                          {c
-                            ? c.commission_type === 'percentage'
-                              ? `${num(c.commission_rate)}% · ${money(c.commission_amount)}`
-                              : money(c.commission_amount)
-                            : '—'}
-                        </td>
-                        <td className="py-1 text-right">
-                          {i.product_id ? (
-                            <InlineEdit
-                              value={i.quantity}
-                              type="number"
-                              min={1}
-                              onCommit={(v) =>
-                                updateItem.mutate({
-                                  itemId: i.id,
-                                  patch: {
-                                    quantity: Math.max(
-                                      1,
-                                      Math.floor(Number(v) || 1),
-                                    ),
-                                  },
-                                })
-                              }
-                            />
-                          ) : (
-                            <span className="pr-1.5 text-white/50">1</span>
-                          )}
-                        </td>
-                        <td className="py-1 pr-1.5 text-right text-white/50">
-                          {money(i.list_unit_price)}
-                        </td>
-                        <td className="py-1 text-right">
-                          <InlineEdit
-                            value={i.discount_amount}
-                            type="number"
-                            display={money(i.discount_amount)}
-                            onCommit={(v) => {
-                              // Descuento nunca negativo; el neto se recalcula.
-                              const disc = Math.max(0, round2(Number(v) || 0));
-                              updateItem.mutate({
-                                itemId: i.id,
-                                patch: {
-                                  discount_amount: disc,
-                                  final_unit_price: round2(
-                                    i.list_unit_price - disc,
-                                  ),
-                                },
-                              });
-                            }}
-                          />
-                        </td>
-                        <td className="py-1 text-right">
-                          <InlineEdit
-                            value={i.final_unit_price}
-                            type="number"
-                            display={money(i.final_unit_price)}
-                            onCommit={(v) => {
-                              // Si sube por encima del sugerido es un incremento:
-                              // el descuento queda en 0 (nunca negativo).
-                              const fin = round2(Number(v) || 0);
-                              updateItem.mutate({
-                                itemId: i.id,
-                                patch: {
-                                  final_unit_price: fin,
-                                  discount_amount: Math.max(
-                                    0,
-                                    round2(i.list_unit_price - fin),
-                                  ),
-                                },
-                              });
-                            }}
-                          />
-                        </td>
-                        <td className="py-1 pl-1 text-right">
-                          <button
-                            onClick={() => removeItem.mutate(i.id)}
-                            className="text-white/40 hover:text-danger"
-                            title="Eliminar"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-                {all.length > 0 && (
-                  <tfoot>
-                    <tr className="border-t-2 border-white/10 text-sm font-semibold [&>td]:pt-3">
-                      <td />
-                      <td className="text-white/50" colSpan={2}>
-                        Totales
-                      </td>
-                      <td className="whitespace-nowrap text-right text-white/70">
-                        {money(totalCommission)}
-                      </td>
-                      <td colSpan={3} />
-                      <td className="kpi-gold text-right">{money(total)}</td>
-                      <td />
-                    </tr>
-                  </tfoot>
-                )}
-              </table>
-            </div>
-
-            {/* Agregar ítems */}
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                variant={adding === 'service' ? 'gold' : 'outline'}
-                onClick={() =>
-                  setAdding(adding === 'service' ? null : 'service')
-                }
-              >
-                <Scissors className="h-4 w-4" /> Agregar servicio
-              </Button>
-              <Button
-                size="sm"
-                variant={adding === 'product' ? 'gold' : 'outline'}
-                onClick={() =>
-                  setAdding(adding === 'product' ? null : 'product')
-                }
-              >
-                <Package className="h-4 w-4" /> Agregar producto
-              </Button>
-            </div>
-
-            {adding === 'service' && (
-              <div className="mt-3 grid grid-cols-1 gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3 sm:grid-cols-3">
-                <Select
-                  label="Categoría"
-                  value={category}
-                  onChange={(e) => {
-                    setCategory(e.target.value);
-                    setServiceId('');
-                  }}
-                >
-                  <option value="">Todas</option>
-                  {SERVICE_CATEGORIES.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </Select>
-                <Select
-                  label="Servicio"
-                  value={serviceId}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    if (v && staffId)
-                      addService.mutate({ sid: v, stid: staffId });
-                    else setServiceId(v);
-                  }}
-                >
-                  <option value="">Seleccionar…</option>
-                  {filteredServices.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} · {money(s.base_price)}
-                    </option>
-                  ))}
-                </Select>
-                <Select
-                  label="Estilista"
-                  value={staffId}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    if (v && serviceId)
-                      addService.mutate({ sid: serviceId, stid: v });
-                    else setStaffId(v);
-                  }}
-                >
-                  <option value="">Sin asignar</option>
-                  {staff.data?.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {fullName(s.first_name, s.last_name)}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-            )}
-
-            {adding === 'product' && (
-              <div className="mt-3 grid grid-cols-2 gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3 sm:grid-cols-4">
-                <div className="sm:col-span-2">
-                  <Select
-                    label="Producto"
-                    value={productId}
-                    onChange={(e) => setProductId(e.target.value)}
-                  >
-                    <option value="">Seleccionar…</option>
-                    {products.data?.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name} · {money(p.base_price)}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-                <Input
-                  label="Cant."
-                  type="number"
-                  min="1"
-                  value={qty}
-                  onChange={(e) => setQty(e.target.value)}
-                />
-                <Button
-                  className="self-end"
-                  onClick={() => addProduct.mutate()}
-                  disabled={!productId || addProduct.isPending}
-                >
-                  <Plus className="h-4 w-4" /> Agregar
-                </Button>
-              </div>
-            )}
-          </Card>
+          <SaleItemsEditor
+            items={all}
+            staff={staff.data ?? []}
+            services={services.data ?? []}
+            products={products.data ?? []}
+            rules={commissionRules.data}
+            onUpdateItem={(itemId, patch) => updateItem.mutate({ itemId, patch })}
+            onReassign={(itemId, staffId) =>
+              reassign.mutate({ itemId, staffId })
+            }
+            onRemoveItem={(itemId) => removeItem.mutate(itemId)}
+            onAddService={({ sid, stid }) => addService.mutate({ sid, stid })}
+            onAddProduct={({ pid, qty }) => addProduct.mutate({ pid, qty })}
+          />
         </div>
 
         {/* Resumen */}
@@ -2381,6 +2067,7 @@ function ConfirmSaleModal({
           list_unit_price: it.list_unit_price,
           discount_amount: it.discount_amount,
           final_unit_price: it.final_unit_price,
+          assigned_staff_id: it.assigned_staff_id,
           commissions,
         };
       });
@@ -2571,67 +2258,6 @@ function Header({
       </div>
       {right}
     </div>
-  );
-}
-
-/** Celda con edición en línea: muestra un valor y, al hacer clic, un input. */
-function InlineEdit({
-  value,
-  display,
-  type = 'text',
-  align = 'right',
-  min,
-  onCommit,
-}: {
-  value: string | number;
-  display?: string;
-  type?: 'text' | 'number';
-  align?: 'left' | 'right';
-  min?: number;
-  onCommit: (v: string) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(String(value));
-
-  if (!editing) {
-    return (
-      <button
-        type="button"
-        onClick={() => {
-          setDraft(String(value));
-          setEditing(true);
-        }}
-        title="Clic para editar"
-        className={cn(
-          'w-full rounded-md px-1.5 py-1 hover:bg-white/10',
-          align === 'right' ? 'text-right' : 'text-left',
-        )}
-      >
-        {display ?? String(value)}
-      </button>
-    );
-  }
-  return (
-    <input
-      autoFocus
-      type={type}
-      step={type === 'number' ? '0.01' : undefined}
-      min={min}
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => {
-        setEditing(false);
-        if (draft !== String(value)) onCommit(draft);
-      }}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') e.currentTarget.blur();
-        else if (e.key === 'Escape') setEditing(false);
-      }}
-      className={cn(
-        'w-full rounded-md border border-gold/50 bg-ink-800 px-1.5 py-1 text-white outline-none',
-        align === 'right' ? 'text-right' : 'text-left',
-      )}
-    />
   );
 }
 

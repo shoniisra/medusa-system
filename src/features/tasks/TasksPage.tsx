@@ -42,7 +42,7 @@ export function TasksPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
 
-  const [range, setRange] = useState<RangeMode>('week');
+  const [range, setRange] = useState<RangeMode>('today');
   const [selected, setSelected] = useState<AppointmentRow | null>(null);
   const [notice, setNotice] = useState('');
 

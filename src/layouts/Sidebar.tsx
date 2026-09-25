@@ -10,6 +10,7 @@ import {
   FileText,
   Settings,
   BellRing,
+  ShoppingCart,
 } from 'lucide-react';
 import { ROUTES, APP_NAME } from '@/config/constants';
 import { query } from '@/lib/db';
@@ -20,6 +21,7 @@ const NAV = [
   { to: ROUTES.dashboard, label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: ROUTES.calendar, label: 'Agenda', icon: CalendarDays },
   { to: ROUTES.tasks, label: 'Tareas', icon: ClipboardList },
+  { to: ROUTES.pos, label: 'POS (venta sin cita)', icon: ShoppingCart },
   { to: ROUTES.reminders, label: 'Recordatorios', icon: BellRing },
   { to: ROUTES.cashflow, label: 'Finanzas', icon: Wallet },
   { to: ROUTES.staff, label: 'Personal', icon: Users },

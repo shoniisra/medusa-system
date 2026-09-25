@@ -669,6 +669,8 @@ export interface DraftSaleItem {
   list_unit_price: number;
   discount_amount: number;
   final_unit_price: number;
+  /** Estilista responsable de la línea (solo servicios); define la comisión. */
+  assigned_staff_id: ID | null;
   commissions: DraftCommission[];
 }
 
