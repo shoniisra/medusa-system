@@ -75,6 +75,7 @@ function useInvalidateFinance() {
       ['fin-debts'],
       ['transactions'],
       ['cash-expected'],
+      ['cash-carryover'],
     ]) {
       qc.invalidateQueries({ queryKey: key });
     }
@@ -517,17 +518,28 @@ function useAccounts(ctx: Ctx) {
     queryKey: ['fin-accounts', ctx.branchId, ctx.orgId, ctx.sessionId],
     enabled: !!ctx.branchId && !!ctx.orgId,
     queryFn: async () => {
-      let cash = 0;
-      if (ctx.sessionId) {
-        const s = await queryOne<{ opening: number; net: number }>(
-          `SELECT cs.opening_cash AS opening,
-                  COALESCE((SELECT SUM(CASE WHEN direction='in' THEN amount ELSE -amount END)
-                              FROM cash_movement WHERE cash_session_id = cs.id),0) AS net
-             FROM cash_session cs WHERE cs.id = ?`,
-          [ctx.sessionId],
-        );
-        cash = (s?.opening ?? 0) + (s?.net ?? 0);
-      }
+      // Con la caja abierta, el saldo es de la sesión en curso; cerrada, es el
+      // fondo de vueltos que quedó en el último cierre.
+      const row = ctx.sessionId
+        ? await queryOne<{ opening: number; net: number }>(
+            `SELECT cs.opening_cash AS opening,
+                    COALESCE((SELECT SUM(CASE WHEN direction='in' THEN amount ELSE -amount END)
+                                FROM cash_movement WHERE cash_session_id = cs.id),0) AS net
+               FROM cash_session cs WHERE cs.id = ?`,
+            [ctx.sessionId],
+          )
+        : await queryOne<{ opening: number; net: number }>(
+            `SELECT cs.opening_cash AS opening,
+                    COALESCE((SELECT SUM(CASE WHEN direction='in' THEN amount ELSE -amount END)
+                                FROM cash_movement WHERE cash_session_id = cs.id),0) AS net
+               FROM cash_session cs
+               JOIN cash_register cr ON cr.id = cs.cash_register_id
+              WHERE cr.branch_id = ? AND cs.status = 'closed'
+              ORDER BY cs.closed_at DESC
+              LIMIT 1`,
+            [ctx.branchId],
+          );
+      const cash = (row?.opening ?? 0) + (row?.net ?? 0);
       const banks = await query<BankAccount & { balance: number }>(
         `SELECT ba.id, ba.name, ba.bank_name,
                 COALESCE((SELECT SUM(p.amount) FROM payment p
@@ -1071,14 +1083,14 @@ function AccountsTab({
       {/* Caja física */}
       {!session ? (
         <OpenForm
-          branchId={ctx.branchId}
-          userId={ctx.userId}
+          ctx={ctx}
           onOpened={() =>
             qc.invalidateQueries({ queryKey: qk.cashSession(ctx.branchId) })
           }
         />
       ) : (
         <OpenSessionCard
+          ctx={ctx}
           session={session}
           onClosed={() => {
             setCashSession(null);
@@ -1316,26 +1328,41 @@ function AdjustBalanceModal({
   );
 }
 
-function OpenForm({
-  branchId,
-  userId,
-  onOpened,
-}: {
-  branchId: string;
-  userId: string | null;
-  onOpened: () => void;
-}) {
-  const [opening, setOpening] = useState('0');
+function OpenForm({ ctx, onOpened }: { ctx: Ctx; onOpened: () => void }) {
+  const [opening, setOpening] = useState<string | null>(null);
 
   const register = useQuery({
-    queryKey: ['register', branchId],
-    enabled: !!branchId,
+    queryKey: ['register', ctx.branchId],
+    enabled: !!ctx.branchId,
     queryFn: () =>
       queryOne<CashRegister>(
         'SELECT * FROM cash_register WHERE branch_id = ? AND active = 1 ORDER BY name LIMIT 1',
-        [branchId],
+        [ctx.branchId],
       ),
   });
+
+  /** Efectivo que quedó en caja al cerrar la última sesión (fondo de vueltos). */
+  const carry = useQuery({
+    queryKey: ['cash-carryover', ctx.branchId],
+    enabled: !!ctx.branchId,
+    queryFn: async () => {
+      const row = await queryOne<{ left_cash: number }>(
+        `SELECT cs.opening_cash
+                + COALESCE((SELECT SUM(CASE WHEN direction='in' THEN amount ELSE -amount END)
+                              FROM cash_movement WHERE cash_session_id = cs.id),0) AS left_cash
+           FROM cash_session cs
+           JOIN cash_register cr ON cr.id = cs.cash_register_id
+          WHERE cr.branch_id = ? AND cs.status = 'closed'
+          ORDER BY cs.closed_at DESC
+          LIMIT 1`,
+        [ctx.branchId],
+      );
+      return row?.left_cash ?? 0;
+    },
+  });
+
+  /** Mientras nadie toque el campo, arranca con el fondo del cierre anterior. */
+  const value = opening ?? String(carry.data ?? 0);
 
   const mut = useMutation({
     mutationFn: async () => {
@@ -1344,7 +1371,7 @@ function OpenForm({
       await execute(
         `INSERT INTO cash_session (id, cash_register_id, opened_by, opened_at, opening_cash, status)
          VALUES (?, ?, ?, ?, ?, 'open')`,
-        [genId(), registerId, userId, new Date().toISOString(), Number(opening)],
+        [genId(), registerId, ctx.userId, new Date().toISOString(), Number(value)],
       );
     },
     onSuccess: onOpened,
@@ -1374,9 +1401,15 @@ function OpenForm({
           type="number"
           min="0"
           step="0.01"
-          value={opening}
+          value={value}
           onChange={(e) => setOpening(e.target.value)}
         />
+        {!!carry.data && (
+          <p className="text-xs text-white/40">
+            Del cierre anterior quedaron {money(carry.data)} en caja como fondo de
+            vueltos.
+          </p>
+        )}
         <Button
           className="w-full"
           size="lg"
@@ -1390,15 +1423,29 @@ function OpenForm({
   );
 }
 
+/**
+ * Sesión abierta: muestra el esperado y permite cerrar.
+ *
+ * El cierre admite un retiro: se cuenta todo el efectivo (p. ej. 100), se retira
+ * una parte a una cuenta (80) y el resto queda como fondo de vueltos para el día
+ * siguiente (20). El descuadre entre esperado y contado se registra como ajuste,
+ * para que el saldo de la caja sea siempre el efectivo real.
+ */
 function OpenSessionCard({
+  ctx,
   session,
   onClosed,
 }: {
+  ctx: Ctx;
   session: CashSession;
   onClosed: () => void;
 }) {
   const [counted, setCounted] = useState('');
   const [closing, setClosing] = useState(false);
+  const [withdraw, setWithdraw] = useState('');
+  const [destination, setDestination] = useState('');
+
+  const banks = useBankAccounts(ctx.orgId, closing);
 
   const expected = useQuery({
     queryKey: ['cash-expected', session.id],
@@ -1412,22 +1459,91 @@ function OpenSessionCard({
     },
   });
 
+  const exp = expected.data ?? session.opening_cash;
+  const cnt = counted === '' ? null : Number(counted);
+  const diff = cnt == null ? null : cnt - exp;
+  const out = withdraw === '' ? 0 : Number(withdraw);
+  const left = cnt == null ? null : cnt - out;
+  const tooMuch = cnt != null && out > cnt;
+  const noDestination = out > 0 && !destination;
+
   const close = useMutation({
     mutationFn: async () => {
-      const exp = expected.data ?? session.opening_cash;
-      const cnt = Number(counted);
-      await execute(
-        `UPDATE cash_session
-            SET status='closed', closed_at=?, expected_cash=?, counted_cash=?, difference=?
-          WHERE id = ?`,
-        [new Date().toISOString(), exp, cnt, cnt - exp, session.id],
-      );
+      if (cnt == null) return;
+      const now = new Date().toISOString();
+      const difference = cnt - exp;
+      const stmts: { sql: string; args: (string | number | null)[] }[] = [];
+
+      // El descuadre entra como ajuste: así el saldo de la caja es el contado.
+      if (difference !== 0) {
+        stmts.push({
+          sql: `INSERT INTO cash_movement
+                  (id, cash_session_id, branch_id, movement_type, direction, amount,
+                   movement_at, description, created_by)
+                VALUES (?, ?, ?, 'adjustment', ?, ?, ?, ?, ?)`,
+          args: [
+            genId(),
+            session.id,
+            ctx.branchId,
+            difference > 0 ? 'in' : 'out',
+            Math.abs(difference),
+            now,
+            `${ADJUST_MARK} Cierre de caja`,
+            ctx.userId,
+          ],
+        });
+      }
+
+      // Retiro: sale de la caja física y entra a la cuenta elegida.
+      if (out > 0 && destination) {
+        stmts.push({
+          sql: `INSERT INTO account_transfer
+                  (id, organization_id, branch_id, transfer_date, amount,
+                   from_kind, from_bank_account_id, to_kind, to_bank_account_id,
+                   cash_session_id, description, created_by, created_at)
+                VALUES (?, ?, ?, ?, ?, 'cash', NULL, 'bank', ?, ?, ?, ?, ?)`,
+          args: [
+            genId(),
+            ctx.orgId,
+            ctx.branchId,
+            todayISO(),
+            out,
+            destination,
+            session.id,
+            'Retiro de caja al cierre',
+            ctx.userId,
+            now,
+          ],
+        });
+        stmts.push({
+          sql: `INSERT INTO cash_movement
+                  (id, cash_session_id, branch_id, movement_type, direction, amount,
+                   movement_at, description, created_by)
+                VALUES (?, ?, ?, 'cash_out', 'out', ?, ?, ?, ?)`,
+          args: [
+            genId(),
+            session.id,
+            ctx.branchId,
+            out,
+            now,
+            'Retiro de caja al cierre',
+            ctx.userId,
+          ],
+        });
+      }
+
+      stmts.push({
+        sql: `UPDATE cash_session
+                 SET status='closed', closed_by=?, closed_at=?,
+                     expected_cash=?, counted_cash=?, difference=?
+               WHERE id = ?`,
+        args: [ctx.userId, now, exp, cnt, difference, session.id],
+      });
+
+      await batch(stmts);
     },
     onSuccess: onClosed,
   });
-
-  const exp = expected.data ?? session.opening_cash;
-  const diff = counted ? Number(counted) - exp : null;
 
   return (
     <Card>
@@ -1456,7 +1572,7 @@ function OpenSessionCard({
           <Lock className="h-4 w-4" /> Cerrar caja
         </Button>
       ) : (
-        <div className="mt-5 space-y-3 border-t border-white/10 pt-4">
+        <div className="mt-5 space-y-4 border-t border-white/10 pt-4">
           <Input
             label="Efectivo contado (físico)"
             type="number"
@@ -1465,6 +1581,69 @@ function OpenSessionCard({
             value={counted}
             onChange={(e) => setCounted(e.target.value)}
           />
+
+          <div className="space-y-3 rounded-xl border border-white/10 bg-white/[0.02] p-3">
+            <div className="flex items-center justify-between">
+              <p className="text-xs uppercase tracking-wide text-white/40">
+                Retirar de caja (opcional)
+              </p>
+              {cnt != null && cnt > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setWithdraw(String(cnt))}
+                  className="text-xs text-gold-300 hover:underline"
+                >
+                  Retirar todo
+                </button>
+              )}
+            </div>
+            <Input
+              label="Monto a retirar"
+              type="number"
+              min="0"
+              step="0.01"
+              value={withdraw}
+              onChange={(e) => setWithdraw(e.target.value)}
+            />
+            <Select
+              label="Depositar en"
+              value={destination}
+              onChange={(e) => setDestination(e.target.value)}
+            >
+              <option value="">Seleccionar…</option>
+              {banks.data?.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </Select>
+            {banks.data?.length === 0 && (
+              <p className="text-xs text-white/40">
+                No hay cuentas donde depositar. Creá una en Configuración → Cuentas
+                (por ejemplo «Ahorros efectivo»).
+              </p>
+            )}
+            {cnt != null && (
+              <div className="flex items-center justify-between border-t border-white/10 pt-3 text-sm">
+                <span className="text-white/60">Queda en caja para vueltos</span>
+                <span className="font-semibold text-gold-300">
+                  {money(left ?? 0)}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {tooMuch && (
+            <p className="text-xs text-danger">
+              No podés retirar más de lo que contaste en caja.
+            </p>
+          )}
+          {noDestination && (
+            <p className="text-xs text-danger">
+              Elegí la cuenta donde entra el retiro.
+            </p>
+          )}
+
           <div className="flex gap-2">
             <Button
               variant="ghost"
@@ -1476,7 +1655,7 @@ function OpenSessionCard({
             <Button
               variant="danger"
               className="flex-1"
-              disabled={!counted}
+              disabled={cnt == null || tooMuch || noDestination}
               loading={close.isPending}
               onClick={() => close.mutate()}
             >
