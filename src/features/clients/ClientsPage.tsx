@@ -46,6 +46,7 @@ import {
 import { ROUTES } from '@/config/constants';
 import { phoneToWaDigits } from '@/lib/phone';
 import { findCustomerByPhone } from './customerLookup';
+import { validatePhone } from '@/lib/phone';
 import type { Customer, CustomerColorRecord } from '@/types';
 
 /* ═══════════════════════════ Lista de clientes ═══════════════════════════ */
@@ -462,6 +463,8 @@ function CreateClientModal({
   const save = useMutation({
     mutationFn: async () => {
       const canonical = phone.trim() || null;
+      const phoneError = validatePhone(canonical);
+      if (phoneError) throw new Error(phoneError);
       if (canonical) {
         const hit = await findCustomerByPhone(orgId, canonical);
         if (hit) {
@@ -804,6 +807,8 @@ function ClientForm({
   const save = useMutation({
     mutationFn: async () => {
       const canonical = phone.trim() || null;
+      const phoneError = validatePhone(canonical);
+      if (phoneError) throw new Error(phoneError);
       if (canonical) {
         const hit = await findCustomerByPhone(
           customer.organization_id,

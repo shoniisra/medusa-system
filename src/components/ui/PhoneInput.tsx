@@ -1,5 +1,12 @@
 import { forwardRef, useMemo } from 'react';
-import { COUNTRIES, DEFAULT_COUNTRY, normalizePhone, parsePhone } from '@/lib/phone';
+import { cn } from '@/lib/cn';
+import {
+  COUNTRIES,
+  DEFAULT_COUNTRY,
+  normalizePhone,
+  parsePhone,
+  validatePhone,
+} from '@/lib/phone';
 
 interface PhoneInputProps {
   label?: string;
@@ -10,6 +17,12 @@ interface PhoneInputProps {
   error?: string;
   placeholder?: string;
   disabled?: boolean;
+  /**
+   * Valida el largo del número según el país y muestra el error abajo.
+   * Se desactiva solo donde haga falta aceptar números sueltos (por defecto va
+   * prendido: quien guarda debe cortar con `validatePhone`).
+   */
+  validate?: boolean;
 }
 
 /**
@@ -18,13 +31,27 @@ interface PhoneInputProps {
  * formatos mezclados en la base.
  */
 export const PhoneInput = forwardRef<HTMLInputElement, PhoneInputProps>(
-  ({ label, value, onChange, error, placeholder = '99 123 4567', disabled }, ref) => {
+  (
+    {
+      label,
+      value,
+      onChange,
+      error,
+      placeholder = '99 123 4567',
+      disabled,
+      validate = true,
+    },
+    ref,
+  ) => {
     const { dial, local } = useMemo(() => parsePhone(value), [value]);
     // dial === '' → número internacional de un país fuera de la lista: se
     // preserva completo (el usuario escribe con su código).
     const isIntl = value.trim().startsWith('+') && dial === '';
     const activeDial = isIntl ? '' : dial || DEFAULT_COUNTRY.dial;
     const localValue = isIntl ? `+${local}` : local;
+    // El error propio del formulario manda sobre el de formato.
+    const formatError = validate ? validatePhone(value) : null;
+    const shownError = error || formatError;
 
     return (
       <label className="block">
@@ -56,10 +83,16 @@ export const PhoneInput = forwardRef<HTMLInputElement, PhoneInputProps>(
             value={localValue}
             placeholder={isIntl ? '+00 000 000' : placeholder}
             onChange={(e) => onChange(normalizePhone(e.target.value, activeDial))}
-            className="input-base w-full flex-1"
+            aria-invalid={shownError ? true : undefined}
+            className={cn(
+              'input-base w-full flex-1',
+              shownError && 'border-danger/60 focus:ring-danger/30',
+            )}
           />
         </div>
-        {error && <span className="mt-1 block text-xs text-danger">{error}</span>}
+        {shownError && (
+          <span className="mt-1 block text-xs text-danger">{shownError}</span>
+        )}
       </label>
     );
   },

@@ -24,6 +24,7 @@ import {
   commissionForItem,
 } from './createSale';
 import { findCustomerByPhone } from '@/features/clients/customerLookup';
+import { validatePhone } from '@/lib/phone';
 import { CONSUMIDOR_FINAL_LABEL } from '@/config/constants';
 import { qk } from '@/lib/queryClient';
 import {
@@ -559,6 +560,8 @@ function ConfirmSalePosModal({
       if (newClient) {
         if (!newClient.firstName)
           throw new Error('El nombre del cliente es obligatorio.');
+        const phoneError = validatePhone(newClient.phone);
+        if (phoneError) throw new Error(phoneError);
         if (newClient.phone) {
           const hit = await findCustomerByPhone(orgId, newClient.phone);
           if (hit)

@@ -100,3 +100,62 @@ export function normalizeStored(stored: string | null | undefined): string {
   const { dial, local } = parsePhone(stored);
   return normalizePhone(local, dial);
 }
+
+/* ────────────────────────────── Validación ────────────────────────────── */
+
+interface PhoneRule {
+  /** Largos válidos del número local (sin código de país). */
+  lengths: number[];
+  /** Cómo se describe el largo esperado en el mensaje de error. */
+  hint: string;
+  /** Chequeo fino cuando el país distingue celular de fijo por prefijo. */
+  test?: (local: string) => boolean;
+}
+
+/**
+ * Reglas de largo por país. Solo para los países del select: un número de
+ * "🌐 Otro" se valida con el rango genérico de E.164 (8–15 dígitos).
+ */
+const PHONE_RULES: Record<string, PhoneRule> = {
+  // Celular 9XXXXXXXX (9) · fijo con código de área 2–7 + 7 dígitos (8).
+  593: {
+    lengths: [8, 9],
+    hint: '9 dígitos si es celular (empieza con 9) u 8 si es fijo',
+    test: (l) =>
+      (l.length === 9 && l.startsWith('9')) ||
+      (l.length === 8 && /^[2-7]/.test(l)),
+  },
+  57: { lengths: [10], hint: '10 dígitos' },
+  51: { lengths: [9], hint: '9 dígitos' },
+  58: { lengths: [10], hint: '10 dígitos' },
+  54: { lengths: [10, 11], hint: '10 dígitos (11 con el 9 de celular)' },
+  56: { lengths: [9], hint: '9 dígitos' },
+  52: { lengths: [10], hint: '10 dígitos' },
+  1: { lengths: [10], hint: '10 dígitos' },
+  34: { lengths: [9], hint: '9 dígitos' },
+};
+
+/**
+ * Valida un teléfono canónico. Devuelve el mensaje de error, o `null` si está
+ * bien. Vacío se considera válido: el teléfono es opcional y quien lo necesite
+ * obligatorio lo chequea aparte.
+ */
+export function validatePhone(canonical: string | null | undefined): string | null {
+  const v = (canonical ?? '').trim();
+  if (!v) return null;
+  const { dial, local } = parsePhone(v);
+  if (!dial) {
+    // País fuera de la lista: solo se exige un largo razonable de E.164.
+    return local.length >= 8 && local.length <= 15
+      ? null
+      : 'Número internacional inválido (entre 8 y 15 dígitos).';
+  }
+  const rule = PHONE_RULES[dial];
+  if (!rule) return null;
+  const ok = rule.test
+    ? rule.test(local)
+    : rule.lengths.includes(local.length);
+  if (ok) return null;
+  const country = COUNTRIES.find((c) => c.dial === dial);
+  return `El número de ${country?.name ?? 'ese país'} debe tener ${rule.hint}. Escribiste ${local.length}.`;
+}
