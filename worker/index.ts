@@ -81,6 +81,22 @@ export default {
     }
 
     // Cualquier otra ruta → assets estáticos (con fallback SPA).
-    return env.ASSETS.fetch(request);
+    const assetRes = await env.ASSETS.fetch(request);
+
+    // Los chunks con hash de un build viejo ya no existen tras el deploy y el
+    // fallback SPA les contestaría index.html con content-type de HTML: el
+    // import dinámico del navegador falla con un error confuso y encima
+    // cacheable. Para /assets/* devolvemos un 404 limpio.
+    if (
+      url.pathname.startsWith('/assets/') &&
+      assetRes.headers.get('content-type')?.includes('text/html')
+    ) {
+      return new Response('Not Found', {
+        status: 404,
+        headers: { 'cache-control': 'no-store' },
+      });
+    }
+
+    return assetRes;
   },
 };

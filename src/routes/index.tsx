@@ -1,63 +1,65 @@
-import { Suspense, lazy } from 'react';
+import { Suspense } from 'react';
 import { createBrowserRouter } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { AppLayout } from '@/layouts/AppLayout';
+import { lazyPage } from '@/lib/staleBuild';
 import { ProtectedRoute } from './ProtectedRoute';
+import { RouteError } from './RouteError';
 import { ROUTES } from '@/config/constants';
 import { LoginPage } from '@/features/auth/LoginPage';
 import { DashboardPage } from '@/features/dashboard/DashboardPage';
 
 // Rutas pesadas o secundarias cargadas bajo demanda (code-splitting).
-const PosPage = lazy(() =>
+const PosPage = lazyPage(() =>
   import('@/features/pos/PosPage').then((m) => ({ default: m.PosPage })),
 );
-const CashflowPage = lazy(() =>
+const CashflowPage = lazyPage(() =>
   import('@/features/cashflow/CashflowPage').then((m) => ({
     default: m.CashflowPage,
   })),
 );
-const StaffPage = lazy(() =>
+const StaffPage = lazyPage(() =>
   import('@/features/staff/StaffPage').then((m) => ({ default: m.StaffPage })),
 );
-const ClientsPage = lazy(() =>
+const ClientsPage = lazyPage(() =>
   import('@/features/clients/ClientsPage').then((m) => ({
     default: m.ClientsPage,
   })),
 );
-const ClientDetailPage = lazy(() =>
+const ClientDetailPage = lazyPage(() =>
   import('@/features/clients/ClientsPage').then((m) => ({
     default: m.ClientDetailPage,
   })),
 );
-const CalendarPage = lazy(() =>
+const CalendarPage = lazyPage(() =>
   import('@/features/calendar/CalendarPage').then((m) => ({
     default: m.CalendarPage,
   })),
 );
-const CalendarViewPage = lazy(() =>
+const CalendarViewPage = lazyPage(() =>
   import('@/features/calendar/CalendarViewPage').then((m) => ({
     default: m.CalendarViewPage,
   })),
 );
-const AppointmentPage = lazy(() =>
+const AppointmentPage = lazyPage(() =>
   import('@/features/calendar/AppointmentPage').then((m) => ({
     default: m.AppointmentPage,
   })),
 );
-const TasksPage = lazy(() =>
+const TasksPage = lazyPage(() =>
   import('@/features/tasks/TasksPage').then((m) => ({ default: m.TasksPage })),
 );
-const RemindersPage = lazy(() =>
+const RemindersPage = lazyPage(() =>
   import('@/features/reminders/RemindersPage').then((m) => ({
     default: m.RemindersPage,
   })),
 );
-const InvoicesPage = lazy(() =>
+const InvoicesPage = lazyPage(() =>
   import('@/features/invoices/InvoicesPage').then((m) => ({
     default: m.InvoicesPage,
   })),
 );
-const SettingsPage = lazy(() =>
+const SettingsPage = lazyPage(() =>
   import('@/features/settings/SettingsPage').then((m) => ({
     default: m.SettingsPage,
   })),
@@ -76,12 +78,14 @@ const lazyRoute = (el: React.ReactNode) => (
 );
 
 export const router = createBrowserRouter([
-  { path: ROUTES.login, element: <LoginPage /> },
+  { path: ROUTES.login, element: <LoginPage />, errorElement: <RouteError /> },
   {
     element: <ProtectedRoute />,
+    errorElement: <RouteError />,
     children: [
       {
         element: <AppLayout />,
+        errorElement: <RouteError />,
         children: [
           { path: ROUTES.dashboard, element: <DashboardPage /> },
           { path: ROUTES.pos, element: lazyRoute(<PosPage />) },
