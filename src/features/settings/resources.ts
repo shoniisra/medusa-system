@@ -1,4 +1,5 @@
 import { createElement, type ReactNode } from 'react';
+import { calendarColorName } from '@/config/colors';
 import {
   Scissors,
   Package,
@@ -98,13 +99,24 @@ const METHOD_TYPE_OPTIONS = (
 const s = (v: unknown) => (v == null ? '—' : String(v));
 
 /** Muestra un círculo con el color del colaborador. */
+/** Punto de color + nombre del color de Google Calendar al que corresponde. */
 const colorDot = (hex: string | null): ReactNode =>
   hex
-    ? createElement('span', {
-        className: 'inline-block h-4 w-4 rounded-full border border-white/20',
-        style: { backgroundColor: hex },
-        title: hex,
-      })
+    ? createElement(
+        'span',
+        { className: 'inline-flex items-center gap-2' },
+        createElement('span', {
+          key: 'dot',
+          className: 'inline-block h-4 w-4 shrink-0 rounded-full border border-white/20',
+          style: { backgroundColor: hex },
+          title: hex,
+        }),
+        createElement(
+          'span',
+          { key: 'name', className: 'text-white/60' },
+          calendarColorName(hex),
+        ),
+      )
     : '—';
 
 /* ────────────────────────── Definición de recursos ───────────────────────── */
@@ -214,7 +226,12 @@ export const RESOURCES: ResourceConfig[] = [
     fields: [
       { name: 'first_name', label: 'Nombre', type: 'text', required: true },
       { name: 'last_name', label: 'Apellido', type: 'text' },
-      { name: 'color', label: 'Color identificador', type: 'color' },
+      {
+        name: 'color',
+        label: 'Color identificador',
+        type: 'color',
+        colSpan: 2,
+      },
       { name: 'employee_code', label: 'Código empleado', type: 'text' },
       { name: 'phone', label: 'Teléfono', type: 'text' },
       { name: 'email', label: 'Email', type: 'text' },

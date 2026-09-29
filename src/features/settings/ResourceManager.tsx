@@ -10,6 +10,7 @@ import {
   ChevronUp,
   ChevronDown,
   ChevronsUpDown,
+  Check,
 } from 'lucide-react';
 import type { InValue } from '@libsql/client';
 import { query, execute } from '@/lib/db';
@@ -26,6 +27,12 @@ import {
 } from '@/components/ui';
 import type { Branch } from '@/types';
 import type { Field, ResourceConfig } from './resources';
+import { cn } from '@/lib/cn';
+import {
+  DEFAULT_CALENDAR_COLOR,
+  GOOGLE_EVENT_COLORS,
+  findCalendarColor,
+} from '@/config/colors';
 
 type Row = Record<string, unknown>;
 type FormState = Record<string, string | boolean>;
@@ -516,20 +523,51 @@ function ResourceForm({
           }
 
           if (f.type === 'color') {
-            const val = String(form[f.name] ?? '') || '#F59E0B';
+            const val =
+              String(form[f.name] ?? '') || DEFAULT_CALENDAR_COLOR.hex;
+            const current = findCalendarColor(val);
             return (
               <div key={f.name} className={span}>
-                <span className="mb-1 block text-xs font-medium text-white/60">
-                  {f.label}
-                </span>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="color"
-                    value={val}
-                    onChange={(e) => set(f.name, e.target.value)}
-                    className="h-10 w-14 cursor-pointer rounded-lg border border-white/10 bg-ink-800 p-1"
-                  />
-                  <span className="text-sm text-white/50">{val.toUpperCase()}</span>
+                <div className="mb-1.5 flex items-baseline justify-between gap-2">
+                  <span className="text-xs font-medium text-white/60">
+                    {f.label}
+                  </span>
+                  <span className="text-xs text-white/45">
+                    {current
+                      ? current.name
+                      : `${val.toUpperCase()} · fuera de la paleta`}
+                  </span>
+                </div>
+                {/* Solo los 11 colores de evento de Google. La UI de Calendar
+                    ofrece 24, pero la API solo reporta estos: un evento pintado
+                    con cualquiera de los otros 13 llega sin color y no hay forma
+                    de saber de quién es. */}
+                <div className="grid grid-cols-2 gap-1.5 rounded-xl border border-white/10 bg-white/[0.03] p-2 sm:grid-cols-3 lg:grid-cols-4">
+                  {GOOGLE_EVENT_COLORS.map((c) => {
+                    const on = c.hex.toLowerCase() === val.toLowerCase();
+                    return (
+                      <button
+                        key={c.hex}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() => set(f.name, c.hex)}
+                        className={cn(
+                          'flex min-w-0 items-center gap-2 rounded-lg border px-2 py-1.5 text-left text-xs transition active:scale-[0.97]',
+                          on
+                            ? 'border-gold/60 bg-gold/15 text-white'
+                            : 'border-transparent text-white/65 hover:bg-white/5',
+                        )}
+                      >
+                        <span
+                          className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full"
+                          style={{ backgroundColor: c.hex }}
+                        >
+                          {on && <Check className="h-3 w-3 text-white" />}
+                        </span>
+                        <span className="truncate">{c.name}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             );

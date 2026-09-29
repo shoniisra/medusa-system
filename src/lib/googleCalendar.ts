@@ -13,6 +13,8 @@
  * usuario habilita con un checkbox (consentimiento explícito por acción).
  */
 
+import { GOOGLE_EVENT_COLORS as PALETTE_EVENT_COLORS } from '@/config/colors';
+
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
 const SCOPE = 'https://www.googleapis.com/auth/calendar.events';
 
@@ -99,22 +101,14 @@ async function getAccessToken(): Promise<string> {
 }
 
 /**
- * Paleta oficial de colores de eventos de Google Calendar (colorId 1..11).
- * Google no acepta hex arbitrario en eventos: se mapea al colorId más cercano.
+ * Colores de evento de Google (colorId 1..11), tomados de la paleta única de
+ * config/colors. Google no acepta hex arbitrario en un evento: cualquier otro
+ * color del colaborador se mapea al colorId más cercano.
  */
-const GOOGLE_EVENT_COLORS: { id: string; hex: string }[] = [
-  { id: '1', hex: '#7986CB' }, // Lavanda
-  { id: '2', hex: '#33B679' }, // Salvia
-  { id: '3', hex: '#8E24AA' }, // Uva
-  { id: '4', hex: '#E67C73' }, // Flamenco
-  { id: '5', hex: '#F6BF26' }, // Banana
-  { id: '6', hex: '#F4511E' }, // Mandarina
-  { id: '7', hex: '#039BE5' }, // Pavo real
-  { id: '8', hex: '#616161' }, // Grafito
-  { id: '9', hex: '#3F51B5' }, // Arándano
-  { id: '10', hex: '#0B8043' }, // Albahaca
-  { id: '11', hex: '#D50000' }, // Tomate
-];
+const GOOGLE_EVENT_COLORS = PALETTE_EVENT_COLORS.map((c) => ({
+  id: c.eventId,
+  hex: c.hex,
+}));
 
 function parseHex(hex: string): [number, number, number] | null {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
