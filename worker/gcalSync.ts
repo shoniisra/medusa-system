@@ -7,7 +7,9 @@ import type { Client } from '@libsql/client/web';
  * hace POST /api/gcal-sync con los eventos que cambiaron. Este módulo:
  *   1. Autentica con un secreto compartido (defensa en profundidad; la ruta
  *      además está protegida por un service token de Cloudflare Access).
- *   2. Mapea color del evento → estilista (tabla gcal_color_map, editable).
+ *   2. Mapea color del evento → estilista: primero la tabla gcal_color_map
+ *      (por colorId), y si no hay entrada, por el hex del color contra el color
+ *      identificador de cada colaboradora.
  *   3. Parsea el título libre (nombre + servicio + abono) de forma heurística.
  *   4. Hace upsert idempotente por google_calendar_event_id.
  *
@@ -29,13 +31,18 @@ interface EventInput {
   summary?: string;
   startLocal?: string | null; // 'YYYY-MM-DDTHH:mm:ss' o null (todo el día)
   endLocal?: string | null;
-  colorId?: string | null; // '1'..'11' o null (color por defecto)
+  colorId?: string | null; // id del color del evento, o null
+  /** Hex del color ya resuelto por el Apps Script contra la paleta de Google. */
+  colorHex?: string | null;
 }
 
 interface SyncPayload {
   calendarId: string;
   events: EventInput[];
 }
+
+/** colorId que manda el Apps Script cuando el evento hereda el color del calendario. */
+const DEFAULT_COLOR_ID = 'default';
 
 const REVIEW_MARK = '[Revisar]';
 const AUTO_MARK = 'Auto-sync Google Calendar';
@@ -52,6 +59,52 @@ interface ServiceRow {
   name: string;
   category: string | null;
   base_price: number;
+}
+
+interface StaffColorRow {
+  id: string;
+  color: string | null;
+}
+
+function parseHex(hex: string): [number, number, number] | null {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/**
+ * Tolerancia al comparar colores: Google puede devolver un hex apenas distinto
+ * al guardado. Es un margen chico a propósito —un color parecido NO alcanza—,
+ * así que dos colaboradoras con colores distintos nunca se confunden.
+ */
+const COLOR_TOLERANCE = 1200; // ≈ 20 puntos por canal
+
+/**
+ * Busca la colaboradora cuyo color identificador es el del evento. Es el
+ * respaldo de `gcal_color_map`: como el color del equipo sale de la paleta de
+ * Google, pintar el evento con ese color alcanza para asignar la cita.
+ */
+function staffByColor(
+  hex: string | null | undefined,
+  staff: StaffColorRow[],
+): string | null {
+  if (!hex) return null;
+  const rgb = parseHex(hex);
+  if (!rgb) return null;
+  let best: string | null = null;
+  let bestDist = Infinity;
+  for (const s of staff) {
+    const c = s.color ? parseHex(s.color) : null;
+    if (!c) continue;
+    const d =
+      (c[0] - rgb[0]) ** 2 + (c[1] - rgb[1]) ** 2 + (c[2] - rgb[2]) ** 2;
+    if (d < bestDist) {
+      bestDist = d;
+      best = s.id;
+    }
+  }
+  return bestDist <= COLOR_TOLERANCE ? best : null;
 }
 
 /**
@@ -230,6 +283,13 @@ export async function handleGcalSync(
   for (const r of colorRs.rows as { google_color_id: string; staff_id: string }[])
     colorMap.set(r.google_color_id, r.staff_id);
 
+  const staffRs = await db.execute({
+    sql: `SELECT id, color FROM staff_member
+           WHERE organization_id = ? AND active = 1`,
+    args: [orgId],
+  });
+  const staffColors = staffRs.rows as unknown as StaffColorRow[];
+
   const svcRs = await db.execute({
     sql: `SELECT id, name, category, base_price FROM service
            WHERE organization_id = ? AND active = 1`,
@@ -279,7 +339,17 @@ export async function handleGcalSync(
 
     const title = (ev.summary ?? '').trim() || 'Cita sin título';
     const { deposit, service, customer } = parseTitle(title, services);
-    const staffId = ev.colorId ? colorMap.get(ev.colorId) ?? null : null;
+    // 1) mapa manual por colorId (gcal_color_map) · 2) color del evento contra
+    // el color identificador de cada colaboradora.
+    //
+    // Los eventos sin color propio llegan con colorId 'default' (heredan el del
+    // calendario). Para esos vale solo el mapa: adivinar por hex le asignaría el
+    // calendario entero a quien tenga ese color.
+    const colorHex = ev.colorHex?.trim() || null;
+    const ownColor = !!ev.colorId && ev.colorId !== DEFAULT_COLOR_ID;
+    const staffId =
+      (ev.colorId ? colorMap.get(ev.colorId) ?? null : null) ??
+      (ownColor ? staffByColor(colorHex, staffColors) : null);
 
     // ¿Necesita revisión manual? Sin estilista, sin servicio o sin nombre.
     const needsReview = !staffId || !service || !customer;
@@ -322,7 +392,8 @@ export async function handleGcalSync(
           {
             sql: `UPDATE appointment
                     SET start_at = ?, end_at = ?, customer_id = COALESCE(?, customer_id),
-                        deposit_amount = ?, deposit_required = ?, notes = ?, updated_at = ?
+                        deposit_amount = ?, deposit_required = ?, notes = ?,
+                        google_color_id = ?, google_color_hex = ?, updated_at = ?
                   WHERE id = ?`,
             args: [
               startAt,
@@ -331,6 +402,8 @@ export async function handleGcalSync(
               deposit,
               deposit > 0 ? 1 : 0,
               notes,
+              ev.colorId ?? null,
+              colorHex,
               now,
               existing.id,
             ],
@@ -367,8 +440,9 @@ export async function handleGcalSync(
             sql: `INSERT INTO appointment
                     (id, organization_id, branch_id, customer_id, start_at, end_at,
                      status, deposit_required, deposit_amount, notes,
-                     google_calendar_id, google_calendar_event_id, created_at, updated_at)
-                  VALUES (?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?, ?, ?)`,
+                     google_calendar_id, google_calendar_event_id,
+                     google_color_id, google_color_hex, created_at, updated_at)
+                  VALUES (?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             args: [
               apptId,
               orgId,
@@ -381,6 +455,8 @@ export async function handleGcalSync(
               notes,
               body.calendarId,
               ev.id,
+              ev.colorId ?? null,
+              colorHex,
               now,
               now,
             ],

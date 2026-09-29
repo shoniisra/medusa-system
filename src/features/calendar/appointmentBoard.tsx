@@ -24,9 +24,21 @@ export interface AppointmentRow {
   service_name: string | null;
   google_calendar_id: string | null;
   google_calendar_event_id: string | null;
+  /** Color con que se pintó el evento en Google (hex ya resuelto en el sync). */
+  google_color_hex: string | null;
 }
 
 export const FALLBACK_COLOR = '#64748b';
+
+/**
+ * Color con el que se pinta la cita: el de la colaboradora asignada y, si no
+ * hay ninguna, el que tiene el evento en Google. El gris solo aparece cuando
+ * no hay ni una cosa ni la otra.
+ */
+export const rowColor = (a: {
+  staff_color: string | null;
+  google_color_hex?: string | null;
+}): string => a.staff_color || a.google_color_hex || FALLBACK_COLOR;
 
 export const STATUS_ORDER: AppointmentStatus[] = [
   'reserved',
@@ -95,6 +107,7 @@ export function useAppointments(from: string, to: string) {
       query<AppointmentRow>(
         `SELECT a.id, a.start_at, a.end_at, a.status, a.notes,
                 a.google_calendar_id, a.google_calendar_event_id,
+                a.google_color_hex,
                 c.first_name || CASE WHEN c.last_name IS NOT NULL THEN ' ' || c.last_name ELSE '' END AS customer_name,
                 c.phone,
                 s.id AS staff_id,
@@ -186,7 +199,7 @@ export function ListView({
     <ul className="space-y-2.5 lg:space-y-0 lg:divide-y lg:divide-white/5 lg:rounded-3xl lg:border lg:border-white/10 lg:bg-white/[0.02] lg:px-5">
       {rows.map((a) => {
         const meta = APPOINTMENT_STATUS[a.status];
-        const color = a.staff_color || FALLBACK_COLOR;
+        const color = rowColor(a);
         const overdue = isOverdue(a);
         return (
           <li
@@ -329,7 +342,7 @@ export function KanbanView({
                 </div>
               ) : (
                 items.map((a) => {
-                  const color = a.staff_color || FALLBACK_COLOR;
+                  const color = rowColor(a);
                   const locked = a.status === LOCKED_FROM;
                   const draggable = canDrag && !locked;
                   const overdue = isOverdue(a);

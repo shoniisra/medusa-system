@@ -22,7 +22,7 @@ import { Modal } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { GoogleCalendarEmbed } from './GoogleCalendarEmbed';
 import { AgendaCalendar, type AgendaEvent, type AgendaView } from './AgendaCalendar';
-import { FALLBACK_COLOR, ymd, useAppointments } from './appointmentBoard';
+import { rowColor, ymd, useAppointments } from './appointmentBoard';
 
 const VIEW_LABEL: Record<string, string> = {
   three: '3 días',
@@ -69,7 +69,7 @@ export function CalendarViewPage() {
         subtitle: a.service_name ?? undefined,
         start: new Date(a.start_at),
         end: new Date(a.end_at),
-        color: a.staff_color || FALLBACK_COLOR,
+        color: rowColor(a),
       })),
     [appts.data],
   );

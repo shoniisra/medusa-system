@@ -58,6 +58,7 @@ export function TasksPage() {
       query<AppointmentRow>(
         `SELECT a.id, a.start_at, a.end_at, a.status, a.notes,
                 a.google_calendar_id, a.google_calendar_event_id,
+                a.google_color_hex,
                 c.first_name || CASE WHEN c.last_name IS NOT NULL THEN ' ' || c.last_name ELSE '' END AS customer_name,
                 c.phone,
                 s.id AS staff_id,
