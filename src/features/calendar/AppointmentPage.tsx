@@ -14,6 +14,8 @@ import {
   AlertTriangle,
   Search,
   UserPlus,
+  Pencil,
+  Wallet,
   X,
 } from 'lucide-react';
 import { Calendar, dateFnsLocalizer, type View } from 'react-big-calendar';
@@ -1551,8 +1553,14 @@ interface ApptHead {
   deposit_amount: number;
   start_at: string;
   end_at: string;
+  notes: string | null;
   customer_id: string | null;
   customer_name: string | null;
+  customer_first_name: string | null;
+  customer_last_name: string | null;
+  customer_phone: string | null;
+  customer_email: string | null;
+  customer_birth_date: string | null;
   created_at: string | null;
   created_by_name: string | null;
   google_calendar_id: string | null;
@@ -1592,10 +1600,15 @@ function EditAppointment({ id }: { id: string }) {
     queryKey: ['appointment-head', id],
     queryFn: () =>
       queryOne<ApptHead>(
-        `SELECT a.id, a.status, a.deposit_amount, a.start_at, a.end_at,
+        `SELECT a.id, a.status, a.deposit_amount, a.start_at, a.end_at, a.notes,
                 a.customer_id, a.created_at,
                 a.google_calendar_id, a.google_calendar_event_id,
                 c.first_name || CASE WHEN c.last_name IS NOT NULL THEN ' ' || c.last_name ELSE '' END AS customer_name,
+                c.first_name AS customer_first_name,
+                c.last_name AS customer_last_name,
+                c.phone AS customer_phone,
+                c.email AS customer_email,
+                c.birth_date AS customer_birth_date,
                 u.full_name AS created_by_name
            FROM appointment a
            LEFT JOIN customer c ON c.id = a.customer_id
@@ -1643,11 +1656,37 @@ function EditAppointment({ id }: { id: string }) {
   const userId = useSession((s) => s.user?.id ?? null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [voidOpen, setVoidOpen] = useState(false);
+  const [customerOpen, setCustomerOpen] = useState(false);
+  const [depositOpen, setDepositOpen] = useState(false);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['appointment-items', id] });
     qc.invalidateQueries({ queryKey: ['appointments'] });
   };
+
+  const refreshHead = () => {
+    qc.invalidateQueries({ queryKey: ['appointment-head', id] });
+    qc.invalidateQueries({ queryKey: ['appointments'] });
+  };
+
+  // Observaciones de la cita: se guardan a mano (el botón aparece al cambiarlas).
+  const [notesDraft, setNotesDraft] = useState<string | null>(null);
+  const savedNotes = head.data?.notes ?? '';
+  const notesValue = notesDraft ?? savedNotes;
+  const notesDirty = notesDraft !== null && notesDraft !== savedNotes;
+
+  const saveNotes = useMutation({
+    mutationFn: () =>
+      execute('UPDATE appointment SET notes = ?, updated_at = ? WHERE id = ?', [
+        notesValue.trim() || null,
+        new Date().toISOString(),
+        id,
+      ]),
+    onSuccess: () => {
+      setNotesDraft(null);
+      refreshHead();
+    },
+  });
 
   const addService = useMutation({
     mutationFn: async ({ sid, stid }: { sid: string; stid: string | null }) => {
@@ -1902,6 +1941,21 @@ function EditAppointment({ id }: { id: string }) {
                 <h2 className="truncate text-xl font-semibold text-white">
                   {head.data.customer_name ?? 'Sin cliente'}
                 </h2>
+                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-white/45">
+                  {head.data.customer_phone && (
+                    <span>{head.data.customer_phone}</span>
+                  )}
+                  {head.data.customer_email && (
+                    <span className="truncate">{head.data.customer_email}</span>
+                  )}
+                  <button
+                    onClick={() => setCustomerOpen(true)}
+                    className="flex items-center gap-1 font-medium text-gold-300 hover:underline"
+                  >
+                    <Pencil className="h-3 w-3" />
+                    {head.data.customer_id ? 'Editar datos' : 'Agregar cliente'}
+                  </button>
+                </div>
               </div>
               <div className="grid w-full grid-cols-2 gap-x-6 gap-y-2 text-sm sm:w-auto sm:flex sm:flex-wrap sm:gap-x-8 sm:gap-y-1">
                 <div>
@@ -1949,6 +2003,40 @@ function EditAppointment({ id }: { id: string }) {
                   {head.data.created_by_name ?? 'Sistema'}
                 </span>
               </span>
+            </div>
+
+            {/* Observaciones de la cita (lo que pidió el cliente, avisos…) */}
+            <div className="mt-3 border-t border-white/10 pt-3">
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-white/60">
+                  Observaciones de la cita
+                </span>
+                <textarea
+                  value={notesValue}
+                  onChange={(e) => setNotesDraft(e.target.value)}
+                  rows={2}
+                  placeholder="Pedido del cliente, avisos para el equipo…"
+                  className="input-base w-full resize-y"
+                />
+              </label>
+              {notesDirty && (
+                <div className="mt-2 flex justify-end gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setNotesDraft(null)}
+                  >
+                    Descartar
+                  </Button>
+                  <Button
+                    size="sm"
+                    loading={saveNotes.isPending}
+                    onClick={() => saveNotes.mutate()}
+                  >
+                    Guardar observaciones
+                  </Button>
+                </div>
+              )}
             </div>
           </Card>
 
@@ -2081,13 +2169,22 @@ function EditAppointment({ id }: { id: string }) {
               )}
 
               {head.data.status !== 'attended' && (
-                <Button
-                  className="hidden w-full lg:inline-flex"
-                  disabled={sellableItems.length === 0}
-                  onClick={() => setConfirmOpen(true)}
-                >
-                  <Check className="h-4 w-4" /> Confirmar venta
-                </Button>
+                <>
+                  <Button
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => setDepositOpen(true)}
+                  >
+                    <Wallet className="h-4 w-4" /> Registrar abono
+                  </Button>
+                  <Button
+                    className="hidden w-full lg:inline-flex"
+                    disabled={sellableItems.length === 0}
+                    onClick={() => setConfirmOpen(true)}
+                  >
+                    <Check className="h-4 w-4" /> Confirmar venta
+                  </Button>
+                </>
               )}
 
               <Button
@@ -2147,6 +2244,51 @@ function EditAppointment({ id }: { id: string }) {
         />
       )}
 
+      {customerOpen && (
+        <ApptCustomerModal
+          appointmentId={id}
+          orgId={orgId}
+          customerId={head.data.customer_id}
+          firstName={head.data.customer_first_name}
+          lastName={head.data.customer_last_name}
+          phone={head.data.customer_phone}
+          email={head.data.customer_email}
+          birthDate={head.data.customer_birth_date}
+          onClose={() => setCustomerOpen(false)}
+          onDone={() => {
+            setCustomerOpen(false);
+            refreshHead();
+            qc.invalidateQueries({ queryKey: ['customers', orgId] });
+            qc.invalidateQueries({ queryKey: ['clients', orgId] });
+          }}
+        />
+      )}
+
+      {depositOpen && (
+        <DepositModal
+          appointmentId={id}
+          orgId={orgId}
+          branchId={branchId}
+          userId={userId}
+          customerName={head.data.customer_name}
+          maxAmount={balance}
+          onClose={() => setDepositOpen(false)}
+          onDone={() => {
+            setDepositOpen(false);
+            qc.invalidateQueries({ queryKey: ['appointment-deposits', id] });
+            refreshHead();
+            for (const key of [
+              ['fin-accounts'],
+              ['fin-summary'],
+              ['transactions'],
+              ['cash-expected'],
+            ]) {
+              qc.invalidateQueries({ queryKey: key });
+            }
+          }}
+        />
+      )}
+
       {voidOpen && (
         <VoidSaleModal
           appointmentId={id}
@@ -2162,6 +2304,353 @@ function EditAppointment({ id }: { id: string }) {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Datos del cliente editables desde la ficha de la cita, para no tener que
+ * saltar a Clientes en medio de la atención. Si la cita no tenía cliente, se
+ * crea uno y queda vinculado (el teléfono es único: se avisa si ya existe).
+ */
+function ApptCustomerModal({
+  appointmentId,
+  orgId,
+  customerId,
+  firstName: initialFirst,
+  lastName: initialLast,
+  phone: initialPhone,
+  email: initialEmail,
+  birthDate: initialBirth,
+  onClose,
+  onDone,
+}: {
+  appointmentId: string;
+  orgId: string;
+  customerId: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  phone: string | null;
+  email: string | null;
+  birthDate: string | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [firstName, setFirstName] = useState(initialFirst ?? '');
+  const [lastName, setLastName] = useState(initialLast ?? '');
+  const [phone, setPhone] = useState(initialPhone ?? '');
+  const [email, setEmail] = useState(initialEmail ?? '');
+  const [birth, setBirth] = useState(initialBirth ?? '');
+  const [error, setError] = useState('');
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const name = firstName.trim();
+      if (!name) throw new Error('El nombre del cliente es obligatorio.');
+      const canonical = phone.trim() || null;
+      const phoneError = validatePhone(canonical);
+      if (phoneError) throw new Error(phoneError);
+      if (canonical) {
+        const hit = await findCustomerByPhone(orgId, canonical);
+        if (hit && hit.id !== customerId)
+          throw new Error(
+            `Ese número ya es de ${fullName(hit.first_name, hit.last_name)}. Buscalo en la lista en vez de crear uno nuevo.`,
+          );
+      }
+      const now = new Date().toISOString();
+      if (customerId) {
+        await execute(
+          `UPDATE customer
+              SET first_name = ?, last_name = ?, phone = ?, email = ?,
+                  birth_date = ?, updated_at = ?
+            WHERE id = ?`,
+          [
+            name,
+            lastName.trim() || null,
+            canonical,
+            email.trim() || null,
+            birth || null,
+            now,
+            customerId,
+          ],
+        );
+        return;
+      }
+      // Cliente nuevo: se crea y se ata a la cita en un solo lote.
+      const newId = genId();
+      await batch([
+        {
+          sql: `INSERT INTO customer
+                  (id, organization_id, first_name, last_name, phone, email, birth_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          args: [
+            newId,
+            orgId,
+            name,
+            lastName.trim() || null,
+            canonical,
+            email.trim() || null,
+            birth || null,
+          ],
+        },
+        {
+          sql: 'UPDATE appointment SET customer_id = ?, updated_at = ? WHERE id = ?',
+          args: [newId, now, appointmentId],
+        },
+      ]);
+    },
+    onSuccess: onDone,
+    onError: (e) =>
+      setError(e instanceof Error ? e.message : 'No se pudo guardar el cliente.'),
+  });
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={customerId ? 'Datos del cliente' : 'Agregar cliente'}
+    >
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <Input
+            label="Nombre"
+            value={firstName}
+            onChange={(e) => setFirstName(e.target.value)}
+          />
+          <Input
+            label="Apellido"
+            value={lastName}
+            onChange={(e) => setLastName(e.target.value)}
+          />
+        </div>
+        <PhoneInput
+          label="WhatsApp"
+          value={phone}
+          onChange={(v) => {
+            setPhone(v);
+            setError('');
+          }}
+        />
+        <Input
+          label="Email"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+        <Input
+          label="Cumpleaños"
+          type="date"
+          value={birth}
+          onChange={(e) => setBirth(e.target.value)}
+        />
+        {error && <p className="text-xs text-danger">{error}</p>}
+        <Button
+          className="w-full"
+          disabled={!firstName.trim()}
+          loading={save.isPending}
+          onClick={() => {
+            setError('');
+            save.mutate();
+          }}
+        >
+          <Check className="h-4 w-4" /> Guardar
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * Abono de la cita: un cobro adelantado atado a la cita (sale_id NULL), igual
+ * que la seña que se toma al reservar. El efectivo entra a la caja abierta; una
+ * cuenta bancaria no toca la caja física. Al confirmar la venta, estos abonos
+ * se descuentan del saldo y quedan atribuidos a ella.
+ */
+function DepositModal({
+  appointmentId,
+  orgId,
+  branchId,
+  userId,
+  customerName,
+  maxAmount,
+  onClose,
+  onDone,
+}: {
+  appointmentId: string;
+  orgId: string;
+  branchId: string;
+  userId: string | null;
+  customerName: string | null;
+  /** Saldo pendiente: sirve de referencia, no de tope rígido. */
+  maxAmount: number;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [amount, setAmount] = useState('');
+  const [dest, setDest] = useState('');
+  const [reference, setReference] = useState('');
+  const [error, setError] = useState('');
+
+  const banks = useQuery({
+    queryKey: ['bank-accounts', orgId],
+    enabled: !!orgId,
+    queryFn: () =>
+      query<BankAccount>(
+        'SELECT * FROM bank_account WHERE organization_id = ? AND active = 1 ORDER BY name',
+        [orgId],
+      ),
+  });
+  const payMethods = useQuery({
+    queryKey: ['payment-methods', orgId],
+    enabled: !!orgId,
+    queryFn: () =>
+      query<PaymentMethod>(
+        'SELECT * FROM payment_method WHERE organization_id = ? AND active = 1 ORDER BY name',
+        [orgId],
+      ),
+  });
+  const cash = useQuery({
+    queryKey: ['open-cash', branchId],
+    enabled: !!branchId,
+    queryFn: () =>
+      queryOne<CashSession>(
+        `SELECT cs.* FROM cash_session cs
+           JOIN cash_register cr ON cr.id = cs.cash_register_id
+          WHERE cr.branch_id = ? AND cs.status = 'open'
+          ORDER BY cs.opened_at DESC LIMIT 1`,
+        [branchId],
+      ),
+  });
+
+  const cashMethod = payMethods.data?.find((m) => m.method_type === 'cash');
+  const transferMethod = payMethods.data?.find(
+    (m) => m.method_type === 'transfer',
+  );
+  const firstBankId = banks.data?.[0]?.id ?? '';
+  const effectiveDest = dest || firstBankId || 'cash';
+  const isCash = effectiveDest === 'cash';
+  const method = isCash ? cashMethod : transferMethod;
+  const sessionId = cash.data?.id ?? null;
+  const value = Number(amount) || 0;
+
+  const save = useMutation({
+    mutationFn: async () => {
+      if (value <= 0) throw new Error('El monto del abono debe ser mayor a 0.');
+      if (!method)
+        throw new Error(
+          `No hay un método de pago ${
+            isCash ? 'en efectivo' : 'por transferencia'
+          } configurado.`,
+        );
+      const label = customerName ?? 'cliente';
+      const nowIso = new Date().toISOString();
+      const paymentId = genId();
+      const stmts: { sql: string; args: (string | number | null)[] }[] = [
+        {
+          sql: `INSERT INTO payment
+                  (id, organization_id, branch_id, sale_id, appointment_id, payment_method_id,
+                   bank_account_id, paid_at, amount, status, reference)
+                VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, 'confirmed', ?)`,
+          args: [
+            paymentId,
+            orgId,
+            branchId,
+            appointmentId,
+            method.id,
+            isCash ? null : effectiveDest,
+            nowIso,
+            value,
+            reference.trim() || `[Abono] ${label}`,
+          ],
+        },
+      ];
+      if (isCash && sessionId) {
+        stmts.push({
+          sql: `INSERT INTO cash_movement
+                  (id, cash_session_id, branch_id, movement_type, direction, amount,
+                   movement_at, payment_id, description, created_by)
+                VALUES (?, ?, ?, 'cash_in', 'in', ?, ?, ?, ?, ?)`,
+          args: [
+            genId(),
+            sessionId,
+            branchId,
+            value,
+            nowIso,
+            paymentId,
+            `Abono ${label}`,
+            userId,
+          ],
+        });
+      }
+      await batch(stmts);
+    },
+    onSuccess: onDone,
+    onError: (e) =>
+      setError(e instanceof Error ? e.message : 'No se pudo registrar el abono.'),
+  });
+
+  return (
+    <Modal open onClose={onClose} title="Registrar abono">
+      <div className="space-y-4">
+        {maxAmount > 0 && (
+          <p className="text-xs text-white/50">
+            Saldo pendiente de la cita: {money(maxAmount)}
+          </p>
+        )}
+
+        <Input
+          label="Monto"
+          type="number"
+          inputMode="decimal"
+          min="0"
+          step="0.01"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          placeholder="0.00"
+        />
+
+        <Select
+          label="Cobrar en"
+          value={effectiveDest}
+          onChange={(e) => setDest(e.target.value)}
+        >
+          {banks.data?.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.name} (transferencia)
+            </option>
+          ))}
+          <option value="cash">Efectivo (caja)</option>
+        </Select>
+
+        {!isCash && (
+          <Input
+            label="Referencia (opcional)"
+            value={reference}
+            onChange={(e) => setReference(e.target.value)}
+            placeholder="Nº transferencia, voucher…"
+          />
+        )}
+
+        {isCash && !sessionId && (
+          <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
+            <AlertTriangle className="h-3.5 w-3.5" /> No hay caja abierta: el
+            abono se registra pero no entra al efectivo de caja.
+          </p>
+        )}
+        {error && <p className="text-xs text-danger">{error}</p>}
+
+        <Button
+          className="w-full"
+          disabled={value <= 0 || !method}
+          loading={save.isPending}
+          onClick={() => {
+            setError('');
+            save.mutate();
+          }}
+        >
+          <Check className="h-4 w-4" /> Registrar abono
+        </Button>
+      </div>
+    </Modal>
   );
 }
 
@@ -2369,8 +2858,8 @@ interface PaymentLite {
 
 /**
  * Confirma la venta de la cita: crea la venta (con comisiones al colaborador
- * asignado, % por defecto) y registra el pago con su forma de pago. El efectivo
- * entra a la caja abierta; transferencia/tarjeta no tocan la caja física.
+ * asignado, % por defecto) y registra el cobro en la cuenta elegida. El efectivo
+ * entra a la caja abierta; las cuentas bancarias no tocan la caja física.
  * Al confirmar, la cita queda "atendida".
  */
 function ConfirmSaleModal({
@@ -2409,11 +2898,21 @@ function ConfirmSaleModal({
   // El monto a cobrar es el saldo (total − seña) y no es editable: se cobra
   // exactamente lo que resta de la venta.
   const balance = Math.max(0, total - depositPaid);
-  const [methodId, setMethodId] = useState('');
+  // Destino del cobro: una cuenta bancaria (transferencia) o "cash" (efectivo).
+  const [dest, setDest] = useState('');
   const [reference, setReference] = useState('');
   const [error, setError] = useState('');
 
-  const methods = useQuery({
+  const banks = useQuery({
+    queryKey: ['bank-accounts', orgId],
+    enabled: !!orgId,
+    queryFn: () =>
+      query<BankAccount>(
+        'SELECT * FROM bank_account WHERE organization_id = ? AND active = 1 ORDER BY name',
+        [orgId],
+      ),
+  });
+  const payMethods = useQuery({
     queryKey: ['payment-methods', orgId],
     enabled: !!orgId,
     queryFn: () =>
@@ -2438,8 +2937,15 @@ function ConfirmSaleModal({
   });
   const sessionId = cash.data?.id ?? null;
 
-  const method = methods.data?.find((m) => m.id === methodId);
-  const isCash = method?.method_type === 'cash';
+  const cashMethod = payMethods.data?.find((m) => m.method_type === 'cash');
+  const transferMethod = payMethods.data?.find(
+    (m) => m.method_type === 'transfer',
+  );
+  const firstBankId = banks.data?.[0]?.id ?? '';
+  // Por defecto: primera cuenta bancaria; si no hay, efectivo.
+  const effectiveDest = dest || firstBankId || 'cash';
+  const isCash = effectiveDest === 'cash';
+  const method = isCash ? cashMethod : transferMethod;
 
   // ¿La cita es de un día anterior? → venta retroactiva.
   const now = new Date();
@@ -2461,6 +2967,13 @@ function ConfirmSaleModal({
       if (current?.status === 'attended') {
         throw new Error('Esta cita ya fue atendida y cobrada.');
       }
+
+      if (balance > 0 && !method)
+        throw new Error(
+          `No hay un método de pago ${
+            isCash ? 'en efectivo' : 'por transferencia'
+          } configurado.`,
+        );
 
       // Comisiones vigentes por colaborador+servicio (config o % por defecto).
       const rules = await loadCommissionRules();
@@ -2531,15 +3044,16 @@ function ConfirmSaleModal({
         const paymentId = genId();
         stmts.push({
           sql: `INSERT INTO payment
-                  (id, organization_id, branch_id, sale_id, payment_method_id, paid_at,
-                   amount, status, reference)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)`,
+                  (id, organization_id, branch_id, sale_id, payment_method_id,
+                   bank_account_id, paid_at, amount, status, reference)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)`,
           args: [
             paymentId,
             orgId,
             branchId,
             saleId,
-            methodId,
+            method!.id,
+            isCash ? null : effectiveDest,
             now,
             pay,
             reference || null,
@@ -2589,7 +3103,7 @@ function ConfirmSaleModal({
   const canConfirm =
     items.length > 0 &&
     !confirm.isPending &&
-    (balance === 0 || (!!methodId && balance > 0));
+    (balance === 0 || (!!method && balance > 0));
 
   return (
     <Modal open onClose={onClose} title="Confirmar venta">
@@ -2612,24 +3126,26 @@ function ConfirmSaleModal({
         </div>
 
         <Select
-          label="Forma de pago"
-          value={methodId}
-          onChange={(e) => setMethodId(e.target.value)}
+          label="Cobrar en"
+          value={effectiveDest}
+          onChange={(e) => setDest(e.target.value)}
         >
-          <option value="">Seleccionar…</option>
-          {methods.data?.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name}
+          {banks.data?.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.name} (transferencia)
             </option>
           ))}
+          <option value="cash">Efectivo (caja)</option>
         </Select>
 
-        <Input
-          label="Referencia (opcional)"
-          value={reference}
-          onChange={(e) => setReference(e.target.value)}
-          placeholder="Nº transferencia, voucher…"
-        />
+        {!isCash && (
+          <Input
+            label="Referencia (opcional)"
+            value={reference}
+            onChange={(e) => setReference(e.target.value)}
+            placeholder="Nº transferencia, voucher…"
+          />
+        )}
 
         {isRetroactive && (
           <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
