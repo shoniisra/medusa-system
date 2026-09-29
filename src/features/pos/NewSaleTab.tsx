@@ -42,6 +42,7 @@ import type {
   DraftCommission,
   DraftSaleItem,
   PaymentMethod,
+  Product,
 } from '@/types';
 
 /**
@@ -179,8 +180,16 @@ export function NewSaleTab() {
       assigned_staff_id: stid,
     });
   }
-  function onAddProduct({ pid, qty }: { pid: string; qty: number }) {
-    const p = products.data?.find((x) => x.id === pid);
+  function onAddProduct({
+    pid,
+    qty,
+    product,
+  }: {
+    pid: string;
+    qty: number;
+    product?: Product;
+  }) {
+    const p = product ?? products.data?.find((x) => x.id === pid);
     if (!p) return;
     draft.addItem({
       service_id: null,

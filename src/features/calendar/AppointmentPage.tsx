@@ -74,6 +74,7 @@ import type {
   DraftCommission,
   DraftSaleItem,
   PaymentMethod,
+  Product,
 } from '@/types';
 
 export function AppointmentPage() {
@@ -1578,8 +1579,16 @@ function EditAppointment({ id }: { id: string }) {
   });
 
   const addProduct = useMutation({
-    mutationFn: async ({ pid, qty }: { pid: string; qty: number }) => {
-      const p = products.data?.find((x) => x.id === pid);
+    mutationFn: async ({
+      pid,
+      qty,
+      product,
+    }: {
+      pid: string;
+      qty: number;
+      product?: Product;
+    }) => {
+      const p = product ?? products.data?.find((x) => x.id === pid);
       if (!p) return;
       const q = Number(qty) || 1;
       await execute(
@@ -1826,7 +1835,9 @@ function EditAppointment({ id }: { id: string }) {
             }
             onRemoveItem={(itemId) => removeItem.mutate(itemId)}
             onAddService={({ sid, stid }) => addService.mutate({ sid, stid })}
-            onAddProduct={({ pid, qty }) => addProduct.mutate({ pid, qty })}
+            onAddProduct={({ pid, qty, product }) =>
+              addProduct.mutate({ pid, qty, product })
+            }
           />
         </div>
 

@@ -11,8 +11,9 @@ import {
 import { money, num, fullName } from '@/lib/format';
 import { SERVICE_CATEGORIES } from '@/config/constants';
 import { cn } from '@/lib/cn';
-import { Button, Card, CardHeader, Modal, Select } from '@/components/ui';
+import { Button, Card, CardHeader, Input, Modal, Select } from '@/components/ui';
 import { commissionForItem, type CommissionRule } from './createSale';
+import { useCreateProduct, type NewProductDraft } from './useCatalog';
 import type { CommissionType, Product, Service, StaffMember } from '@/types';
 
 /**
@@ -108,7 +109,12 @@ export function SaleItemsEditor({
   onReassign: (id: string, staffId: string | null) => void;
   onRemoveItem: (id: string) => void;
   onAddService: (args: { sid: string; stid: string | null }) => void;
-  onAddProduct: (args: { pid: string; qty: number }) => void;
+  /** `product` viene solo en el alta al vuelo: aún no está en el catálogo cargado. */
+  onAddProduct: (args: {
+    pid: string;
+    qty: number;
+    product?: Product;
+  }) => void;
 }) {
   const [adding, setAdding] = useState<'service' | 'product' | null>(null);
 
@@ -445,8 +451,8 @@ export function SaleItemsEditor({
         open={adding === 'product'}
         onClose={() => setAdding(null)}
         products={products}
-        onAdd={(pid, qty) => {
-          onAddProduct({ pid, qty });
+        onAdd={(pid, qty, product) => {
+          onAddProduct({ pid, qty, product });
           setAdding(null);
         }}
       />
@@ -758,12 +764,16 @@ function AddProductSheet({
   open: boolean;
   onClose: () => void;
   products: Product[];
-  onAdd: (pid: string, qty: number) => void;
+  onAdd: (pid: string, qty: number, product?: Product) => void;
 }) {
   const [q, setQ] = useState('');
+  const [creating, setCreating] = useState(false);
+  const createProduct = useCreateProduct();
 
   useEffect(() => {
-    if (open) setQ('');
+    if (!open) return;
+    setQ('');
+    setCreating(false);
   }, [open]);
 
   const list = useMemo(() => {
@@ -778,31 +788,159 @@ function AddProductSheet({
     <Modal
       open={open}
       onClose={onClose}
-      title="Agregar producto"
+      title={creating ? 'Nuevo producto' : 'Agregar producto'}
       className="sm:max-w-2xl"
     >
-      <SheetSearch value={q} onChange={setQ} placeholder="Buscar producto…" />
-      {list.length === 0 ? (
-        <p className="py-8 text-center text-sm text-white/40">
-          Sin productos que coincidan.
-        </p>
+      {creating ? (
+        <NewProductForm
+          initialName={q.trim()}
+          saving={createProduct.isPending}
+          error={
+            createProduct.isError
+              ? 'No se pudo guardar el producto. Reintentá.'
+              : ''
+          }
+          onCancel={() => setCreating(false)}
+          onSubmit={async (draft) => {
+            const p = await createProduct.mutateAsync(draft);
+            // Se pasa la fila entera: el contenedor todavía tiene en memoria el
+            // catálogo anterior y no encontraría el id recién creado.
+            onAdd(p.id, 1, p);
+          }}
+        />
       ) : (
-        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-          {list.map((p) => (
+        <>
+          <SheetSearch value={q} onChange={setQ} placeholder="Buscar producto…" />
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+            {/* Alta rápida: el catálogo se arma sobre la marcha, sin salir de
+                la venta. */}
             <button
-              key={p.id}
               type="button"
-              onClick={() => onAdd(p.id, 1)}
-              className={CARD_BASE}
+              onClick={() => setCreating(true)}
+              className={cn(
+                CARD_BASE,
+                'border-dashed border-gold/40 bg-gold/[0.06] text-gold-100',
+              )}
             >
-              <span className="line-clamp-3">{p.name}</span>
-              <span className="text-[13px] font-semibold text-gold-200">
-                {money(p.base_price)}
-              </span>
+              <Plus className="h-5 w-5" />
+              {q.trim() ? `Crear "${q.trim()}"` : 'Nuevo producto'}
             </button>
-          ))}
-        </div>
+            {list.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => onAdd(p.id, 1)}
+                className={CARD_BASE}
+              >
+                <span className="line-clamp-3">{p.name}</span>
+                <span className="text-[13px] font-semibold text-gold-200">
+                  {money(p.base_price)}
+                </span>
+              </button>
+            ))}
+          </div>
+          {products.length === 0 && (
+            <p className="mt-3 text-center text-sm text-white/40">
+              Todavía no hay productos cargados: creá el primero acá.
+            </p>
+          )}
+        </>
       )}
     </Modal>
+  );
+}
+
+/** Alta mínima de producto: lo indispensable para poder cobrarlo hoy. */
+function NewProductForm({
+  initialName,
+  saving,
+  error,
+  onCancel,
+  onSubmit,
+}: {
+  initialName: string;
+  saving: boolean;
+  error: string;
+  onCancel: () => void;
+  onSubmit: (draft: NewProductDraft) => void;
+}) {
+  const [name, setName] = useState(initialName);
+  const [sku, setSku] = useState('');
+  const [price, setPrice] = useState('');
+  const [cost, setCost] = useState('');
+
+  const priceNum = Number(price.replace(',', '.')) || 0;
+  const costNum = Number(cost.replace(',', '.')) || 0;
+  const ready = name.trim().length > 0 && priceNum > 0;
+
+  return (
+    <div className="space-y-3">
+      <Input
+        label="Nombre"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="Ej: Shampoo matizante"
+      />
+      <div>
+        <Input
+          label="SKU (opcional)"
+          value={sku}
+          onChange={(e) => setSku(e.target.value)}
+          placeholder="Ej: SH-MAT-250"
+        />
+        <p className="mt-1 text-xs text-white/40">
+          Abreviación o código con el que lo reconocés; también sirve para
+          buscarlo.
+        </p>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <Input
+          label="Precio de venta"
+          type="number"
+          inputMode="decimal"
+          min="0"
+          step="0.01"
+          value={price}
+          onChange={(e) => setPrice(e.target.value)}
+          placeholder="0,00"
+        />
+        <Input
+          label="Precio de costo"
+          type="number"
+          inputMode="decimal"
+          min="0"
+          step="0.01"
+          value={cost}
+          onChange={(e) => setCost(e.target.value)}
+          placeholder="0,00"
+        />
+      </div>
+      <p className="text-xs text-white/40">
+        Se guarda por unidad. Si lo vendés por ml o g, cambiá la unidad en
+        Configuración → Productos.
+      </p>
+      {error && <p className="text-sm text-danger">{error}</p>}
+
+      <div className="flex gap-2 pt-1">
+        <Button variant="ghost" className="flex-1" onClick={onCancel}>
+          Cancelar
+        </Button>
+        <Button
+          className="flex-1"
+          disabled={!ready || saving}
+          onClick={() =>
+            onSubmit({
+              name: name.trim(),
+              sku: sku.trim() || null,
+              base_price: priceNum,
+              cost_price: costNum,
+            })
+          }
+        >
+          <Plus className="h-4 w-4" />
+          {saving ? 'Guardando…' : 'Crear y agregar'}
+        </Button>
+      </div>
+    </div>
   );
 }
