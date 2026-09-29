@@ -38,9 +38,17 @@ function setUp() {
       ScriptApp.deleteTrigger(triggers[i]);
     }
   }
+  // Trigger por evento (instantáneo cuando Google lo dispara).
   ScriptApp.newTrigger('syncCalendar')
     .forUserCalendar(cfg_('CALENDAR_ID'))
     .onEventUpdated()
+    .create();
+
+  // Fallback: el trigger por evento a veces no dispara, así que además corremos
+  // cada 5 min. Es barato: solo pide los cambios (syncToken).
+  ScriptApp.newTrigger('syncCalendar')
+    .timeBased()
+    .everyMinutes(5)
     .create();
 
   // Fuerza una primera pasada completa.

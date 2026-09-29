@@ -54,58 +54,104 @@ interface ServiceRow {
   base_price: number;
 }
 
-/** Extrae abono, texto de servicio y nombre de cliente de un título libre. */
+/**
+ * Sinónimos informales → servicio del catálogo (por substring del nombre, sin
+ * acentos). El salón escribe cosas como "uñas", "semi", "poligel"; acá las
+ * mapeamos al servicio real. Editá esta lista para afinar el reconocimiento.
+ */
+function matchBySynonym(nraw: string, services: ServiceRow[]): ServiceRow | null {
+  const find = (sub: string) =>
+    services.find((s) => norm(s.name).includes(norm(sub))) ?? null;
+  const has = (re: RegExp) => re.test(nraw);
+  const semi = has(/\bsemi/);
+  const pedi = has(/\bpedic|\bpedi\b/);
+
+  if (has(/lifting/)) return find('lifting de pestañas');
+  if (has(/poligel/)) return find('extension - poligel normal');
+  if (has(/acril/)) return find('acrilico normal');
+  if (has(/cejas?/)) return find('diseño de cejas');
+  if (has(/pesta/)) return find('pestañas - aplicacion');
+  if (has(/maquilla/)) return find('maquillaje social basico (sin pesta');
+  if (pedi && semi) return find('pedicura - esmaltado semipermante');
+  if (pedi) return find('pedicura - esmaltado');
+  if (semi) return find('esmaltado semipermanente - normal'); // manicura
+  if (has(/\bunas?\b|manicur/)) return find('manicura (por definir)');
+  return null;
+}
+
+/** Palabras de servicio/relleno a excluir del nombre de cliente (sin acentos). */
+const STOPWORDS = new Set([
+  'unas', 'una', 'semi', 'semipermanente', 'poligel', 'acrilico', 'pedicura',
+  'pedi', 'manicura', 'lifting', 'cejas', 'ceja', 'pestanas', 'pestana',
+  'maquillaje', 'color', 'coloracion', 'corte', 'peinado', 'retiro', 'retoque',
+  'esmaltado', 'bano', 'matiz', 'tinte', 'familiar', 'sobrina', 'sobrino',
+  'mujeres', 'mujer', 'hombres', 'hombre', 'clienta', 'cliente', 'am', 'pm',
+]);
+const CONNECTORS = new Set([
+  'de', 'del', 'la', 'el', 'los', 'las', 'con', 'y', 'para', 'x', 'al', 'a',
+  'en', 'o', 'su',
+]);
+
+/** Extrae abono, servicio y nombre de cliente de un título libre. */
 function parseTitle(
   summary: string,
   services: ServiceRow[],
 ): { deposit: number; service: ServiceRow | null; customer: string | null } {
   const raw = summary.trim();
 
-  // Abono: "$10", "abono 10", "abono $10".
+  // Abono: "$10", "abono 10", "abona 5", "abonó 5".
   let deposit = 0;
   const depMatch =
-    raw.match(/abono[^0-9]*([0-9]+(?:[.,][0-9]+)?)/i) ||
+    raw.match(/abon\w*[^0-9]*([0-9]+(?:[.,][0-9]+)?)/i) ||
     raw.match(/\$\s*([0-9]+(?:[.,][0-9]+)?)/);
   if (depMatch) deposit = Number(depMatch[1].replace(',', '.')) || 0;
 
   const nraw = norm(raw);
 
-  // Servicio: elegimos el servicio cuyo nombre comparte más palabras (≥4 letras)
-  // significativas con el título. Empate → nombre más corto.
-  let best: ServiceRow | null = null;
-  let bestScore = 0;
-  for (const svc of services) {
-    if (/por definir/i.test(svc.name)) continue; // placeholders no compiten
-    const words = norm(svc.name)
-      .split(/[^a-z0-9]+/)
-      .filter((w) => w.length >= 4 && !['cabello', 'servicio'].includes(w));
-    let score = 0;
-    for (const w of words) if (nraw.includes(w)) score += w.length;
-    if (
-      score > bestScore ||
-      (score === bestScore && best && svc.name.length < best.name.length)
-    ) {
-      bestScore = score;
-      if (score > 0) best = svc;
+  // 1) Sinónimos informales. 2) Si no, match por palabras del nombre del servicio.
+  let best = matchBySynonym(nraw, services);
+  if (!best) {
+    let bestScore = 0;
+    for (const svc of services) {
+      if (/por definir/i.test(svc.name)) continue;
+      const words = norm(svc.name)
+        .split(/[^a-z0-9]+/)
+        .filter((w) => w.length >= 4 && !['cabello', 'servicio'].includes(w));
+      let score = 0;
+      for (const w of words) if (nraw.includes(w)) score += w.length;
+      if (
+        score > bestScore ||
+        (score === bestScore && best && svc.name.length < best.name.length)
+      ) {
+        bestScore = score;
+        if (score > 0) best = svc;
+      }
     }
   }
 
-  // Nombre de cliente: quitamos el nombre del servicio y el abono del título.
-  let customer: string | null = raw
-    .replace(/abono[^0-9]*[0-9]+(?:[.,][0-9]+)?/i, '')
-    .replace(/\$\s*[0-9]+(?:[.,][0-9]+)?/g, '')
-    .trim();
-  if (best) {
-    for (const w of norm(best.name)
-      .split(/[^a-z0-9]+/)
-      .filter((x) => x.length >= 4)) {
-      customer = customer!.replace(new RegExp(w, 'gi'), '');
-    }
-  }
-  customer = (customer ?? '').replace(/[\s\-–—·,|]+/g, ' ').trim();
-  if (customer.length < 2) customer = null;
+  // Nombre de cliente: tokenizamos y descartamos abono, números, conectores,
+  // palabras de servicio y las palabras del servicio que matcheó. Comparamos sin
+  // acentos, pero conservamos el token original (con mayúsculas/acentos) al unir.
+  const svcWords = best
+    ? new Set(
+        norm(best.name)
+          .split(/[^a-z0-9]+/)
+          .filter((w) => w.length >= 3),
+      )
+    : new Set<string>();
+  const kept = raw
+    .split(/[\s\-–—·,|:]+/)
+    .filter((tok) => {
+      const n = norm(tok);
+      if (n.length < 2) return false;
+      if (/^\$?[0-9]+(?:[.,][0-9]+)?$/.test(n)) return false; // números / abono
+      if (/^abon/.test(n)) return false;
+      if (STOPWORDS.has(n) || CONNECTORS.has(n) || svcWords.has(n)) return false;
+      return true;
+    });
+  const clean: string | null = kept.length ? kept.join(' ') : null;
 
-  return { deposit, service: best, customer };
+  return { deposit, service: best, customer: clean };
 }
 
 async function findOrCreateCustomer(
@@ -202,13 +248,18 @@ export async function handleGcalSync(
       continue;
     }
 
+    // El import viejo guardó el iCalUID (<id>@google.com); Apps Script manda el
+    // <id> de la API. Para eventos no recurrentes son el mismo evento, así que
+    // buscamos por ambas claves y evitamos duplicar lo ya importado.
+    const altId = `${ev.id}@google.com`;
+
     // Cancelaciones: marcar la cita, sin tocar nada más.
     if (ev.status === 'cancelled') {
       const rs = await db.execute({
         sql: `UPDATE appointment SET status = 'cancelled', updated_at = ?
-                WHERE google_calendar_event_id = ? AND branch_id = ?
+                WHERE google_calendar_event_id IN (?, ?) AND branch_id = ?
                   AND status NOT IN ('attended')`,
-        args: [new Date().toISOString(), ev.id, branchId],
+        args: [new Date().toISOString(), ev.id, altId, branchId],
       });
       if (rs.rowsAffected > 0) summary.cancelled++;
       else summary.skipped++;
@@ -250,10 +301,19 @@ export async function handleGcalSync(
 
     const now = new Date().toISOString();
     const existingRs = await db.execute({
-      sql: `SELECT id FROM appointment WHERE google_calendar_event_id = ? AND branch_id = ? LIMIT 1`,
-      args: [ev.id, branchId],
+      sql: `SELECT id, status FROM appointment
+             WHERE google_calendar_event_id IN (?, ?) AND branch_id = ? LIMIT 1`,
+      args: [ev.id, altId, branchId],
     });
-    const existing = existingRs.rows[0] as { id: string } | undefined;
+    const existing = existingRs.rows[0] as
+      | { id: string; status: string }
+      | undefined;
+
+    // Cita ya atendida (facturada): no la pisamos con datos de Google.
+    if (existing && existing.status === 'attended') {
+      summary.skipped++;
+      continue;
+    }
 
     if (existing) {
       // No tocamos el estado (respeta un "Atender" hecho en la app).
