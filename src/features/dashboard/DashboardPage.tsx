@@ -16,6 +16,7 @@ import {
   MessageCircle,
   Cake,
   Check,
+  Play,
   GripVertical,
 } from 'lucide-react';
 import { query, execute } from '@/lib/db';
@@ -29,6 +30,8 @@ import { money, dateShort, timeShort, todayISO } from '@/lib/format';
 import { phoneToWaDigits } from '@/lib/phone';
 import { useSession, useOrgId } from '@/store/session';
 import { ROUTES, APPOINTMENT_STATUS } from '@/config/constants';
+import { AppointmentActionsModal } from '@/features/calendar/AppointmentActions';
+import type { NextAppointment } from './useDashboardMetrics';
 import type { AppointmentStatus } from '@/types';
 
 const SECTION_KEYS = [
@@ -90,25 +93,27 @@ export function DashboardPage() {
   const monthly = useMonthlySales();
   const { order, move } = useSectionOrder();
 
-  // "Atender" desde próximas citas: igual que en la agenda. Una cita reservada
-  // pasa a "Atendiendo" (confirmed) y se abre la ficha de atención; si ya está
-  // atendiendo, lleva directo a la ficha para finalizar y cobrar.
-  const startAttention = (a: { id: string; status: string }) => {
-    if (a.status === 'reserved') {
-      execute(
-        "UPDATE appointment SET status = 'confirmed', updated_at = ? WHERE id = ?",
-        [new Date().toISOString(), a.id],
-      )
-        .then(() => {
-          qc.invalidateQueries({ queryKey: ['dashboard-metrics'] });
-          qc.invalidateQueries({ queryKey: ['appointments'] });
-        })
-        .catch(() => {
-          /* si falla, igual seguimos a la ficha */
-        });
-    }
-    navigate(`${ROUTES.appointment}/${a.id}?atender=1`);
+  // Cita con el menú de acciones abierto (el mismo de la agenda y el tablero).
+  const [selectedAppt, setSelectedAppt] = useState<NextAppointment | null>(null);
+
+  // "Empezar a Atender": la cita pasa a "Atendiendo" sin salir del inicio.
+  const startAttention = (a: { id: string }) => {
+    execute(
+      "UPDATE appointment SET status = 'confirmed', updated_at = ? WHERE id = ?",
+      [new Date().toISOString(), a.id],
+    )
+      .then(() => {
+        qc.invalidateQueries({ queryKey: ['dashboard-metrics'] });
+        qc.invalidateQueries({ queryKey: ['appointments'] });
+      })
+      .catch(() => {
+        /* si falla, el estado sigue como estaba */
+      });
   };
+
+  // "Finalizar y Cobrar": abre la ficha para confirmar el detalle y cobrar.
+  const finishAttention = (a: { id: string }) =>
+    navigate(`${ROUTES.appointment}/${a.id}?atender=1`);
   const orderOf = (k: SectionKey) => order.indexOf(k) + 1;
 
   const col = data?.collections;
@@ -255,24 +260,28 @@ export function DashboardPage() {
             }
           />
           {met && met.nextAppointments.length > 0 ? (
-            <ul className="space-y-3">
+            <ul className="space-y-2">
               {met.nextAppointments.map((a) => {
                 const meta = APPOINTMENT_STATUS[a.status as AppointmentStatus];
+                const started = a.status === 'confirmed';
+                const actionable = a.status === 'reserved' || started;
                 return (
                   <li
                     key={a.id}
-                    className="flex flex-col gap-3 rounded-xl bg-white/5 p-3 sm:flex-row sm:items-center sm:justify-between"
+                    onClick={() => setSelectedAppt(a)}
+                    className="cursor-pointer rounded-xl bg-white/5 p-3 transition-colors hover:bg-white/[0.08]"
                   >
-                    <div className="flex min-w-0 items-center gap-3">
-                      <div className="text-center">
-                        <p className="kpi-gold text-sm">
+                    {/* Datos: la hora manda a la izquierda, el estado a la derecha. */}
+                    <div className="flex items-start gap-3">
+                      <div className="w-14 shrink-0 text-center">
+                        <p className="kpi-gold text-sm leading-tight">
                           {timeShort(a.start_at)}
                         </p>
-                        <p className="text-[10px] text-white/30">
-                          {dateShort(a.start_at)}
+                        <p className="whitespace-nowrap text-[10px] leading-tight text-white/35">
+                          {apptDay(a.start_at)}
                         </p>
                       </div>
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium text-white">
                           {a.customer_name ?? 'Sin cliente'}
                         </p>
@@ -280,39 +289,52 @@ export function DashboardPage() {
                           {a.services ?? 'Sin servicios'}
                         </p>
                       </div>
+                      <span className="shrink-0">
+                        <Badge tone={meta.tone}>{meta.label}</Badge>
+                      </span>
                     </div>
-                    <div className="flex items-center gap-2">
-                      {a.phone && (
-                        <a
-                          href={waReminder(
-                            a.phone,
-                            a.customer_name,
-                            a.start_at,
-                          )}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title="Recordar por WhatsApp"
-                          className="rounded-lg p-1.5 text-emerald-400 hover:bg-emerald-400/10"
-                        >
-                          <MessageCircle className="h-4 w-4" />
-                        </a>
-                      )}
-                      <Badge tone={meta.tone}>{meta.label}</Badge>
-                      {(a.status === 'reserved' ||
-                        a.status === 'confirmed') && (
+
+                    {/* Acciones en su propia fila: nunca compiten por el ancho
+                        con el nombre del cliente ni se desbordan en un teléfono. */}
+                    {actionable && (
+                      <div
+                        className="mt-2.5 flex items-center gap-2 border-t border-white/5 pt-2.5"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {a.phone && (
+                          <a
+                            href={waReminder(a.phone, a.customer_name, a.start_at)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Recordar por WhatsApp"
+                            aria-label="Recordar por WhatsApp"
+                            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-emerald-400/25 text-emerald-400 hover:bg-emerald-400/10"
+                          >
+                            <MessageCircle className="h-4 w-4" />
+                          </a>
+                        )}
                         <Button
-                          className="ml-auto h-10 flex-1 sm:h-9 sm:flex-none sm:px-3.5 sm:text-sm"
+                          size="sm"
+                          variant={started ? 'gold' : 'outline'}
+                          className="h-9 min-w-0 flex-1 whitespace-nowrap"
                           onClick={() =>
-                            startAttention({ id: a.id, status: a.status })
+                            started ? finishAttention(a) : startAttention(a)
                           }
                         >
-                          <Check className="h-4 w-4" />{' '}
-                          {a.status === 'confirmed'
-                            ? 'Finalizar y Cobrar'
-                            : 'Atender'}
+                          {started ? (
+                            <>
+                              <Check className="h-4 w-4 shrink-0" />
+                              <span className="truncate">Finalizar y Cobrar</span>
+                            </>
+                          ) : (
+                            <>
+                              <Play className="h-4 w-4 shrink-0" />
+                              <span className="truncate">Empezar a Atender</span>
+                            </>
+                          )}
                         </Button>
-                      )}
-                    </div>
+                      </div>
+                    )}
                   </li>
                 );
               })}
@@ -486,6 +508,20 @@ export function DashboardPage() {
         )}
       </Card>
       </SortableSection>
+
+      {selectedAppt && (
+        <AppointmentActionsModal
+          appt={{
+            id: selectedAppt.id,
+            start_at: selectedAppt.start_at,
+            end_at: selectedAppt.end_at,
+            status: selectedAppt.status as AppointmentStatus,
+            customer_name: selectedAppt.customer_name,
+            service_name: selectedAppt.services,
+          }}
+          onClose={() => setSelectedAppt(null)}
+        />
+      )}
     </div>
   );
 }
@@ -636,6 +672,25 @@ function waBirthday(phone: string, name: string | null): string {
   const saludo = name ? `¡Feliz cumpleaños, ${name.split(' ')[0]}!` : '¡Feliz cumpleaños!';
   const text = `${saludo} 🎉 De parte de todo el equipo de Medusa Estudio. Te esperamos para consentirte 💇✨`;
   return `https://wa.me/${normalizePhone(phone)}?text=${encodeURIComponent(text)}`;
+}
+
+/**
+ * Día de una cita en la lista de próximas: "Hoy"/"Mañana" cuando corresponde y,
+ * si no, "30 sep". Sin año, para que entre en una línea junto a la hora.
+ */
+function apptDay(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  const ymdOf = (x: Date) =>
+    `${x.getFullYear()}-${x.getMonth()}-${x.getDate()}`;
+  const today = new Date();
+  const tomorrow = new Date(today);
+  tomorrow.setDate(today.getDate() + 1);
+  if (ymdOf(d) === ymdOf(today)) return 'Hoy';
+  if (ymdOf(d) === ymdOf(tomorrow)) return 'Mañana';
+  return d
+    .toLocaleDateString('es-EC', { day: 'numeric', month: 'short' })
+    .replace('.', '');
 }
 
 /** Arma un enlace wa.me con mensaje de recordatorio precargado (EC por defecto). */

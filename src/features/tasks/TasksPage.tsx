@@ -1,26 +1,12 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  CalendarPlus,
-  ClipboardList,
-  Check,
-  UserX,
-  CalendarClock,
-  Ban,
-  Pencil,
-  Trash2,
-} from 'lucide-react';
-import { query, batch, execute } from '@/lib/db';
-import { fullName, dateShort, toLocalNaive } from '@/lib/format';
+import { CalendarPlus, ClipboardList } from 'lucide-react';
+import { query, execute } from '@/lib/db';
+import { fullName } from '@/lib/format';
 import { useBranchId } from '@/store/session';
 import { ROUTES } from '@/config/constants';
-import {
-  isGoogleCalendarEnabled,
-  deleteCalendarEvent,
-  updateCalendarEvent,
-} from '@/lib/googleCalendar';
-import { Card, Button, Modal, Input, EmptyState, Select } from '@/components/ui';
+import { Card, Button, EmptyState, Select } from '@/components/ui';
 import { useStaff } from '@/features/pos/useCatalog';
 import {
   type AppointmentRow,
@@ -30,6 +16,7 @@ import {
   ToggleBtn,
   KanbanView,
 } from '@/features/calendar/appointmentBoard';
+import { AppointmentActionsModal } from '@/features/calendar/AppointmentActions';
 import type { AppointmentStatus } from '@/types';
 
 /**
@@ -91,8 +78,21 @@ export function TasksPage() {
     [filteredRows],
   );
 
-  const startAttention = (a: AppointmentRow) =>
+  // Arrastrar a "Atendido" no marca la cita: abre la ficha para confirmar el
+  // detalle y cobrar (igual que "Finalizar y Cobrar" del menú de acciones).
+  const finishAttention = (a: AppointmentRow) => {
+    if (a.status === 'reserved') {
+      execute(
+        "UPDATE appointment SET status = 'confirmed', updated_at = ? WHERE id = ?",
+        [new Date().toISOString(), a.id],
+      )
+        .then(invalidate)
+        .catch(() => {
+          /* si falla, igual seguimos a la ficha */
+        });
+    }
     navigate(`${ROUTES.appointment}/${a.id}?atender=1`);
+  };
 
   const setStatus = useMutation({
     mutationFn: ({ id, status }: { id: string; status: AppointmentStatus }) =>
@@ -121,53 +121,11 @@ export function TasksPage() {
       return;
     }
     if (toStatus === 'attended') {
-      startAttention(a);
+      finishAttention(a);
       return;
     }
     setStatus.mutate({ id: a.id, status: toStatus });
   };
-
-  const del = useMutation({
-    mutationFn: async (a: AppointmentRow) => {
-      if (a.google_calendar_event_id && isGoogleCalendarEnabled()) {
-        try {
-          await deleteCalendarEvent(a.google_calendar_event_id, a.google_calendar_id);
-        } catch {
-          /* si falla, igual borramos el registro local */
-        }
-      }
-      await batch([
-        // El abono/seña de la cita es un pago (sale_id NULL). Al borrar la cita se
-        // borra también, con su movimiento de caja si fue en efectivo; si no, el
-        // cobro quedaría registrado como ingreso fantasma sin cita detrás.
-        {
-          sql: `DELETE FROM cash_movement WHERE payment_id IN
-                  (SELECT id FROM payment WHERE appointment_id = ? AND sale_id IS NULL)`,
-          args: [a.id],
-        },
-        {
-          sql: 'DELETE FROM payment WHERE appointment_id = ? AND sale_id IS NULL',
-          args: [a.id],
-        },
-        { sql: 'DELETE FROM appointment_item WHERE appointment_id = ?', args: [a.id] },
-        { sql: 'DELETE FROM appointment WHERE id = ?', args: [a.id] },
-      ]);
-    },
-    onSuccess: () => {
-      setSelected(null);
-      invalidate();
-      // Refrescar finanzas: el abono borrado ya no debe contar en caja/ingresos.
-      for (const key of [
-        ['fin-accounts'],
-        ['fin-summary'],
-        ['fin-exp7'],
-        ['transactions'],
-        ['cash-expected'],
-      ]) {
-        qc.invalidateQueries({ queryKey: key });
-      }
-    },
-  });
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-4">
@@ -257,226 +215,11 @@ export function TasksPage() {
       )}
 
       {selected && (
-        <TaskActionsModal
+        <AppointmentActionsModal
           appt={selected}
           onClose={() => setSelected(null)}
-          onAtender={() => startAttention(selected)}
-          onStatus={(status) => {
-            setStatus.mutate({ id: selected.id, status });
-            setSelected(null);
-          }}
-          onEdit={() => navigate(`${ROUTES.appointment}/${selected.id}`)}
-          onDelete={() => del.mutate(selected)}
-          invalidate={invalidate}
-          deleting={del.isPending}
         />
       )}
     </div>
-  );
-}
-
-/**
- * Menú de acciones de una cita: Atender (retroactivo si aplica), No asistió,
- * Reprogramar, Cancelar, más Editar ficha y Eliminar. Las opciones se ajustan
- * al estado (una cita atendida no se cancela ni se borra).
- */
-function TaskActionsModal({
-  appt,
-  onClose,
-  onAtender,
-  onStatus,
-  onEdit,
-  onDelete,
-  invalidate,
-  deleting,
-}: {
-  appt: AppointmentRow;
-  onClose: () => void;
-  onAtender: () => void;
-  onStatus: (status: AppointmentStatus) => void;
-  onEdit: () => void;
-  onDelete: () => void;
-  invalidate: () => void;
-  deleting: boolean;
-}) {
-  const [mode, setMode] = useState<'menu' | 'reschedule' | 'confirmDelete'>('menu');
-  const [date, setDate] = useState(appt.start_at.slice(0, 10));
-  const [time, setTime] = useState(appt.start_at.slice(11, 16));
-
-  const isAttended = appt.status === 'attended';
-  const isActive = appt.status === 'reserved' || appt.status === 'confirmed';
-  const overdue = isOverdue(appt);
-  const attendLabel =
-    appt.status === 'confirmed' ? 'Finalizar y cobrar' : 'Atender';
-
-  const reschedule = useMutation({
-    mutationFn: async () => {
-      const start = new Date(`${date}T${time || '00:00'}`);
-      const durMs =
-        new Date(appt.end_at).getTime() - new Date(appt.start_at).getTime();
-      const end = new Date(start.getTime() + (durMs > 0 ? durMs : 60 * 60000));
-      const startLocal = toLocalNaive(start);
-      const endLocal = toLocalNaive(end);
-      // Reprogramar una cancelada/sin asistir la reactiva a reservada.
-      await execute(
-        `UPDATE appointment
-            SET start_at = ?, end_at = ?,
-                status = CASE WHEN status IN ('cancelled','no_show') THEN 'reserved' ELSE status END,
-                updated_at = ?
-          WHERE id = ?`,
-        [startLocal, endLocal, new Date().toISOString(), appt.id],
-      );
-      if (appt.google_calendar_event_id && isGoogleCalendarEnabled()) {
-        try {
-          await updateCalendarEvent(
-            appt.google_calendar_event_id,
-            appt.google_calendar_id,
-            { startLocal, endLocal },
-          );
-        } catch {
-          /* la reprogramación local ya quedó guardada */
-        }
-      }
-    },
-    onSuccess: () => {
-      invalidate();
-      onClose();
-    },
-  });
-
-  const title = appt.customer_name ?? 'Cita';
-
-  return (
-    <Modal open onClose={onClose} title={title}>
-      {mode === 'menu' && (
-        <div className="space-y-3">
-          <p className="text-xs text-white/50">
-            {dateShort(appt.start_at.slice(0, 10))} · {appt.service_name ?? 'Servicio'}
-            {appt.staff_name ? ` · ${appt.staff_name}` : ''}
-            {overdue && ' · vencida'}
-          </p>
-
-          {isActive && (
-            <>
-              <Button className="w-full justify-start" onClick={onAtender}>
-                <Check className="h-4 w-4" /> {attendLabel}
-                {overdue ? ' (retroactivo)' : ''}
-              </Button>
-              <Button
-                variant="ghost"
-                className="w-full justify-start"
-                onClick={() => onStatus('no_show')}
-              >
-                <UserX className="h-4 w-4" /> No asistió
-              </Button>
-            </>
-          )}
-
-          {!isAttended && (
-            <Button
-              variant="ghost"
-              className="w-full justify-start"
-              onClick={() => setMode('reschedule')}
-            >
-              <CalendarClock className="h-4 w-4" /> Reprogramar
-            </Button>
-          )}
-
-          {isActive && (
-            <Button
-              variant="ghost"
-              className="w-full justify-start"
-              onClick={() => onStatus('cancelled')}
-            >
-              <Ban className="h-4 w-4" /> Cancelar cita
-            </Button>
-          )}
-
-          <div className="flex gap-2 border-t border-white/10 pt-3">
-            <Button variant="outline" className="flex-1" onClick={onEdit}>
-              <Pencil className="h-4 w-4" /> {isAttended ? 'Ver ficha' : 'Editar'}
-            </Button>
-            {!isAttended && (
-              <Button
-                variant="danger"
-                className="flex-1"
-                onClick={() => setMode('confirmDelete')}
-              >
-                <Trash2 className="h-4 w-4" /> Eliminar
-              </Button>
-            )}
-          </div>
-
-          {isAttended && (
-            <p className="text-xs text-white/40">
-              Cita atendida: ya tiene venta y cobro registrados.
-            </p>
-          )}
-        </div>
-      )}
-
-      {mode === 'reschedule' && (
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <Input
-              label="Fecha"
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-            />
-            <Input
-              label="Hora"
-              type="time"
-              value={time}
-              onChange={(e) => setTime(e.target.value)}
-            />
-          </div>
-          <div className="flex gap-2">
-            <Button
-              variant="ghost"
-              className="flex-1"
-              onClick={() => setMode('menu')}
-            >
-              Volver
-            </Button>
-            <Button
-              className="flex-1"
-              disabled={!date || !time}
-              loading={reschedule.isPending}
-              onClick={() => reschedule.mutate()}
-            >
-              Guardar
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {mode === 'confirmDelete' && (
-        <div className="space-y-4">
-          <p className="text-sm text-white/70">
-            ¿Seguro que querés eliminar esta cita
-            {appt.customer_name ? ` de ${appt.customer_name}` : ''}? Esta acción no
-            se puede deshacer.
-          </p>
-          <div className="flex gap-2">
-            <Button
-              variant="ghost"
-              className="flex-1"
-              onClick={() => setMode('menu')}
-            >
-              Volver
-            </Button>
-            <Button
-              variant="danger"
-              className="flex-1"
-              loading={deleting}
-              onClick={onDelete}
-            >
-              Eliminar
-            </Button>
-          </div>
-        </div>
-      )}
-    </Modal>
   );
 }

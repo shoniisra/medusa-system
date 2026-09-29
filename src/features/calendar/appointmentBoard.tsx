@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Check, GripVertical } from 'lucide-react';
+import { Check, GripVertical, Play } from 'lucide-react';
 import { query } from '@/lib/db';
 import { useBranchId } from '@/store/session';
 import { APPOINTMENT_STATUS } from '@/config/constants';
@@ -61,7 +61,10 @@ export function ymd(d: Date): string {
  * Cita "vencida": reservada o atendiendo cuyo día ya pasó. Estado derivado
  * (no se guarda). No implica que se canceló ni que se atendió.
  */
-export function isOverdue(a: AppointmentRow): boolean {
+export function isOverdue(a: {
+  status: AppointmentStatus;
+  start_at: string;
+}): boolean {
   if (a.status !== 'reserved' && a.status !== 'confirmed') return false;
   return a.start_at.slice(0, 10) < ymd(new Date());
 }
@@ -152,24 +155,29 @@ export function ToggleBtn({
 
 /**
  * Botón principal de la cita en la lista de agenda.
- * - Reservada → "Atender" (marca atendiendo y abre la ficha).
+ * - Reservada → "Empezar a Atender" (solo marca atendiendo, no abre la ficha).
  * - Atendiendo (confirmed) → "Finalizar y Cobrar" (abre la ficha para cobrar).
  * - Atendida/cancelada/sin asistir → sin botón.
  */
 export function AttendButton({
   a,
-  onAttend,
+  onStart,
+  onFinish,
   full,
 }: {
   a: AppointmentRow;
-  onAttend: (a: AppointmentRow) => void;
+  /** Reservada → pasa a "atendiendo" sin salir de la pantalla. */
+  onStart: (a: AppointmentRow) => void;
+  /** Atendiendo → abre la ficha para confirmar el detalle y cobrar. */
+  onFinish: (a: AppointmentRow) => void;
   full?: boolean;
 }) {
   if (a.status !== 'reserved' && a.status !== 'confirmed') return null;
-  const label = a.status === 'confirmed' ? 'Finalizar y Cobrar' : 'Atender';
+  const started = a.status === 'confirmed';
   return (
     <Button
-      onClick={() => onAttend(a)}
+      variant={started ? 'gold' : 'outline'}
+      onClick={() => (started ? onFinish(a) : onStart(a))}
       className={cn(
         'shrink-0',
         // En móvil ocupa todo el ancho (pulgar); en escritorio vuelve a ser
@@ -177,7 +185,15 @@ export function AttendButton({
         full && 'h-12 w-full lg:h-9 lg:w-auto lg:px-3.5 lg:text-sm',
       )}
     >
-      <Check className="h-4 w-4" /> {label}
+      {started ? (
+        <>
+          <Check className="h-4 w-4" /> Finalizar y Cobrar
+        </>
+      ) : (
+        <>
+          <Play className="h-4 w-4" /> Empezar a Atender
+        </>
+      )}
     </Button>
   );
 }
@@ -186,13 +202,15 @@ export function AttendButton({
 export function ListView({
   rows,
   showDate,
-  onAttend,
+  onStart,
+  onFinish,
   onOpen,
 }: {
   rows: AppointmentRow[];
   showDate: boolean;
-  onAttend: (a: AppointmentRow) => void;
-  /** Abrir la ficha de la cita (toda la tarjeta es tocable en móvil). */
+  onStart: (a: AppointmentRow) => void;
+  onFinish: (a: AppointmentRow) => void;
+  /** Tocar la tarjeta abre el menú de acciones de la cita. */
   onOpen?: (a: AppointmentRow) => void;
 }) {
   return (
@@ -246,7 +264,7 @@ export function ListView({
               className="flex items-center gap-3 lg:contents"
               onClick={(e) => e.stopPropagation()}
             >
-              <AttendButton a={a} onAttend={onAttend} full />
+              <AttendButton a={a} onStart={onStart} onFinish={onFinish} full />
               <span className="hidden lg:inline">
                 <Badge tone={meta.tone}>{meta.label}</Badge>
               </span>

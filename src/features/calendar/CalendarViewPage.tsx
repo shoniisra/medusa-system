@@ -22,7 +22,13 @@ import { Modal } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { GoogleCalendarEmbed } from './GoogleCalendarEmbed';
 import { AgendaCalendar, type AgendaEvent, type AgendaView } from './AgendaCalendar';
-import { rowColor, ymd, useAppointments } from './appointmentBoard';
+import {
+  type AppointmentRow,
+  rowColor,
+  ymd,
+  useAppointments,
+} from './appointmentBoard';
+import { AppointmentActionsModal } from './AppointmentActions';
 
 const VIEW_LABEL: Record<string, string> = {
   three: '3 días',
@@ -55,6 +61,8 @@ export function CalendarViewPage() {
   );
   const [source, setSource] = useState<'medusa' | 'google'>('medusa');
   const [menuOpen, setMenuOpen] = useState(false);
+  // Cita sobre la que está abierto el menú de acciones (el mismo de la agenda).
+  const [selected, setSelected] = useState<AppointmentRow | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState('');
 
@@ -225,7 +233,11 @@ export function CalendarViewPage() {
           view={view}
           onNavigate={setDate}
           onView={setView}
-          onSelectEvent={(id) => navigate(`${ROUTES.appointment}/${id}`)}
+          onSelectEvent={(id) => {
+            const row = appts.data?.find((a) => a.id === id);
+            if (row) setSelected(row);
+            else navigate(`${ROUTES.appointment}/${id}`);
+          }}
           onDrop={(id, start, end) => {
             const row = appts.data?.find((a) => a.id === id);
             const staffId = row?.staff_id;
@@ -255,6 +267,13 @@ export function CalendarViewPage() {
           onSelectSlot={(start) =>
             navigate(`${ROUTES.appointmentNew}?date=${ymd(start)}`)
           }
+        />
+      )}
+
+      {selected && (
+        <AppointmentActionsModal
+          appt={selected}
+          onClose={() => setSelected(null)}
         />
       )}
 

@@ -135,7 +135,7 @@ export function useDashboardMetrics() {
              LEFT JOIN customer c ON c.id = a.customer_id
             WHERE a.branch_id = ? AND a.start_at >= ?
               AND a.status IN ('reserved','confirmed')
-            ORDER BY a.start_at ASC LIMIT 4`,
+            ORDER BY a.start_at ASC LIMIT 5`,
           [branchId, toLocalNaive(new Date())],
         ),
         query<SellerRank>(

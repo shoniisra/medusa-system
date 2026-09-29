@@ -22,6 +22,7 @@ import {
   ListView,
   useAppointments,
 } from './appointmentBoard';
+import { AppointmentActionsModal } from './AppointmentActions';
 
 /** Marcador de carga de la lista: evita el falso "Sin citas" mientras consulta. */
 function ListSkeleton() {
@@ -57,6 +58,8 @@ export function CalendarPage() {
   const navigate = useNavigate();
   const [range, setRange] = useState<RangeMode>('today');
   const [filtersOpen, setFiltersOpen] = useState(false);
+  // Cita sobre la que está abierto el menú de acciones (el mismo de Tareas).
+  const [selected, setSelected] = useState<AppointmentRow | null>(null);
 
   // Filtros de la lista: por colaborador y por estado.
   const staff = useStaff();
@@ -66,19 +69,24 @@ export function CalendarPage() {
   const { from, to, label } = useMemo(() => rangeFor(range), [range]);
   const appts = useAppointments(from, to);
 
-  // "Atender": al iniciar la atención, una cita reservada pasa a "Atendiendo"
-  // (confirmed) y se abre la ficha en modo atención para confirmar y cobrar.
+  // "Empezar a Atender": la cita pasa a "Atendiendo" y la persona sigue en la
+  // agenda (el detalle se carga después, al finalizar y cobrar).
   const startAttention = (a: AppointmentRow) => {
-    if (a.status === 'reserved') {
-      execute(
-        "UPDATE appointment SET status = 'confirmed', updated_at = ? WHERE id = ?",
-        [new Date().toISOString(), a.id],
-      )
-        .then(() => qc.invalidateQueries({ queryKey: ['appointments'] }))
-        .catch(() => {
-          /* si falla, igual seguimos a la ficha */
-        });
-    }
+    execute(
+      "UPDATE appointment SET status = 'confirmed', updated_at = ? WHERE id = ?",
+      [new Date().toISOString(), a.id],
+    )
+      .then(() => {
+        qc.invalidateQueries({ queryKey: ['appointments'] });
+        qc.invalidateQueries({ queryKey: ['dashboard-metrics'] });
+      })
+      .catch(() => {
+        /* si falla, el estado sigue como estaba */
+      });
+  };
+
+  // "Finalizar y Cobrar": abre la ficha en modo atención para cerrar la venta.
+  const finishAttention = (a: AppointmentRow) => {
     navigate(`${ROUTES.appointment}/${a.id}?atender=1`);
   };
 
@@ -231,8 +239,16 @@ export function CalendarPage() {
         <ListView
           rows={filteredRows}
           showDate={range !== 'today'}
-          onAttend={startAttention}
-          onOpen={(a) => navigate(`${ROUTES.appointment}/${a.id}`)}
+          onStart={startAttention}
+          onFinish={finishAttention}
+          onOpen={setSelected}
+        />
+      )}
+
+      {selected && (
+        <AppointmentActionsModal
+          appt={selected}
+          onClose={() => setSelected(null)}
         />
       )}
 
