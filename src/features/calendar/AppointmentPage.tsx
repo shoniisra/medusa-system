@@ -34,6 +34,7 @@ import { useOrgId, useBranchId, useSession } from '@/store/session';
 import { useCustomers, useServices, useProducts, useStaff } from '@/features/pos/useCatalog';
 import {
   DEFAULT_SERVICE_MINUTES,
+  minutesForCategory,
   toMinutes,
   fromMinutes,
   hoursForDate,
@@ -298,13 +299,14 @@ function NewAppointment() {
   const effectiveDest = depositDest || firstBankId || 'cash';
   const depositIsCash = effectiveDest === 'cash';
 
-  // Tiempo reservado: sin servicios todavía, se estima DEFAULT_SERVICE_MINUTES por
-  // categoría, apilando las del mismo estilista (las de distinto van en paralelo).
+  // Tiempo reservado: al agendar todavía no hay servicio exacto, así que vale
+  // el tiempo típico de cada categoría, apilando las del mismo estilista (las
+  // de distinto estilista van en paralelo).
   const staffBlocks = useMemo(() => {
     const m = new Map<string, number>();
     for (const c of cats) {
       const k = c.staffId || '__none';
-      m.set(k, (m.get(k) ?? 0) + DEFAULT_SERVICE_MINUTES);
+      m.set(k, (m.get(k) ?? 0) + minutesForCategory(c.category));
     }
     return m;
   }, [cats]);
@@ -708,13 +710,17 @@ function NewAppointment() {
                   type="button"
                   onClick={() => toggleCat(c)}
                   className={cn(
-                    'flex min-h-[68px] items-center justify-center rounded-2xl border p-3 text-center text-sm font-medium transition active:scale-[0.97]',
+                    'flex min-h-[68px] flex-col items-center justify-center gap-1 rounded-2xl border p-3 text-center text-sm font-medium transition active:scale-[0.97]',
                     on
                       ? 'border-gold/60 bg-gold/15 text-gold-100 shadow-gold-glow'
                       : 'border-white/10 bg-white/[0.03] text-white/75 hover:bg-white/[0.06]',
                   )}
                 >
                   {c}
+                  {/* Cuánto bloquea en la agenda, visible antes de elegir. */}
+                  <span className="text-[11px] font-normal opacity-60">
+                    {fmtDuration(minutesForCategory(c))}
+                  </span>
                 </button>
               );
             })}
@@ -1651,7 +1657,7 @@ function EditAppointment({ id }: { id: string }) {
     const m = new Map<string, number>();
     for (const i of serviceItems) {
       const k = i.assigned_staff_id || '__none';
-      m.set(k, (m.get(k) ?? 0) + (i.duration ?? DEFAULT_SERVICE_MINUTES));
+      m.set(k, (m.get(k) ?? 0) + (i.duration ?? minutesForCategory(i.category)));
     }
     return m.size ? Math.max(...m.values()) : 0;
   })();

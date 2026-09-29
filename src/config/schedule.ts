@@ -12,6 +12,10 @@
  * horario del local; el early-leave queda como mejora futura.
  */
 
+import type { SERVICE_CATEGORIES } from './constants';
+
+type ServiceCategory = (typeof SERVICE_CATEGORIES)[number];
+
 export interface DayHours {
   open: string; // "HH:MM"
   close: string; // "HH:MM"
@@ -28,8 +32,42 @@ export const BUSINESS_HOURS: (DayHours | null)[] = [
   { open: '09:00', close: '16:00' }, // Sáb
 ];
 
-/** Duración por defecto (min) si el servicio no la define. */
+/** Duración por defecto (min) si no hay categoría ni servicio que la definan. */
 export const DEFAULT_SERVICE_MINUTES = 30;
+
+/**
+ * Minutos a reservar por categoría cuando todavía no se eligió el servicio
+ * exacto: al agendar se reserva por categoría y el detalle se carga al atender.
+ * Son los tiempos reales del salón.
+ */
+export const CATEGORY_MINUTES: Record<ServiceCategory, number> = {
+  Manicura: 60,
+  Pedicura: 60,
+  'Cortes de Cabello': 60,
+  Tratamientos: 60,
+  Peinados: 120,
+  Maquillajes: 120,
+  Color: 240,
+  Depilaciones: 30,
+  Cejas: 30,
+  Pestañas: 30,
+};
+
+const normCategory = (s: string): string =>
+  s
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+/** Minutos de una categoría; tolera mayúsculas y acentos distintos. */
+export function minutesForCategory(category: string | null | undefined): number {
+  if (!category) return DEFAULT_SERVICE_MINUTES;
+  const key = (Object.keys(CATEGORY_MINUTES) as ServiceCategory[]).find(
+    (c) => normCategory(c) === normCategory(category),
+  );
+  return key ? CATEGORY_MINUTES[key] : DEFAULT_SERVICE_MINUTES;
+}
 
 /** Intervalo libre mínimo a mostrar en disponibilidad (min). */
 export const MIN_FREE_MINUTES = 20;

@@ -75,6 +75,12 @@ function extractOptions(children: ReactNode): Opt[] {
   return out;
 }
 
+/** ¿Puntero grueso (dedo)? Se consulta al abrir: hay equipos híbridos. */
+const isTouch = (): boolean =>
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(pointer: coarse)').matches;
+
 /**
  * Select con buscador. Mantiene la misma API que un <select> nativo
  * (children de <option>, `value`, `onChange(e => e.target.value)`), así que es
@@ -115,7 +121,11 @@ export const Select = forwardRef<
 
   useEffect(() => {
     if (!open) return;
-    searchRef.current?.focus();
+    // El buscador solo toma el foco con mouse: en un teléfono abre el teclado,
+    // el navegador desplaza la página para acomodarlo y el menú se cerraba solo
+    // (se veía como un parpadeo al tocar el select).
+    if (!isTouch()) searchRef.current?.focus();
+
     const onDown = (e: PointerEvent) => {
       const t = e.target as Node;
       if (
@@ -125,19 +135,42 @@ export const Select = forwardRef<
         setOpen(false);
       }
     };
-    const onScroll = () => setOpen(false);
+    // Al desplazar, el menú sigue al disparador en lugar de cerrarse.
+    let raf = 0;
+    const onScroll = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(place);
+    };
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
     window.addEventListener('pointerdown', onDown, true);
     window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', onScroll);
     window.addEventListener('keydown', onKey);
     return () => {
+      cancelAnimationFrame(raf);
       window.removeEventListener('pointerdown', onDown, true);
       window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', onScroll);
       window.removeEventListener('keydown', onKey);
     };
   }, [open]);
+
+  // Abre hacia arriba si abajo no entra (campo al pie de la pantalla, teclado…).
+  const gap = 4;
+  const spaceBelow = rect ? window.innerHeight - rect.bottom - 8 : 0;
+  const spaceAbove = rect ? rect.top - 8 : 0;
+  const openUp = !!rect && spaceBelow < 240 && spaceAbove > spaceBelow;
+  const maxHeight = Math.max(168, Math.min(340, openUp ? spaceAbove : spaceBelow));
+  // Ancho fijo del menú: así se puede alinear sin que un nombre largo lo empuje
+  // fuera de la pantalla.
+  const menuWidth = rect
+    ? Math.min(Math.max(rect.width, 240), window.innerWidth - 16, 460)
+    : 0;
+  const menuLeft = rect
+    ? Math.max(8, Math.min(rect.left, window.innerWidth - 8 - menuWidth))
+    : 0;
+  // Con pocas opciones el buscador estorba (y en móvil abre el teclado).
+  const showSearch = options.length > 8;
 
   function choose(val: string) {
     onChange?.({
@@ -148,7 +181,9 @@ export const Select = forwardRef<
   }
 
   return (
-    <label className="block">
+    // Un <label> reenvía el clic a su control (acá, el botón): el menú se abría
+    // y se cerraba en el mismo toque. Por eso este contenedor es un <div>.
+    <div className="block">
       {label && (
         <span className="mb-1 block text-xs font-medium text-white/60">
           {label}
@@ -178,29 +213,30 @@ export const Select = forwardRef<
             ref={menuRef}
             style={{
               position: 'fixed',
-              top: rect.bottom + 4,
-              left: Math.max(
-                8,
-                Math.min(rect.left, window.innerWidth - 8 - Math.max(rect.width, 240)),
-              ),
-              minWidth: rect.width,
-              maxWidth: 'min(92vw, 460px)',
+              ...(openUp
+                ? { bottom: window.innerHeight - rect.top + gap }
+                : { top: rect.bottom + gap }),
+              left: menuLeft,
+              width: menuWidth,
+              maxHeight,
               zIndex: 60,
             }}
-            className="overflow-hidden rounded-xl border border-white/10 bg-ink-800 shadow-glass"
+            className="flex flex-col overflow-hidden rounded-xl border border-white/10 bg-ink-800 shadow-glass"
           >
-            <div className="relative border-b border-white/10 p-2">
-              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
-              <input
-                ref={searchRef}
-                type="search"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Buscar…"
-                className="w-full rounded-lg bg-ink-900 py-1.5 pl-9 pr-2 text-sm text-white placeholder:text-white/30 focus:outline-none focus:ring-1 focus:ring-gold/40"
-              />
-            </div>
-            <ul className="max-h-60 overflow-y-auto py-1">
+            {showSearch && (
+              <div className="relative shrink-0 border-b border-white/10 p-2">
+                <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
+                <input
+                  ref={searchRef}
+                  type="search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Buscar…"
+                  className="w-full rounded-lg bg-ink-900 py-1.5 pl-9 pr-2 text-sm text-white placeholder:text-white/30 focus:outline-none focus:ring-1 focus:ring-gold/40"
+                />
+              </div>
+            )}
+            <ul className="min-h-0 flex-1 overflow-y-auto py-1">
               {filtered.length === 0 ? (
                 <li className="px-3 py-2 text-sm text-white/40">
                   Sin coincidencias
@@ -213,7 +249,7 @@ export const Select = forwardRef<
                       disabled={o.disabled}
                       onClick={() => choose(o.value)}
                       className={cn(
-                        'flex w-full items-start justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-white/10',
+                        'flex min-h-[44px] w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-white/10',
                         o.disabled && 'cursor-not-allowed opacity-40',
                         o.value === currentValue
                           ? 'text-gold-200'
@@ -224,7 +260,7 @@ export const Select = forwardRef<
                         {o.label || <span className="text-white/40">—</span>}
                       </span>
                       {o.value === currentValue && (
-                        <Check className="mt-0.5 h-4 w-4 shrink-0" />
+                        <Check className="h-4 w-4 shrink-0" />
                       )}
                     </button>
                   </li>
@@ -236,7 +272,7 @@ export const Select = forwardRef<
         )}
 
       {error && <span className="mt-1 block text-xs text-danger">{error}</span>}
-    </label>
+    </div>
   );
 });
 Select.displayName = 'Select';
