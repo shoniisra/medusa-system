@@ -1,9 +1,17 @@
-import { useMemo, useState } from 'react';
-import { Plus, Minus, Trash2, Scissors, Package } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  Plus,
+  Minus,
+  Trash2,
+  Scissors,
+  Package,
+  Search,
+  ChevronLeft,
+} from 'lucide-react';
 import { money, num, fullName } from '@/lib/format';
 import { SERVICE_CATEGORIES } from '@/config/constants';
 import { cn } from '@/lib/cn';
-import { Button, Card, CardHeader, Input, Select } from '@/components/ui';
+import { Button, Card, CardHeader, Modal, Select } from '@/components/ui';
 import { commissionForItem, type CommissionRule } from './createSale';
 import type { CommissionType, Product, Service, StaffMember } from '@/types';
 
@@ -103,36 +111,12 @@ export function SaleItemsEditor({
   onAddProduct: (args: { pid: string; qty: number }) => void;
 }) {
   const [adding, setAdding] = useState<'service' | 'product' | null>(null);
-  const [category, setCategory] = useState('');
-  const [serviceId, setServiceId] = useState('');
-  const [staffId, setStaffId] = useState('');
-  const [productId, setProductId] = useState('');
-  const [qty, setQty] = useState('1');
-
-  const filteredServices = useMemo(
-    () => services.filter((s) => !category || s.category === category),
-    [services, category],
-  );
 
   const total = items.reduce((a, i) => a + i.final_unit_price * i.quantity, 0);
   const totalCommission = commissionByStaff(items, rules).reduce(
     (a, s) => a + s.amount,
     0,
   );
-
-  const addService = (sid: string, stid: string) => {
-    onAddService({ sid, stid: stid || null });
-    setServiceId('');
-    setStaffId('');
-    setAdding(null);
-  };
-  const addProduct = () => {
-    if (!productId) return;
-    onAddProduct({ pid: productId, qty: Math.max(1, Math.floor(Number(qty) || 1)) });
-    setProductId('');
-    setQty('1');
-    setAdding(null);
-  };
 
   return (
     <Card>
@@ -429,108 +413,43 @@ export function SaleItemsEditor({
         </table>
       </div>
 
-      {/* Agregar ítems */}
+      {/* Agregar ítems: se eligen en una hoja inferior, con tarjetas */}
       <div className="mt-4 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
         <Button
-          variant={adding === 'service' ? 'gold' : 'outline'}
-          onClick={() => setAdding(adding === 'service' ? null : 'service')}
+          variant="outline"
+          onClick={() => setAdding('service')}
           className="sm:h-9 sm:px-3.5"
         >
           <Scissors className="h-4 w-4" /> Servicio
         </Button>
         <Button
-          variant={adding === 'product' ? 'gold' : 'outline'}
-          onClick={() => setAdding(adding === 'product' ? null : 'product')}
+          variant="outline"
+          onClick={() => setAdding('product')}
           className="sm:h-9 sm:px-3.5"
         >
           <Package className="h-4 w-4" /> Producto
         </Button>
       </div>
 
-      {adding === 'service' && (
-        <div className="mt-3 grid grid-cols-1 gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3 sm:grid-cols-3">
-          <Select
-            label="Categoría"
-            value={category}
-            onChange={(e) => {
-              setCategory(e.target.value);
-              setServiceId('');
-            }}
-          >
-            <option value="">Todas</option>
-            {SERVICE_CATEGORIES.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </Select>
-          <Select
-            label="Servicio"
-            value={serviceId}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (v && staffId) addService(v, staffId);
-              else setServiceId(v);
-            }}
-          >
-            <option value="">Seleccionar…</option>
-            {filteredServices.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name} · {money(s.base_price)}
-              </option>
-            ))}
-          </Select>
-          <Select
-            label="Estilista"
-            value={staffId}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (v && serviceId) addService(serviceId, v);
-              else setStaffId(v);
-            }}
-          >
-            <option value="">Sin asignar</option>
-            {staff.map((s) => (
-              <option key={s.id} value={s.id}>
-                {fullName(s.first_name, s.last_name)}
-              </option>
-            ))}
-          </Select>
-        </div>
-      )}
-
-      {adding === 'product' && (
-        <div className="mt-3 grid grid-cols-2 gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3 sm:grid-cols-4">
-          <div className="col-span-2">
-            <Select
-              label="Producto"
-              value={productId}
-              onChange={(e) => setProductId(e.target.value)}
-            >
-              <option value="">Seleccionar…</option>
-              {products.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} · {money(p.base_price)}
-                </option>
-              ))}
-            </Select>
-          </div>
-          <Input
-            label="Cant."
-            type="number"
-            min="1"
-            value={qty}
-            onChange={(e) => setQty(e.target.value)}
-          />
-          <Button
-            className="col-span-2 self-end sm:col-span-1"
-            onClick={addProduct}
-            disabled={!productId}
-          >
-            <Plus className="h-4 w-4" /> Agregar
-          </Button>
-        </div>
-      )}
+      <AddServiceSheet
+        open={adding === 'service'}
+        onClose={() => setAdding(null)}
+        services={services}
+        staff={staff}
+        onAdd={(sid, stid) => {
+          onAddService({ sid, stid });
+          setAdding(null);
+        }}
+      />
+      <AddProductSheet
+        open={adding === 'product'}
+        onClose={() => setAdding(null)}
+        products={products}
+        onAdd={(pid, qty) => {
+          onAddProduct({ pid, qty });
+          setAdding(null);
+        }}
+      />
     </Card>
   );
 }
@@ -627,5 +546,263 @@ function QtyStepper({
         <Plus className="h-3.5 w-3.5" />
       </button>
     </span>
+  );
+}
+
+/* ───────────────── Hojas para agregar ítems (tarjetas) ───────────────── */
+
+/** Quita acentos y mayúsculas para buscar sin pelear con la ortografía. */
+const norm = (s: string): string =>
+  s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '');
+
+const CARD_BASE =
+  'flex min-h-[68px] flex-col items-center justify-center gap-1 rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-center text-sm font-medium text-white/85 transition active:scale-[0.97] hover:bg-white/[0.06]';
+
+/** Buscador de la hoja. Sin autofoco: en móvil taparía las tarjetas. */
+function SheetSearch({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <div className="relative mb-3">
+      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
+      <input
+        type="search"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="input-base pl-9"
+      />
+    </div>
+  );
+}
+
+/**
+ * Agregar servicio en pasos: categoría → servicio → estilista. Cada paso son
+ * tarjetas grandes (mismo gesto que elegir categorías al agendar); el buscador
+ * saltea los pasos cuando ya se sabe el nombre.
+ */
+function AddServiceSheet({
+  open,
+  onClose,
+  services,
+  staff,
+  onAdd,
+}: {
+  open: boolean;
+  onClose: () => void;
+  services: Service[];
+  staff: StaffMember[];
+  onAdd: (sid: string, stid: string | null) => void;
+}) {
+  const [category, setCategory] = useState('');
+  const [service, setService] = useState<Service | null>(null);
+  const [q, setQ] = useState('');
+
+  // Cada apertura arranca limpia.
+  useEffect(() => {
+    if (!open) return;
+    setCategory('');
+    setService(null);
+    setQ('');
+  }, [open]);
+
+  const OTHERS = 'Otros';
+  // Solo las categorías que tienen servicios cargados.
+  const categories = useMemo(() => {
+    const used = new Set(services.map((s) => s.category || OTHERS));
+    const known = SERVICE_CATEGORIES.filter((c) => used.has(c));
+    return used.has(OTHERS) ? [...known, OTHERS] : known;
+  }, [services]);
+
+  const countByCategory = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const s of services) {
+      const k = s.category || OTHERS;
+      m.set(k, (m.get(k) ?? 0) + 1);
+    }
+    return m;
+  }, [services]);
+
+  const list = useMemo(() => {
+    const term = norm(q.trim());
+    if (term) return services.filter((s) => norm(s.name).includes(term));
+    if (category) {
+      return services.filter((s) => (s.category || OTHERS) === category);
+    }
+    return [];
+  }, [services, q, category]);
+
+  const searching = q.trim().length > 0;
+  const step: 'category' | 'service' | 'staff' = service
+    ? 'staff'
+    : searching || category
+      ? 'service'
+      : 'category';
+
+  const title =
+    step === 'staff'
+      ? '¿Quién lo hace?'
+      : step === 'service'
+        ? category || 'Buscar servicio'
+        : 'Agregar servicio';
+
+  return (
+    <Modal open={open} onClose={onClose} title={title} className="sm:max-w-2xl">
+      {step !== 'category' && (
+        <button
+          type="button"
+          onClick={() => (service ? setService(null) : (setCategory(''), setQ('')))}
+          className="mb-3 flex items-center gap-1 text-sm text-white/50 active:text-white"
+        >
+          <ChevronLeft className="h-4 w-4" />
+          {service ? 'Cambiar servicio' : 'Todas las categorías'}
+        </button>
+      )}
+
+      {step === 'staff' && service ? (
+        <>
+          <p className="mb-3 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white/70">
+            <span className="font-medium text-white">{service.name}</span>
+            {' · '}
+            <span className="text-gold-200">{money(service.base_price)}</span>
+          </p>
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+            <button
+              type="button"
+              onClick={() => onAdd(service.id, null)}
+              className={cn(CARD_BASE, 'text-white/60')}
+            >
+              Sin asignar
+            </button>
+            {staff.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => onAdd(service.id, s.id)}
+                className={CARD_BASE}
+              >
+                <span
+                  className="h-2.5 w-2.5 rounded-full"
+                  style={{ background: s.color || '#64748b' }}
+                />
+                {fullName(s.first_name, s.last_name)}
+              </button>
+            ))}
+          </div>
+        </>
+      ) : (
+        <>
+          <SheetSearch value={q} onChange={setQ} placeholder="Buscar servicio…" />
+          {step === 'category' ? (
+            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
+              {categories.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setCategory(c)}
+                  className={CARD_BASE}
+                >
+                  {c}
+                  <span className="text-[11px] font-normal text-white/40">
+                    {countByCategory.get(c)} servicios
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : list.length === 0 ? (
+            <p className="py-8 text-center text-sm text-white/40">
+              Sin servicios que coincidan.
+            </p>
+          ) : (
+            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+              {list.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => setService(s)}
+                  className={CARD_BASE}
+                >
+                  <span className="line-clamp-3">{s.name}</span>
+                  <span className="text-[13px] font-semibold text-gold-200">
+                    {money(s.base_price)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </Modal>
+  );
+}
+
+/**
+ * Agregar producto: tarjetas con precio, una sola pulsación. La cantidad se
+ * ajusta después en la línea, que ya tiene su control de −/+.
+ */
+function AddProductSheet({
+  open,
+  onClose,
+  products,
+  onAdd,
+}: {
+  open: boolean;
+  onClose: () => void;
+  products: Product[];
+  onAdd: (pid: string, qty: number) => void;
+}) {
+  const [q, setQ] = useState('');
+
+  useEffect(() => {
+    if (open) setQ('');
+  }, [open]);
+
+  const list = useMemo(() => {
+    const term = norm(q.trim());
+    if (!term) return products;
+    return products.filter(
+      (p) => norm(p.name).includes(term) || norm(p.sku ?? '').includes(term),
+    );
+  }, [products, q]);
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Agregar producto"
+      className="sm:max-w-2xl"
+    >
+      <SheetSearch value={q} onChange={setQ} placeholder="Buscar producto…" />
+      {list.length === 0 ? (
+        <p className="py-8 text-center text-sm text-white/40">
+          Sin productos que coincidan.
+        </p>
+      ) : (
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+          {list.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => onAdd(p.id, 1)}
+              className={CARD_BASE}
+            >
+              <span className="line-clamp-3">{p.name}</span>
+              <span className="text-[13px] font-semibold text-gold-200">
+                {money(p.base_price)}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </Modal>
   );
 }
