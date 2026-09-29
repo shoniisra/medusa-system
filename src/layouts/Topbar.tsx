@@ -7,25 +7,39 @@ export function Topbar() {
   const { user, branch, cashSession, logout } = useSession();
 
   return (
-    <header className="flex h-16 items-center justify-between gap-4 border-b border-white/5 bg-ink-900/60 px-4 backdrop-blur-xl lg:px-6">
-      {/* Sucursal activa */}
-      <div className="flex items-center gap-2 text-sm text-white/70">
-        <Building2 className="h-4 w-4 text-gold-300" />
-        <span className="font-medium">{branch?.name ?? 'Sin sucursal'}</span>
+    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-white/5 bg-ink-900/60 px-4 backdrop-blur-xl lg:h-16 lg:px-6">
+      {/* Marca (solo móvil: el sidebar ya la muestra en escritorio) + sucursal */}
+      <div className="flex min-w-0 items-center gap-2">
+        <img
+          src="/medusa-logo.jpg"
+          alt=""
+          className="h-8 w-8 shrink-0 rounded-lg lg:hidden"
+        />
+        <div className="flex min-w-0 items-center gap-1.5 text-sm text-white/70">
+          <Building2 className="hidden h-4 w-4 shrink-0 text-gold-300 lg:block" />
+          <span className="truncate font-medium">
+            {branch?.name ?? 'Sin sucursal'}
+          </span>
+        </div>
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex shrink-0 items-center gap-3">
         {/* Estado de caja */}
         {cashSession?.status === 'open' ? (
           <Badge tone="success">
-            <CircleDot className="mr-1 h-3 w-3" /> Caja abierta
+            <CircleDot className="mr-1 h-3 w-3" />{' '}
+            <span className="hidden sm:inline">Caja abierta</span>
+            <span className="sm:hidden">Caja</span>
           </Badge>
         ) : (
-          <Badge tone="muted">Caja cerrada</Badge>
+          <Badge tone="muted">
+            <span className="hidden sm:inline">Caja cerrada</span>
+            <span className="sm:hidden">Caja</span>
+          </Badge>
         )}
 
-        {/* Usuario */}
-        <div className="hidden text-right sm:block">
+        {/* Usuario (escritorio; en móvil vive en la hoja "Más") */}
+        <div className="hidden text-right lg:block">
           <p className="text-sm font-medium text-white">
             {user ? fullName(user.full_name) : '—'}
           </p>
@@ -35,7 +49,7 @@ export function Topbar() {
         <button
           onClick={logout}
           title="Cerrar sesión"
-          className="rounded-lg p-2 text-white/50 hover:bg-white/10 hover:text-white"
+          className="hidden rounded-lg p-2 text-white/50 hover:bg-white/10 hover:text-white lg:block"
         >
           <LogOut className="h-5 w-5" />
         </button>

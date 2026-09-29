@@ -82,3 +82,100 @@
 .medusa-rbc .rbc-addons-dnd .rbc-addons-dnd-resize-ew-icon {
   border-color: rgba(255, 255, 255, 0.5);
 }
+
+/* ───────── Variante a sangre completa (pantalla "Calendario") ─────────
+   Sin tarjeta ni márgenes: la rejilla ocupa todo el alto entre el header y
+   la barra de navegación, como la app de Google Calendar en el teléfono. */
+.medusa-rbc-flush {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.medusa-rbc-flush .rbc-calendar {
+  height: 100%;
+}
+.medusa-rbc-flush .rbc-time-view,
+.medusa-rbc-flush .rbc-month-view {
+  border: 0;
+  border-radius: 0;
+}
+/* Sin fila de "todo el día": el salón no agenda eventos de día completo y esa
+   franja se comía la primera pantalla. */
+.medusa-rbc-flush .rbc-allday-cell,
+.medusa-rbc-flush .rbc-time-header-content > .rbc-row.rbc-row-resource {
+  display: none;
+}
+.medusa-rbc-flush .rbc-time-header.rbc-overflowing {
+  border-right: 0;
+}
+.medusa-rbc-flush .rbc-header {
+  border-bottom: 0;
+  padding: 0;
+}
+.medusa-rbc-flush .rbc-header + .rbc-header {
+  border-left: 0;
+}
+.medusa-rbc-flush .rbc-time-header-gutter {
+  min-width: 52px !important;
+  width: 52px !important;
+  max-width: 52px !important;
+}
+.medusa-rbc-flush .rbc-time-gutter {
+  min-width: 52px;
+  width: 52px;
+}
+.medusa-rbc-flush .rbc-time-gutter .rbc-timeslot-group {
+  border-bottom: 0;
+}
+.medusa-rbc-flush .rbc-time-gutter .rbc-label {
+  font-size: 11px;
+  padding: 0 8px 0 4px;
+}
+/* Franjas más altas: 30 min ≈ 28 px es un objetivo táctil razonable. */
+.medusa-rbc-flush .rbc-timeslot-group {
+  min-height: 56px;
+}
+.medusa-rbc-flush .rbc-time-content {
+  border-top: 1px solid var(--rbc-line);
+}
+.medusa-rbc-flush .rbc-event {
+  border-radius: 8px;
+  padding: 3px 6px;
+  font-size: 11px;
+  line-height: 1.25;
+  border-left: 3px solid rgba(0, 0, 0, 0.25);
+}
+.medusa-rbc-flush .rbc-event-label {
+  font-size: 10px;
+  opacity: 0.75;
+}
+.medusa-rbc-flush .rbc-today {
+  background: rgba(244, 199, 82, 0.06);
+}
+/* Mes a sangre: celdas parejas y números legibles. */
+.medusa-rbc-flush .rbc-month-view .rbc-date-cell {
+  padding: 4px 6px 0 0;
+  font-size: 12px;
+}
+.medusa-rbc-flush .rbc-month-view .rbc-header {
+  padding: 8px 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* En pantallas chicas el bloque de 30 min no da para dos líneas: la hora ya
+   la indica la posición en la rejilla, así que solo mostramos el título. */
+@media (max-width: 1023px) {
+  .medusa-rbc-flush .rbc-event-label {
+    display: none;
+  }
+}
+.medusa-rbc-flush .rbc-event-content {
+  overflow: hidden;
+  word-break: break-word;
+}
+.medusa-rbc-flush .rbc-time-header-content,
+.medusa-rbc-flush .rbc-time-header.rbc-overflowing {
+  border-color: var(--rbc-line);
+}

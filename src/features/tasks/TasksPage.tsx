@@ -170,50 +170,54 @@ export function TasksPage() {
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-4">
-      {/* Barra única: título + rango + filtro + acción. */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="mr-1 flex items-center gap-2">
+      {/* Barra: título + rango + filtro + acción (se apila en móvil). */}
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
           <h1 className="text-2xl font-semibold text-white">Tareas</h1>
           {overdueCount > 0 && (
             <span className="rounded-full bg-danger/20 px-2 py-0.5 text-xs font-medium text-danger">
               {overdueCount} vencida{overdueCount > 1 ? 's' : ''}
             </span>
           )}
-        </div>
-
-        <div className="flex gap-1 rounded-xl bg-ink-800/60 p-1">
-          <ToggleBtn active={range === 'today'} onClick={() => setRange('today')}>
-            Hoy
-          </ToggleBtn>
-          <ToggleBtn active={range === 'week'} onClick={() => setRange('week')}>
-            Esta semana
-          </ToggleBtn>
-          <ToggleBtn active={range === 'month'} onClick={() => setRange('month')}>
-            Este mes
-          </ToggleBtn>
-        </div>
-
-        <div className="min-w-[180px] flex-1 sm:max-w-xs">
-          <Select
-            value={staffFilter}
-            onChange={(e) => setStaffFilter(e.target.value)}
+          <span className="ml-auto hidden text-sm capitalize text-white/50 sm:inline">
+            {label}
+          </span>
+          <Button
+            className="ml-auto shrink-0 sm:ml-0"
+            onClick={() => navigate(ROUTES.appointmentNew)}
           >
-            <option value="">Todos los colaboradores</option>
-            {(staff.data ?? []).map((s) => (
-              <option key={s.id} value={s.id}>
-                {fullName(s.first_name, s.last_name ?? '')}
-              </option>
-            ))}
-          </Select>
+            <CalendarPlus className="h-4 w-4" />
+            <span className="hidden sm:inline">Nueva cita</span>
+          </Button>
         </div>
 
-        <span className="hidden text-sm capitalize text-white/50 sm:inline">
-          {label}
-        </span>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="flex flex-1 gap-1 rounded-xl bg-ink-800/60 p-1">
+            <ToggleBtn active={range === 'today'} onClick={() => setRange('today')}>
+              Hoy
+            </ToggleBtn>
+            <ToggleBtn active={range === 'week'} onClick={() => setRange('week')}>
+              Semana
+            </ToggleBtn>
+            <ToggleBtn active={range === 'month'} onClick={() => setRange('month')}>
+              Mes
+            </ToggleBtn>
+          </div>
 
-        <Button className="ml-auto" onClick={() => navigate(ROUTES.appointmentNew)}>
-          <CalendarPlus className="h-4 w-4" /> Nueva cita
-        </Button>
+          <div className="sm:w-56">
+            <Select
+              value={staffFilter}
+              onChange={(e) => setStaffFilter(e.target.value)}
+            >
+              <option value="">Todos los colaboradores</option>
+              {(staff.data ?? []).map((s) => (
+                <option key={s.id} value={s.id}>
+                  {fullName(s.first_name, s.last_name ?? '')}
+                </option>
+              ))}
+            </Select>
+          </div>
+        </div>
       </div>
 
       {notice && (
@@ -222,7 +226,16 @@ export function TasksPage() {
         </p>
       )}
 
-      {filteredRows.length === 0 ? (
+      {appts.isLoading ? (
+        <div className="flex gap-3 overflow-hidden">
+          {[0, 1, 2].map((i) => (
+            <div
+              key={i}
+              className="h-40 w-[82vw] max-w-xs shrink-0 animate-pulse rounded-xl border border-white/5 bg-white/[0.03] sm:w-64"
+            />
+          ))}
+        </div>
+      ) : filteredRows.length === 0 ? (
         <Card>
           <EmptyState
             icon={ClipboardList}

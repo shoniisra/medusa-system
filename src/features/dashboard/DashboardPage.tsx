@@ -129,13 +129,16 @@ export function DashboardPage() {
             {branchName} · {dateShort(todayISO())}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Link to={ROUTES.calendar}>
-            <Button variant="outline">
-              <CalendarDays className="h-4 w-4" /> Ver calendario
+        <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:items-center">
+          <Link to={ROUTES.calendar} className="contents sm:block">
+            <Button variant="outline" className="w-full sm:w-auto">
+              <CalendarDays className="h-4 w-4" /> Calendario
             </Button>
           </Link>
-          <Button onClick={() => navigate(ROUTES.appointmentNew)}>
+          <Button
+            className="w-full sm:w-auto"
+            onClick={() => navigate(ROUTES.appointmentNew)}
+          >
             <CalendarPlus className="h-4 w-4" /> Agendar cita
           </Button>
         </div>
@@ -258,9 +261,9 @@ export function DashboardPage() {
                 return (
                   <li
                     key={a.id}
-                    className="flex items-center justify-between gap-3 rounded-xl bg-white/5 p-3"
+                    className="flex flex-col gap-3 rounded-xl bg-white/5 p-3 sm:flex-row sm:items-center sm:justify-between"
                   >
-                    <div className="flex items-center gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
                       <div className="text-center">
                         <p className="kpi-gold text-sm">
                           {timeShort(a.start_at)}
@@ -269,11 +272,11 @@ export function DashboardPage() {
                           {dateShort(a.start_at)}
                         </p>
                       </div>
-                      <div>
-                        <p className="text-sm font-medium text-white">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-white">
                           {a.customer_name ?? 'Sin cliente'}
                         </p>
-                        <p className="text-xs text-white/40">
+                        <p className="truncate text-xs text-white/40">
                           {a.services ?? 'Sin servicios'}
                         </p>
                       </div>
@@ -298,7 +301,7 @@ export function DashboardPage() {
                       {(a.status === 'reserved' ||
                         a.status === 'confirmed') && (
                         <Button
-                          size="sm"
+                          className="ml-auto h-10 flex-1 sm:h-9 sm:flex-none sm:px-3.5 sm:text-sm"
                           onClick={() =>
                             startAttention({ id: a.id, status: a.status })
                           }

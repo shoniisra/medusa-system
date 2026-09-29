@@ -1,8 +1,11 @@
 import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Check, GripVertical } from 'lucide-react';
+import { query } from '@/lib/db';
+import { useBranchId } from '@/store/session';
 import { APPOINTMENT_STATUS } from '@/config/constants';
 import { timeShort, dateShort } from '@/lib/format';
-import { Card, Badge, Button } from '@/components/ui';
+import { Badge, Button } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import type { AppointmentStatus } from '@/types';
 
@@ -78,6 +81,40 @@ export function rangeFor(mode: RangeMode): { from: string; to: string; label: st
   };
 }
 
+/**
+ * Citas de la sucursal en un rango de fechas (inclusive). La comparten la
+ * agenda, la vista de calendario y el tablero de tareas: una sola consulta y
+ * una sola clave de caché.
+ */
+export function useAppointments(from: string, to: string) {
+  const branchId = useBranchId();
+  return useQuery({
+    queryKey: ['appointments', branchId, from, to],
+    enabled: !!branchId,
+    queryFn: () =>
+      query<AppointmentRow>(
+        `SELECT a.id, a.start_at, a.end_at, a.status, a.notes,
+                a.google_calendar_id, a.google_calendar_event_id,
+                c.first_name || CASE WHEN c.last_name IS NOT NULL THEN ' ' || c.last_name ELSE '' END AS customer_name,
+                c.phone,
+                s.id AS staff_id,
+                s.first_name || CASE WHEN s.last_name IS NOT NULL THEN ' ' || s.last_name ELSE '' END AS staff_name,
+                s.color AS staff_color,
+                COALESCE(sv.name, ai.category) AS service_name
+           FROM appointment a
+           LEFT JOIN customer c ON c.id = a.customer_id
+           LEFT JOIN appointment_item ai
+                  ON ai.id = (SELECT ai2.id FROM appointment_item ai2
+                               WHERE ai2.appointment_id = a.id LIMIT 1)
+           LEFT JOIN staff_member s ON s.id = ai.assigned_staff_id
+           LEFT JOIN service sv ON sv.id = ai.service_id
+          WHERE a.branch_id = ? AND date(a.start_at) BETWEEN ? AND ?
+          ORDER BY a.start_at ASC`,
+        [branchId, from, to],
+      ),
+  });
+}
+
 export function ToggleBtn({
   active,
   onClick,
@@ -91,7 +128,7 @@ export function ToggleBtn({
     <button
       onClick={onClick}
       className={cn(
-        'flex flex-1 items-center justify-center rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+        'flex min-h-[40px] flex-1 items-center justify-center whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-colors',
         active ? 'bg-gold-400 text-ink-950' : 'text-white/60 hover:text-white',
       )}
     >
@@ -119,9 +156,13 @@ export function AttendButton({
   const label = a.status === 'confirmed' ? 'Finalizar y Cobrar' : 'Atender';
   return (
     <Button
-      size="sm"
       onClick={() => onAttend(a)}
-      className={full ? 'mt-2 w-full' : 'shrink-0'}
+      className={cn(
+        'shrink-0',
+        // En móvil ocupa todo el ancho (pulgar); en escritorio vuelve a ser
+        // un botón compacto dentro de la fila.
+        full && 'h-12 w-full lg:h-9 lg:w-auto lg:px-3.5 lg:text-sm',
+      )}
     >
       <Check className="h-4 w-4" /> {label}
     </Button>
@@ -133,31 +174,52 @@ export function ListView({
   rows,
   showDate,
   onAttend,
+  onOpen,
 }: {
   rows: AppointmentRow[];
   showDate: boolean;
   onAttend: (a: AppointmentRow) => void;
+  /** Abrir la ficha de la cita (toda la tarjeta es tocable en móvil). */
+  onOpen?: (a: AppointmentRow) => void;
 }) {
   return (
-    <Card>
-      <ul className="divide-y divide-white/5">
-        {rows.map((a) => {
-          const meta = APPOINTMENT_STATUS[a.status];
-          const color = a.staff_color || FALLBACK_COLOR;
-          return (
-            <li key={a.id} className="flex items-center gap-3 py-3">
+    <ul className="space-y-2.5 lg:space-y-0 lg:divide-y lg:divide-white/5 lg:rounded-3xl lg:border lg:border-white/10 lg:bg-white/[0.02] lg:px-5">
+      {rows.map((a) => {
+        const meta = APPOINTMENT_STATUS[a.status];
+        const color = a.staff_color || FALLBACK_COLOR;
+        const overdue = isOverdue(a);
+        return (
+          <li
+            key={a.id}
+            onClick={() => onOpen?.(a)}
+            className={cn(
+              'glass-card flex flex-col gap-3 p-3.5 lg:flex-row lg:items-center lg:gap-3 lg:rounded-none lg:border-0 lg:bg-none lg:p-0 lg:py-3 lg:shadow-none',
+              onOpen && 'cursor-pointer',
+              overdue && 'border-danger/40 lg:border-0',
+            )}
+          >
+            <div className="flex items-start gap-3 lg:min-w-0 lg:flex-1 lg:items-center">
               <span
-                className="h-10 w-1.5 shrink-0 rounded-full"
+                className="mt-0.5 h-11 w-1.5 shrink-0 rounded-full lg:mt-0 lg:h-10"
                 style={{ backgroundColor: color }}
               />
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <p className="kpi-gold text-sm">
                     {showDate ? `${dateShort(a.start_at.slice(0, 10))} · ` : ''}
                     {timeShort(a.start_at)}–{timeShort(a.end_at)}
                   </p>
+                  {overdue && (
+                    <span className="rounded bg-danger/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-danger">
+                      Vencida
+                    </span>
+                  )}
+                  {/* El estado va junto a la hora en móvil; en escritorio, al final. */}
+                  <span className="lg:hidden">
+                    <Badge tone={meta.tone}>{meta.label}</Badge>
+                  </span>
                 </div>
-                <p className="truncate text-sm font-medium text-white">
+                <p className="truncate text-base font-medium text-white lg:text-sm">
                   {a.customer_name ?? 'Sin cliente'}
                 </p>
                 <p className="truncate text-xs text-white/40">
@@ -165,13 +227,21 @@ export function ListView({
                   {a.staff_name ? ` · ${a.staff_name}` : ''}
                 </p>
               </div>
-              <AttendButton a={a} onAttend={onAttend} />
-              <Badge tone={meta.tone}>{meta.label}</Badge>
-            </li>
-          );
-        })}
-      </ul>
-    </Card>
+            </div>
+
+            <div
+              className="flex items-center gap-3 lg:contents"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <AttendButton a={a} onAttend={onAttend} full />
+              <span className="hidden lg:inline">
+                <Badge tone={meta.tone}>{meta.label}</Badge>
+              </span>
+            </div>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -214,7 +284,7 @@ export function KanbanView({
   const canDrag = !!onMove;
 
   return (
-    <div className="flex gap-3 overflow-x-auto pb-2">
+    <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-2 lg:mx-0 lg:snap-none lg:px-0">
       {STATUS_ORDER.map((status) => {
         const meta = APPOINTMENT_STATUS[status];
         const items = byStatus[status];
@@ -229,7 +299,7 @@ export function KanbanView({
           <div
             key={status}
             className={cn(
-              'w-64 shrink-0 rounded-xl p-1 transition-colors',
+              'w-[82vw] max-w-xs shrink-0 snap-center rounded-xl p-1 transition-colors sm:w-64 sm:snap-align-none',
               isOver && 'bg-gold/10 ring-1 ring-gold/40',
             )}
             onDragOver={(e) => {
@@ -278,7 +348,7 @@ export function KanbanView({
                       }}
                       onClick={() => onSelect(a)}
                       className={cn(
-                        'cursor-pointer rounded-xl border bg-ink-800/60 p-3 hover:border-white/25',
+                        'min-h-[76px] cursor-pointer rounded-xl border bg-ink-800/60 p-3 hover:border-white/25',
                         overdue ? 'border-danger/50' : 'border-white/10',
                         draggable && 'active:cursor-grabbing',
                         dragId === a.id && 'opacity-50',

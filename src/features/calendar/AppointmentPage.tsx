@@ -35,6 +35,7 @@ import { useCustomers, useServices, useProducts, useStaff } from '@/features/pos
 import {
   DEFAULT_SERVICE_MINUTES,
   toMinutes,
+  fromMinutes,
   hoursForDate,
   overlaps,
   type Interval,
@@ -155,8 +156,8 @@ function NewAppointment() {
   const customers = useCustomers();
   const staff = useStaff();
 
-  // Paso del asistente: 1) qué y cuándo · 2) cliente y confirmación.
-  const [step, setStep] = useState<1 | 2>(1);
+  // Paso del asistente: 1) qué · 2) cuándo · 3) cliente y abono.
+  const [step, setStep] = useState<1 | 2 | 3>(1);
 
   // Cliente
   const [newClient, setNewClient] = useState(false);
@@ -194,7 +195,7 @@ function NewAppointment() {
 
   // ── Cliente: buscador con foco automático y creación al vuelo ──
   useEffect(() => {
-    if (step === 2 && !hasClient) searchRef.current?.focus();
+    if (step === 3 && !hasClient) searchRef.current?.focus();
   }, [step, hasClient]);
 
   const clientMatches = useMemo(() => {
@@ -595,93 +596,298 @@ function NewAppointment() {
 
   const canContinue = cats.length > 0;
 
+  // ── Paso 2: disponibilidad táctil ──
+
+  /** Próximos 28 días como tira horizontal (el salón agenda a corto plazo). */
+  const dayStrip = useMemo(() => {
+    const out: string[] = [];
+    const base = new Date(`${todayLocalISO()}T00:00:00`);
+    for (let i = 0; i < 28; i++) {
+      const d = new Date(base);
+      d.setDate(base.getDate() + i);
+      out.push(ymdLocal(d));
+    }
+    // Si la fecha elegida cae fuera de la ventana (llegó por ?date=), la sumamos.
+    if (!out.includes(date)) out.unshift(date);
+    return out;
+  }, [date]);
+
+  /** Citas del día elegido (cualquier estilista), para medir cuán cargado está. */
+  const dayAppts = useMemo(
+    () =>
+      (weekAppts.data ?? []).filter((r) => r.start_at.slice(0, 10) === date),
+    [weekAppts.data, date],
+  );
+
+  /**
+   * Horarios del día en pasos de 30 min: libre / ocupado (choca con alguna
+   * estilista elegida) / pasado. `load` = citas del salón que se solapan, para
+   * dar una idea de cuán lleno está ese horario cuando no hay estilista fija.
+   */
+  const slots = useMemo(() => {
+    const hours = hoursForDate(date);
+    if (!hours) return [];
+    const openMin = toMinutes(hours.open);
+    const closeMin = toMinutes(hours.close);
+    const dur = reservedMinutes || DEFAULT_SERVICE_MINUTES;
+    const now = new Date();
+    const nowMin =
+      date === todayLocalISO() ? now.getHours() * 60 + now.getMinutes() : -1;
+
+    const out: {
+      min: number;
+      label: string;
+      past: boolean;
+      taken: boolean;
+      load: number;
+    }[] = [];
+    for (let m = openMin; m + dur <= closeMin; m += 30) {
+      let taken = false;
+      for (const [key, d] of staffBlocks) {
+        if (key === '__none') continue;
+        if (overlaps(bookedByStaff.get(key) ?? [], m, m + d)) taken = true;
+      }
+      const load = dayAppts.filter(
+        (r) => naiveToMin(r.start_at) < m + dur && m < naiveToMin(r.end_at),
+      ).length;
+      out.push({
+        min: m,
+        label: fromMinutes(m),
+        past: m < nowMin,
+        taken,
+        load,
+      });
+    }
+    return out;
+  }, [date, reservedMinutes, staffBlocks, bookedByStaff, dayAppts]);
+
+  /**
+   * Si la hora elegida ya pasó o quedó ocupada (por cambio de día, de estilista
+   * o de duración), proponemos el primer hueco libre del día. Evita que el
+   * asistente quede con una hora inválida por defecto.
+   */
+  useEffect(() => {
+    if (!slots.length) return;
+    const current = slots.find((s) => s.label === time);
+    if (current && !current.past && !current.taken) return;
+    const next = slots.find((s) => !s.past && !s.taken);
+    if (next && next.label !== time) setTime(next.label);
+    // `time` se omite a propósito: solo recalculamos cuando cambian los huecos,
+    // así una hora elegida a mano (aunque esté ocupada) no se pisa sola.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slots]);
+
+  const closedDay = !hoursForDate(date);
+  const durationLabel = fmtDuration(reservedMinutes || DEFAULT_SERVICE_MINUTES);
+
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-5 pb-24">
+    <div className="mx-auto w-full max-w-5xl space-y-5 pb-action">
       <Header
         title="Agendar cita"
         onBack={() =>
-          step === 2 ? setStep(1) : navigate(ROUTES.calendar)
+          step > 1 ? setStep((step - 1) as 1 | 2) : navigate(ROUTES.calendar)
         }
       />
 
-      {/* Indicador de pasos */}
-      <div className="flex items-center gap-2 text-sm">
-        <StepDot n={1} label="Qué y cuándo" active={step === 1} done={step > 1} />
-        <span className="h-px flex-1 bg-white/10" />
-        <StepDot n={2} label="Cliente y abono" active={step === 2} done={false} />
-      </div>
+      {/* Indicador de pasos: en móvil solo el paso activo + barra de progreso */}
+      <Steps step={step} />
 
+      {/* ── Paso 1 · ¿Qué se va a hacer? ── */}
       {step === 1 && (
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-          {/* Categorías + estilista */}
-          <Card>
-            <CardHeader
-              title="¿Qué se va a hacer?"
-              subtitle="Tocá una o varias categorías. El detalle se carga al atender."
-            />
-            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-              {SERVICE_CATEGORIES.map((c) => {
-                const on = isCatOn(c);
+        <Card>
+          <CardHeader
+            title="¿Qué se va a hacer?"
+            subtitle="Tocá una o varias categorías. El detalle se carga al atender."
+          />
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
+            {SERVICE_CATEGORIES.map((c) => {
+              const on = isCatOn(c);
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => toggleCat(c)}
+                  className={cn(
+                    'flex min-h-[68px] items-center justify-center rounded-2xl border p-3 text-center text-sm font-medium transition active:scale-[0.97]',
+                    on
+                      ? 'border-gold/60 bg-gold/15 text-gold-100 shadow-gold-glow'
+                      : 'border-white/10 bg-white/[0.03] text-white/75 hover:bg-white/[0.06]',
+                  )}
+                >
+                  {c}
+                </button>
+              );
+            })}
+          </div>
+
+          {cats.length > 0 && (
+            <div className="mt-4 space-y-2">
+              <p className="text-xs font-medium text-white/50">
+                Estilista por categoría (opcional)
+              </p>
+              {cats.map((c) => (
+                <div
+                  key={c.category}
+                  className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] p-2.5 sm:gap-3"
+                >
+                  <span className="w-[76px] shrink-0 text-xs font-medium text-white sm:w-[92px] sm:text-sm">
+                    {c.category}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <Select
+                      value={c.staffId}
+                      onChange={(e) => setCatStaff(c.category, e.target.value)}
+                    >
+                      <option value="">Sin asignar</option>
+                      {staff.data?.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {fullName(s.first_name, s.last_name)}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => toggleCat(c.category)}
+                    className="tap flex shrink-0 items-center justify-center rounded-lg text-white/40 hover:bg-white/10 hover:text-white"
+                    title="Quitar"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* ── Paso 2 · ¿Cuándo? ── */}
+      {step === 2 && (
+        <div className="space-y-4">
+          {/* Día: tira horizontal deslizable */}
+          <Card className="p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h3 className="text-sm font-medium text-white/70">Día</h3>
+              <label className="flex items-center gap-2 text-xs text-white/50">
+                Otra fecha
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => {
+                    if (!e.target.value) return;
+                    setDate(e.target.value);
+                    setConflicts([]);
+                  }}
+                  className="rounded-lg border border-white/10 bg-ink-800/60 px-2 py-1.5 text-xs text-white"
+                />
+              </label>
+            </div>
+            <div className="edge-row snap-x snap-mandatory pb-1">
+              {dayStrip.map((iso) => {
+                const { wd, dm } = dayLabel(iso);
+                const on = iso === date;
+                const closed = !hoursForDate(iso);
                 return (
                   <button
-                    key={c}
+                    key={iso}
                     type="button"
-                    onClick={() => toggleCat(c)}
+                    onClick={() => {
+                      setDate(iso);
+                      setConflicts([]);
+                    }}
                     className={cn(
-                      'flex min-h-[64px] items-center justify-center rounded-2xl border p-3 text-center text-sm font-medium transition active:scale-[0.97]',
+                      'flex w-[62px] shrink-0 snap-start flex-col items-center gap-0.5 rounded-2xl border px-2 py-2.5 transition active:scale-[0.97]',
                       on
                         ? 'border-gold/60 bg-gold/15 text-gold-100 shadow-gold-glow'
-                        : 'border-white/10 bg-white/[0.03] text-white/75 hover:bg-white/[0.06]',
+                        : closed
+                          ? 'border-white/5 bg-white/[0.02] text-white/25'
+                          : 'border-white/10 bg-white/[0.03] text-white/70',
                     )}
                   >
-                    {c}
+                    <span className="text-[11px] uppercase">{wd}</span>
+                    <span className="text-lg font-semibold leading-none">
+                      {iso.slice(8, 10)}
+                    </span>
+                    <span className="text-[10px] opacity-70">
+                      {dm.slice(3)}
+                    </span>
                   </button>
                 );
               })}
             </div>
-
-            {cats.length > 0 && (
-              <div className="mt-4 space-y-2">
-                <p className="text-xs font-medium text-white/50">
-                  Estilista por categoría (opcional)
-                </p>
-                {cats.map((c) => (
-                  <div
-                    key={c.category}
-                    className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-2.5"
-                  >
-                    <span className="min-w-[92px] shrink-0 text-sm font-medium text-white">
-                      {c.category}
-                    </span>
-                    <div className="flex-1">
-                      <Select
-                        value={c.staffId}
-                        onChange={(e) => setCatStaff(c.category, e.target.value)}
-                      >
-                        <option value="">Sin asignar</option>
-                        {staff.data?.map((s) => (
-                          <option key={s.id} value={s.id}>
-                            {fullName(s.first_name, s.last_name)}
-                          </option>
-                        ))}
-                      </Select>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => toggleCat(c.category)}
-                      className="rounded-lg p-2 text-white/40 hover:bg-white/10 hover:text-white"
-                      title="Quitar"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
           </Card>
 
-          {/* Disponibilidad: React Big Calendar */}
-          <Card>
+          {/* Hora: rejilla táctil (móvil) + calendario semanal (escritorio) */}
+          <Card className="p-4 lg:hidden">
+            <div className="mb-3 flex items-baseline justify-between gap-2">
+              <h3 className="text-sm font-medium text-white/70">Hora</h3>
+              <span className="text-xs text-white/40">
+                Bloque de {durationLabel}
+              </span>
+            </div>
+
+            {closedDay ? (
+              <p className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-100/90">
+                El local está cerrado ese día. Podés elegir la hora igual: se
+                agenda como hora extra.
+              </p>
+            ) : (
+              <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                {slots.map((s) => {
+                  const on = s.label === time;
+                  return (
+                    <button
+                      key={s.min}
+                      type="button"
+                      onClick={() => {
+                        setTime(s.label);
+                        setConflicts([]);
+                      }}
+                      className={cn(
+                        'flex min-h-[52px] flex-col items-center justify-center rounded-xl border text-sm font-semibold transition active:scale-[0.97]',
+                        on
+                          ? 'border-gold/60 bg-gold/15 text-gold-100 shadow-gold-glow'
+                          : s.taken
+                            ? 'border-danger/30 bg-danger/10 text-danger/70'
+                            : s.past
+                              ? 'border-white/5 bg-white/[0.02] text-white/25'
+                              : 'border-white/10 bg-white/[0.03] text-white/80',
+                      )}
+                    >
+                      {s.label}
+                      <span className="text-[10px] font-normal opacity-70">
+                        {s.taken
+                          ? 'ocupado'
+                          : s.past
+                            ? 'pasó'
+                            : s.load > 0
+                              ? `${s.load} cita${s.load > 1 ? 's' : ''}`
+                              : 'libre'}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            <label className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-sm text-white/60">
+              Otra hora
+              <input
+                type="time"
+                value={time}
+                step={300}
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  setTime(e.target.value);
+                  setConflicts([]);
+                }}
+                className="rounded-lg border border-white/10 bg-ink-800/60 px-2.5 py-2 text-white"
+              />
+            </label>
+          </Card>
+
+          {/* Escritorio: calendario semanal con los huecos reales */}
+          <Card className="hidden lg:block">
             <CardHeader
               title="¿Cuándo?"
               subtitle="Tocá un hueco libre. En dorado, tu cita."
@@ -705,37 +911,37 @@ function NewAppointment() {
                 setConflicts([]);
               }}
             />
-            <p className="mt-3 flex items-center justify-between text-sm">
-              <span className="text-white/50">Elegido</span>
-              <span className="font-medium text-white">
-                {dayLabel(date).wd} {dayLabel(date).dm} · {time} ·{' '}
-                <span className="text-white/50">
-                  {fmtDuration(reservedMinutes || DEFAULT_SERVICE_MINUTES)}
-                </span>
-              </span>
-            </p>
           </Card>
+
+          <p className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm">
+            <span className="text-white/50">Elegido</span>
+            <span className="font-medium text-white">
+              {dayLabel(date).wd} {dayLabel(date).dm} · {time} ·{' '}
+              <span className="text-white/50">{durationLabel}</span>
+            </span>
+          </p>
         </div>
       )}
 
-      {step === 2 && (
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+      {/* ── Paso 3 · Cliente y abono ── */}
+      {step === 3 && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 lg:gap-5">
           {/* Cliente */}
           <Card>
             <CardHeader title="Cliente" />
 
             {hasClient ? (
               <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
-                <div className="flex items-center gap-3">
-                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-gold/15 text-gold-200">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gold/15 text-gold-200">
                     {newClient ? (
                       <UserPlus className="h-4 w-4" />
                     ) : (
                       <UserRound className="h-4 w-4" />
                     )}
                   </span>
-                  <div>
-                    <p className="text-sm font-medium text-white">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-white">
                       {newClient
                         ? fullName(firstName, lastName) || 'Cliente nuevo'
                         : fullName(
@@ -743,7 +949,7 @@ function NewAppointment() {
                             selectedCustomer?.last_name,
                           )}
                     </p>
-                    <p className="text-xs text-white/40">
+                    <p className="truncate text-xs text-white/40">
                       {newClient
                         ? 'Se creará como cliente nuevo'
                         : selectedCustomer?.phone || 'Sin WhatsApp'}
@@ -752,7 +958,7 @@ function NewAppointment() {
                 </div>
                 <button
                   onClick={clearClient}
-                  className="rounded-lg p-2 text-white/40 hover:bg-white/10 hover:text-white"
+                  className="tap flex shrink-0 items-center justify-center rounded-lg text-white/40 hover:bg-white/10 hover:text-white"
                   title="Cambiar cliente"
                 >
                   <X className="h-4 w-4" />
@@ -773,24 +979,26 @@ function NewAppointment() {
                         else if (clientSearch.trim()) startNewClient();
                       }
                     }}
-                    placeholder="Buscar cliente por nombre o WhatsApp…"
+                    placeholder="Buscar por nombre o WhatsApp…"
                     className="input-base w-full pl-9"
                   />
                 </div>
 
                 {clientSearch.trim() && (
-                  <ul className="max-h-56 divide-y divide-white/5 overflow-y-auto rounded-xl border border-white/10">
+                  <ul className="max-h-64 divide-y divide-white/5 overflow-y-auto rounded-xl border border-white/10">
                     {clientMatches.map((c) => (
                       <li key={c.id}>
                         <button
                           onClick={() => pickExisting(c)}
-                          className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left hover:bg-white/10"
+                          className="flex w-full items-center justify-between gap-3 px-3 py-3.5 text-left hover:bg-white/10"
                         >
-                          <span className="text-sm text-white/90">
+                          <span className="truncate text-sm text-white/90">
                             {fullName(c.first_name, c.last_name)}
                           </span>
                           {c.phone && (
-                            <span className="text-xs text-white/40">{c.phone}</span>
+                            <span className="shrink-0 text-xs text-white/40">
+                              {c.phone}
+                            </span>
                           )}
                         </button>
                       </li>
@@ -799,15 +1007,11 @@ function NewAppointment() {
                     <li>
                       <button
                         onClick={startNewClient}
-                        className="flex w-full items-center gap-2 px-3 py-3 text-left text-gold-200 hover:bg-white/10"
+                        className="flex w-full items-center gap-2 px-3 py-3.5 text-left text-gold-200 hover:bg-white/10"
                       >
                         <UserPlus className="h-4 w-4 shrink-0" />
-                        <span className="text-sm">
-                          {clientMatches.length === 0 ? (
-                            <>Crear «{clientSearch.trim()}» como cliente nuevo</>
-                          ) : (
-                            <>Crear «{clientSearch.trim()}» como cliente nuevo</>
-                          )}
+                        <span className="truncate text-sm">
+                          Crear «{clientSearch.trim()}» como cliente nuevo
                         </span>
                       </button>
                     </li>
@@ -839,7 +1043,7 @@ function NewAppointment() {
                 <span className="mb-2 block text-sm font-medium text-white/80">
                   Abono <span className="text-danger">*</span>
                 </span>
-                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                <div className="grid grid-cols-4 gap-2">
                   {[5, 10, 20].map((v) => {
                     const active =
                       depositChosen && !customDeposit && deposit === String(v);
@@ -853,7 +1057,7 @@ function NewAppointment() {
                           setDepositChosen(true);
                         }}
                         className={cn(
-                          'min-h-[52px] rounded-xl border text-base font-semibold transition active:scale-[0.97]',
+                          'min-h-[56px] rounded-xl border text-base font-semibold transition active:scale-[0.97]',
                           active
                             ? 'border-gold/60 bg-gold/15 text-gold-100 shadow-gold-glow'
                             : 'border-white/10 text-white/70 hover:bg-white/5',
@@ -871,7 +1075,7 @@ function NewAppointment() {
                       setDepositChosen(true);
                     }}
                     className={cn(
-                      'min-h-[52px] rounded-xl border text-base font-semibold transition active:scale-[0.97]',
+                      'min-h-[56px] rounded-xl border text-base font-semibold transition active:scale-[0.97]',
                       depositChosen && customDeposit
                         ? 'border-gold/60 bg-gold/15 text-gold-100 shadow-gold-glow'
                         : 'border-white/10 text-white/70 hover:bg-white/5',
@@ -884,6 +1088,7 @@ function NewAppointment() {
                   <Input
                     className="mt-2"
                     type="number"
+                    inputMode="decimal"
                     min="0"
                     step="0.01"
                     autoFocus
@@ -916,9 +1121,10 @@ function NewAppointment() {
                     <option value="cash">Efectivo (caja)</option>
                   </Select>
                   {depositIsCash && !openCash.data && (
-                    <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
-                      <AlertTriangle className="h-3.5 w-3.5" /> No hay caja
-                      abierta: la seña se registra pero no entra al efectivo.
+                    <p className="flex items-start gap-1.5 text-xs text-amber-300/80">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> No
+                      hay caja abierta: la seña se registra pero no entra al
+                      efectivo.
                     </p>
                   )}
                 </div>
@@ -931,21 +1137,21 @@ function NewAppointment() {
             <CardHeader title="Resumen" />
             <div className="space-y-4">
               <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-white/50">Cuándo</span>
-                  <span className="font-medium text-white">
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <span className="shrink-0 text-white/50">Cuándo</span>
+                  <span className="text-right font-medium text-white">
                     {dayLabel(date).wd} {dayLabel(date).dm} · {time}
                   </span>
                 </div>
-                <div className="mt-2 flex items-center justify-between text-sm">
-                  <span className="text-white/50">Tiempo reservado</span>
-                  <span className="font-medium text-white">
-                    {fmtDuration(reservedMinutes || DEFAULT_SERVICE_MINUTES)}
+                <div className="mt-2 flex items-center justify-between gap-3 text-sm">
+                  <span className="shrink-0 text-white/50">Tiempo reservado</span>
+                  <span className="text-right font-medium text-white">
+                    {durationLabel}
                   </span>
                 </div>
                 {depositChosen && (
-                  <div className="mt-2 flex items-center justify-between text-sm">
-                    <span className="text-white/50">Abono</span>
+                  <div className="mt-2 flex items-center justify-between gap-3 text-sm">
+                    <span className="shrink-0 text-white/50">Abono</span>
                     <span className="kpi-gold font-medium">{money(dep)}</span>
                   </div>
                 )}
@@ -953,10 +1159,12 @@ function NewAppointment() {
                   {cats.map((c) => (
                     <li
                       key={c.category}
-                      className="flex items-center justify-between text-sm"
+                      className="flex items-center justify-between gap-3 text-sm"
                     >
-                      <span className="text-white/80">{c.category}</span>
-                      <span className="text-white/50">{staffName(c.staffId)}</span>
+                      <span className="truncate text-white/80">{c.category}</span>
+                      <span className="shrink-0 truncate text-white/50">
+                        {staffName(c.staffId)}
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -964,7 +1172,7 @@ function NewAppointment() {
 
               {isGoogleCalendarEnabled() && (
                 <p className="text-xs text-white/40">
-                  Se reservarán {fmtDuration(reservedMinutes || DEFAULT_SERVICE_MINUTES)} en Google Calendar.
+                  Se reservarán {durationLabel} en Google Calendar.
                 </p>
               )}
 
@@ -980,14 +1188,17 @@ function NewAppointment() {
                       <li key={i}>{c}</li>
                     ))}
                   </ul>
-                  <div className="mt-3 flex gap-2">
+                  <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                     <Button
                       variant="outline"
                       size="lg"
                       className="flex-1"
-                      onClick={() => setConflicts([])}
+                      onClick={() => {
+                        setConflicts([]);
+                        setStep(2);
+                      }}
                     >
-                      Modificar
+                      Cambiar horario
                     </Button>
                     <Button
                       size="lg"
@@ -1005,53 +1216,74 @@ function NewAppointment() {
         </div>
       )}
 
-      {/* Barra de acción fija (alcance táctil) */}
-      <div className="fixed inset-x-0 bottom-0 z-20 border-t border-white/10 bg-ink-950/90 px-4 py-3 backdrop-blur lg:px-8">
+      {/* Barra de acción fija (alcance táctil). En estos flujos la navegación
+          inferior se oculta, así que la barra se apoya en el borde. */}
+      <div className="action-bar [--nav-h:0px]">
         <div className="mx-auto flex w-full max-w-5xl items-center gap-3">
-          {step === 1 ? (
+          {step > 1 && (
+            <Button
+              variant="outline"
+              size="lg"
+              className="shrink-0 px-4"
+              onClick={() => setStep((step - 1) as 1 | 2)}
+              aria-label="Atrás"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              <span className="hidden sm:inline">Atrás</span>
+            </Button>
+          )}
+
+          {step === 1 && (
             <>
-              <p className="flex-1 text-sm text-white/50">
+              <p className="hidden flex-1 text-sm text-white/50 sm:block">
                 {cats.length === 0
                   ? 'Elegí al menos una categoría'
-                  : `${cats.length} categoría${cats.length > 1 ? 's' : ''} · ${dayLabel(date).dm} ${time}`}
+                  : `${cats.length} categoría${cats.length > 1 ? 's' : ''}`}
               </p>
               <Button
                 size="lg"
+                className="flex-1 sm:flex-none"
                 disabled={!canContinue}
                 onClick={() => setStep(2)}
+              >
+                Elegir horario <ArrowRight className="h-4 w-4" />
+              </Button>
+            </>
+          )}
+
+          {step === 2 && (
+            <>
+              <p className="hidden flex-1 text-sm text-white/50 sm:block">
+                {dayLabel(date).dm} · {time} · {durationLabel}
+              </p>
+              <Button
+                size="lg"
+                className="flex-1 sm:flex-none"
+                onClick={() => setStep(3)}
               >
                 Continuar <ArrowRight className="h-4 w-4" />
               </Button>
             </>
-          ) : (
+          )}
+
+          {step === 3 && conflicts.length === 0 && (
             <>
+              <p className="hidden flex-1 text-sm text-white/50 sm:block">
+                {!hasClient
+                  ? 'Elegí el cliente'
+                  : !depositChosen
+                    ? 'Elegí el abono'
+                    : 'Todo listo para agendar'}
+              </p>
               <Button
-                variant="outline"
+                className="flex-1 sm:flex-none"
                 size="lg"
-                onClick={() => setStep(1)}
+                disabled={cats.length === 0 || !hasClient || !depositChosen}
+                loading={save.isPending}
+                onClick={() => attemptSchedule(false)}
               >
-                <ArrowLeft className="h-4 w-4" /> Atrás
+                <Check className="h-4 w-4" /> Agendar cita
               </Button>
-              {conflicts.length === 0 && (
-                <>
-                  <p className="hidden flex-1 text-sm text-white/50 sm:block">
-                    {!hasClient
-                      ? 'Elegí el cliente'
-                      : !depositChosen
-                        ? 'Elegí el abono'
-                        : 'Todo listo para agendar'}
-                  </p>
-                  <Button
-                    className="flex-1 sm:flex-none"
-                    size="lg"
-                    disabled={cats.length === 0 || !hasClient || !depositChosen}
-                    loading={save.isPending}
-                    onClick={() => attemptSchedule(false)}
-                  >
-                    <Check className="h-4 w-4" /> Agendar cita
-                  </Button>
-                </>
-              )}
             </>
           )}
         </div>
@@ -1060,41 +1292,47 @@ function NewAppointment() {
   );
 }
 
-/** Punto/etiqueta de un paso del asistente. */
-function StepDot({
-  n,
-  label,
-  active,
-  done,
-}: {
-  n: number;
-  label: string;
-  active: boolean;
-  done: boolean;
-}) {
+/** Indicador de pasos del asistente: compacto en móvil, con etiquetas en ≥sm. */
+const STEP_LABELS = ['Qué', 'Cuándo', 'Cliente y abono'];
+
+function Steps({ step }: { step: 1 | 2 | 3 }) {
   return (
-    <span className="flex items-center gap-2">
-      <span
-        className={cn(
-          'flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold',
-          active
-            ? 'bg-gold text-ink-950'
-            : done
-              ? 'bg-gold/25 text-gold-100'
-              : 'bg-white/10 text-white/50',
-        )}
-      >
-        {done ? <Check className="h-4 w-4" /> : n}
-      </span>
-      <span
-        className={cn(
-          'text-sm',
-          active ? 'font-medium text-white' : 'text-white/50',
-        )}
-      >
-        {label}
-      </span>
-    </span>
+    <div className="flex items-center gap-2">
+      {STEP_LABELS.map((label, i) => {
+        const n = i + 1;
+        const active = n === step;
+        const done = n < step;
+        return (
+          <div key={label} className="flex flex-1 items-center gap-2">
+            <span
+              className={cn(
+                'flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold',
+                active
+                  ? 'bg-gold text-ink-950'
+                  : done
+                    ? 'bg-gold/25 text-gold-100'
+                    : 'bg-white/10 text-white/50',
+              )}
+            >
+              {done ? <Check className="h-4 w-4" /> : n}
+            </span>
+            <span
+              className={cn(
+                'truncate text-sm',
+                active ? 'font-medium text-white' : 'text-white/45',
+                // En móvil solo se lee la etiqueta del paso activo.
+                active ? 'inline' : 'hidden sm:inline',
+              )}
+            >
+              {label}
+            </span>
+            {n < STEP_LABELS.length && (
+              <span className="h-px flex-1 bg-white/10" />
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -1432,12 +1670,21 @@ function EditAppointment({ id }: { id: string }) {
 
   const meta = APPOINTMENT_STATUS[head.data.status];
 
-  const fechaLarga = new Date(head.data.start_at).toLocaleDateString('es-EC', {
+  // En móvil, fecha compacta ("sáb 19 sept"); en escritorio, la larga.
+  const startDate = new Date(head.data.start_at);
+  const fechaLarga = startDate.toLocaleDateString('es-EC', {
     weekday: 'long',
     day: '2-digit',
     month: 'long',
     year: 'numeric',
   });
+  const fechaCorta = startDate
+    .toLocaleDateString('es-EC', {
+      weekday: 'short',
+      day: '2-digit',
+      month: 'short',
+    })
+    .replace('.', '');
 
   // created_at viene de la base como "YYYY-MM-DD HH:MM:SS" en UTC (sin zona):
   // lo normalizo a ISO-UTC para que dateShort/timeShort lo pasen a hora local.
@@ -1488,15 +1735,17 @@ function EditAppointment({ id }: { id: string }) {
     .filter((i) => i.product_id)
     .reduce((a, i) => a + i.final_unit_price * i.quantity, 0);
 
+  const balance = Math.max(0, total - depositPaid);
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 pb-action lg:pb-0">
       <Header
         title="Atención de cita"
         onBack={goBack}
         right={<Badge tone={meta.tone}>{meta.label}</Badge>}
       />
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-3 lg:gap-6">
         <div className="space-y-4 lg:col-span-2">
           {/* Cliente + datos de la cita */}
           <Card>
@@ -1509,20 +1758,29 @@ function EditAppointment({ id }: { id: string }) {
                   {head.data.customer_name ?? 'Sin cliente'}
                 </h2>
               </div>
-              <div className="flex flex-wrap gap-x-8 gap-y-1 text-sm">
+              <div className="grid w-full grid-cols-2 gap-x-6 gap-y-2 text-sm sm:w-auto sm:flex sm:flex-wrap sm:gap-x-8 sm:gap-y-1">
                 <div>
-                  <span className="text-white/40">Fecha </span>
-                  <span className="text-white capitalize">{fechaLarga}</span>
+                  <span className="block text-xs text-white/40 sm:inline">
+                    Fecha{' '}
+                  </span>
+                  <span className="text-white first-letter:uppercase">
+                    <span className="sm:hidden">{fechaCorta}</span>
+                    <span className="hidden sm:inline">{fechaLarga}</span>
+                  </span>
                 </div>
                 <div>
-                  <span className="text-white/40">Hora </span>
+                  <span className="block text-xs text-white/40 sm:inline">
+                    Hora{' '}
+                  </span>
                   <span className="text-white">
                     {timeShort(head.data.start_at)} – {timeShort(head.data.end_at)}
                   </span>
                 </div>
                 {reservedMinutes > 0 && (
                   <div>
-                    <span className="text-white/40">Duración </span>
+                    <span className="block text-xs text-white/40 sm:inline">
+                      Duración{' '}
+                    </span>
                     <span className="text-white">
                       {fmtDuration(reservedMinutes)}
                     </span>
@@ -1568,7 +1826,7 @@ function EditAppointment({ id }: { id: string }) {
 
         {/* Resumen */}
         <div className="lg:col-span-1">
-          <Card gold className="sticky top-4">
+          <Card gold className="lg:sticky lg:top-4">
             <CardHeader title="Resumen" />
             <div className="space-y-4">
               <Select
@@ -1636,7 +1894,7 @@ function EditAppointment({ id }: { id: string }) {
                         Saldo a cobrar
                       </span>
                       <span className="kpi-gold text-2xl">
-                        {money(Math.max(0, total - depositPaid))}
+                        {money(balance)}
                       </span>
                     </div>
                   </>
@@ -1677,7 +1935,7 @@ function EditAppointment({ id }: { id: string }) {
 
               {head.data.status !== 'attended' && (
                 <Button
-                  className="w-full"
+                  className="hidden w-full lg:inline-flex"
                   disabled={sellableItems.length === 0}
                   onClick={() => setConfirmOpen(true)}
                 >
@@ -1690,12 +1948,35 @@ function EditAppointment({ id }: { id: string }) {
                 className="w-full"
                 onClick={() => navigate(ROUTES.calendar)}
               >
-                Volver
+                Volver a la agenda
               </Button>
             </div>
           </Card>
         </div>
       </div>
+
+      {/* Cobro siempre a mano en móvil: total + acción, sin scrollear */}
+      {head.data.status !== 'attended' && (
+        <div className="action-bar [--nav-h:0px] lg:hidden">
+          <div className="flex items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] uppercase tracking-wide text-white/40">
+                {depositPaid > 0 ? 'Saldo a cobrar' : 'Total'}
+              </p>
+              <p className="kpi-gold text-xl leading-tight">
+                {money(depositPaid > 0 ? balance : total)}
+              </p>
+            </div>
+            <Button
+              size="lg"
+              disabled={sellableItems.length === 0}
+              onClick={() => setConfirmOpen(true)}
+            >
+              <Check className="h-4 w-4" /> Confirmar venta
+            </Button>
+          </div>
+        </div>
+      )}
 
       {confirmOpen && head.data && (
         <ConfirmSaleModal

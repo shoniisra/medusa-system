@@ -195,7 +195,7 @@ export function NewSaleTab() {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+    <div className="grid grid-cols-1 gap-5 pb-action lg:grid-cols-3 lg:gap-6 lg:pb-0">
       <div className="space-y-4 lg:col-span-2">
         {/* Cliente */}
         <Card>
@@ -264,7 +264,7 @@ export function NewSaleTab() {
                     <li key={c.id}>
                       <button
                         onClick={() => pickExisting(c)}
-                        className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left hover:bg-white/10"
+                        className="flex w-full items-center justify-between gap-3 px-3 py-3.5 text-left hover:bg-white/10"
                       >
                         <span className="text-sm text-white/90">
                           {fullName(c.first_name, c.last_name)}
@@ -278,7 +278,7 @@ export function NewSaleTab() {
                   <li>
                     <button
                       onClick={startNewClient}
-                      className="flex w-full items-center gap-2 px-3 py-3 text-left text-gold-200 hover:bg-white/10"
+                      className="flex w-full items-center gap-2 px-3 py-3.5 text-left text-gold-200 hover:bg-white/10"
                     >
                       <UserPlus className="h-4 w-4 shrink-0" />
                       <span className="text-sm">
@@ -290,13 +290,15 @@ export function NewSaleTab() {
               )}
 
               {!clientSearch.trim() && (
-                <p className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-xs text-white/50">
-                  <UserRound className="h-4 w-4 shrink-0 text-white/30" />
-                  Sin cliente: la venta se registra como{' '}
-                  <span className="font-medium text-white/80">
-                    {CONSUMIDOR_FINAL_LABEL}
+                <p className="flex items-start gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-xs leading-relaxed text-white/50">
+                  <UserRound className="mt-0.5 h-4 w-4 shrink-0 text-white/30" />
+                  <span>
+                    Sin cliente: la venta se registra como{' '}
+                    <span className="font-medium text-white/80">
+                      {CONSUMIDOR_FINAL_LABEL}
+                    </span>
+                    .
                   </span>
-                  .
                 </p>
               )}
             </div>
@@ -335,7 +337,7 @@ export function NewSaleTab() {
 
       {/* Resumen */}
       <div className="lg:col-span-1">
-        <Card gold className="sticky top-4">
+        <Card gold className="lg:sticky lg:top-4">
           <CardHeader title="Resumen" />
           <div className="space-y-4">
             <label className="flex items-center gap-2 text-sm text-white/70">
@@ -393,7 +395,7 @@ export function NewSaleTab() {
             )}
 
             <Button
-              className="w-full"
+              className="hidden w-full lg:inline-flex"
               size="lg"
               disabled={!canConfirm}
               onClick={() => setConfirmOpen(true)}
@@ -402,6 +404,25 @@ export function NewSaleTab() {
             </Button>
           </div>
         </Card>
+      </div>
+
+      {/* Cobro siempre visible en móvil */}
+      <div className="action-bar lg:hidden">
+        <div className="flex items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] uppercase tracking-wide text-white/40">
+              Total
+            </p>
+            <p className="kpi-gold text-xl leading-tight">{money(total)}</p>
+          </div>
+          <Button
+            size="lg"
+            disabled={!canConfirm}
+            onClick={() => setConfirmOpen(true)}
+          >
+            <Check className="h-4 w-4" /> Confirmar venta
+          </Button>
+        </div>
       </div>
 
       {confirmOpen && (

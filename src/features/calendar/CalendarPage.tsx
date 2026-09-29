@@ -1,86 +1,80 @@
-import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   CalendarDays,
   CalendarPlus,
   CalendarRange,
-  List,
-  Download,
-} from "lucide-react";
-import type { View } from "react-big-calendar";
-import { query, execute } from "@/lib/db";
-import { toLocalNaive, fullName } from "@/lib/format";
-import { useBranchId, useSession } from "@/store/session";
-import { ROUTES } from "@/config/constants";
-import {
-  isGoogleCalendarEnabled,
-  updateCalendarEvent,
-  listCalendarEvents,
-  normalizeEvents,
-} from "@/lib/googleCalendar";
-import { Card, Button, EmptyState, Select } from "@/components/ui";
-import { useStaff } from "@/features/pos/useCatalog";
-import { GoogleCalendarEmbed } from "./GoogleCalendarEmbed";
-import { AgendaCalendar, type AgendaEvent } from "./AgendaCalendar";
+  SlidersHorizontal,
+  X,
+} from 'lucide-react';
+import { execute } from '@/lib/db';
+import { fullName } from '@/lib/format';
+import { ROUTES } from '@/config/constants';
+import { Card, Button, EmptyState, Select, Modal } from '@/components/ui';
+import { useStaff } from '@/features/pos/useCatalog';
+import { cn } from '@/lib/cn';
 import {
   type AppointmentRow,
   type RangeMode,
-  FALLBACK_COLOR,
-  ymd,
   rangeFor,
   ToggleBtn,
   ListView,
-} from "./appointmentBoard";
+  useAppointments,
+} from './appointmentBoard';
 
-type ViewMode = "list" | "calendar";
-
-/* ─────────────────────────── Rango de fechas ─────────────────────────── */
-
-/** Ventana amplia (mes ± 1 semana) alrededor de una fecha, para la vista calendario. */
-function windowFor(d: Date): { from: string; to: string; label: string } {
-  const from = new Date(d.getFullYear(), d.getMonth(), 1);
-  from.setDate(from.getDate() - 7);
-  const to = new Date(d.getFullYear(), d.getMonth() + 1, 0);
-  to.setDate(to.getDate() + 7);
-  return {
-    from: ymd(from),
-    to: ymd(to),
-    label: d.toLocaleDateString("es-EC", { month: "long", year: "numeric" }),
-  };
+/** Marcador de carga de la lista: evita el falso "Sin citas" mientras consulta. */
+function ListSkeleton() {
+  return (
+    <div className="space-y-2.5">
+      {[0, 1, 2].map((i) => (
+        <div
+          key={i}
+          className="h-[104px] animate-pulse rounded-3xl border border-white/5 bg-white/[0.03] lg:h-16"
+        />
+      ))}
+    </div>
+  );
 }
+
+const STATUS_TABS = [
+  { key: 'all', label: 'Todos' },
+  { key: 'reserved', label: 'Reservados' },
+  { key: 'attended', label: 'Atendidos' },
+] as const;
+
+type StatusFilter = (typeof STATUS_TABS)[number]['key'];
 
 /* ─────────────────────────────── Página ─────────────────────────────── */
 
+/**
+ * Agenda operativa: la lista de próximas citas y el botón para atenderlas.
+ * La rejilla de calendario vive en su propia pantalla (`/calendario`) para no
+ * comerse el alto útil del teléfono.
+ */
 export function CalendarPage() {
-  const branchId = useBranchId();
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const [range, setRange] = useState<RangeMode>("today");
-  const [view, setView] = useState<ViewMode>("list");
-  const [calDate, setCalDate] = useState(new Date());
-  const [calView, setCalView] = useState<View>("week");
+  const [range, setRange] = useState<RangeMode>('today');
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
-  const branch = useSession((s) => s.branch);
-  const [exporting, setExporting] = useState(false);
-  const [exportMsg, setExportMsg] = useState("");
-
-  // Filtros de la lista/kanban: por colaborador y por estado.
+  // Filtros de la lista: por colaborador y por estado.
   const staff = useStaff();
-  const [staffFilter, setStaffFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState<
-    "all" | "attended" | "reserved"
-  >("all");
+  const [staffFilter, setStaffFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+
+  const { from, to, label } = useMemo(() => rangeFor(range), [range]);
+  const appts = useAppointments(from, to);
 
   // "Atender": al iniciar la atención, una cita reservada pasa a "Atendiendo"
   // (confirmed) y se abre la ficha en modo atención para confirmar y cobrar.
   const startAttention = (a: AppointmentRow) => {
-    if (a.status === "reserved") {
+    if (a.status === 'reserved') {
       execute(
         "UPDATE appointment SET status = 'confirmed', updated_at = ? WHERE id = ?",
         [new Date().toISOString(), a.id],
       )
-        .then(() => qc.invalidateQueries({ queryKey: ["appointments"] }))
+        .then(() => qc.invalidateQueries({ queryKey: ['appointments'] }))
         .catch(() => {
           /* si falla, igual seguimos a la ficha */
         });
@@ -88,337 +82,202 @@ export function CalendarPage() {
     navigate(`${ROUTES.appointment}/${a.id}?atender=1`);
   };
 
-  // Exporta los eventos del calendario de Google (de la sucursal) a un JSON
-  // descargable. El mapeo color→estilista y título→servicio se hace fuera de
-  // la app (análisis manual/importación), no con IA en runtime.
-  async function exportGoogleJson() {
-    setExportMsg("");
-    setExporting(true);
-    try {
-      const now = new Date();
-      const timeMin = new Date(now);
-      timeMin.setDate(timeMin.getDate() - 120);
-      const timeMax = new Date(now);
-      timeMax.setDate(timeMax.getDate() + 180);
-      const raw = await listCalendarEvents({
-        calendarId: branch?.google_calendar_id,
-        timeMinIso: timeMin.toISOString(),
-        timeMaxIso: timeMax.toISOString(),
-      });
-      const payload = {
-        exported_at: new Date().toISOString(),
-        organization_id: branch?.organization_id ?? null,
-        branch_id: branch?.id ?? null,
-        branch_name: branch?.name ?? null,
-        calendar_id: branch?.google_calendar_id ?? "primary",
-        range: { from: timeMin.toISOString(), to: timeMax.toISOString() },
-        count: raw.length,
-        events: normalizeEvents(raw),
-      };
-      const blob = new Blob([JSON.stringify(payload, null, 2)], {
-        type: "application/json",
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `gcal-eventos-${branch?.code ?? "sucursal"}-${ymd(now)}.json`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      setExportMsg(`Exportados ${payload.count} eventos.`);
-    } catch (e) {
-      setExportMsg(
-        e instanceof Error ? e.message : "No se pudo exportar de Google.",
-      );
-    } finally {
-      setExporting(false);
-    }
-  }
-
-  const { from, to, label } = useMemo(
-    () => (view === "calendar" ? windowFor(calDate) : rangeFor(range)),
-    [view, range, calDate],
-  );
-
-  const appts = useQuery({
-    queryKey: ["appointments", branchId, from, to],
-    enabled: !!branchId,
-    queryFn: () =>
-      query<AppointmentRow>(
-        `SELECT a.id, a.start_at, a.end_at, a.status, a.notes,
-                a.google_calendar_id, a.google_calendar_event_id,
-                c.first_name || CASE WHEN c.last_name IS NOT NULL THEN ' ' || c.last_name ELSE '' END AS customer_name,
-                c.phone,
-                s.id AS staff_id,
-                s.first_name || CASE WHEN s.last_name IS NOT NULL THEN ' ' || s.last_name ELSE '' END AS staff_name,
-                s.color AS staff_color,
-                COALESCE(sv.name, ai.category) AS service_name
-           FROM appointment a
-           LEFT JOIN customer c ON c.id = a.customer_id
-           LEFT JOIN appointment_item ai
-                  ON ai.id = (SELECT ai2.id FROM appointment_item ai2
-                               WHERE ai2.appointment_id = a.id LIMIT 1)
-           LEFT JOIN staff_member s ON s.id = ai.assigned_staff_id
-           LEFT JOIN service sv ON sv.id = ai.service_id
-          WHERE a.branch_id = ? AND date(a.start_at) BETWEEN ? AND ?
-          ORDER BY a.start_at ASC`,
-        [branchId, from, to],
-      ),
-  });
-
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["appointments"] });
-
   // Aplica los filtros de colaborador + estado a las citas del rango.
   const filteredRows = useMemo(() => {
     let rows = appts.data ?? [];
     if (staffFilter) rows = rows.filter((a) => a.staff_id === staffFilter);
-    if (statusFilter === "attended") {
-      rows = rows.filter((a) => a.status === "attended");
-    } else if (statusFilter === "reserved") {
+    if (statusFilter === 'attended') {
+      rows = rows.filter((a) => a.status === 'attended');
+    } else if (statusFilter === 'reserved') {
       rows = rows.filter(
-        (a) => a.status === "reserved" || a.status === "confirmed",
+        (a) => a.status === 'reserved' || a.status === 'confirmed',
       );
     }
     return rows;
   }, [appts.data, staffFilter, statusFilter]);
 
-  const events: AgendaEvent[] = useMemo(
-    () =>
-      filteredRows.map((a) => ({
-        id: a.id,
-        title: `${a.customer_name ?? "Sin cliente"}${
-          a.service_name ? " · " + a.service_name : ""
-        }`,
-        start: new Date(a.start_at),
-        end: new Date(a.end_at),
-        color: a.staff_color || FALLBACK_COLOR,
-      })),
-    [filteredRows],
+  const staffName = useMemo(() => {
+    const s = (staff.data ?? []).find((x) => x.id === staffFilter);
+    return s ? fullName(s.first_name, s.last_name ?? '') : '';
+  }, [staff.data, staffFilter]);
+
+  const activeFilters = (staffFilter ? 1 : 0) + (statusFilter !== 'all' ? 1 : 0);
+
+  const statusTabs = (
+    <div className="flex gap-1 rounded-xl bg-ink-800/60 p-1">
+      {STATUS_TABS.map((t) => (
+        <ToggleBtn
+          key={t.key}
+          active={statusFilter === t.key}
+          onClick={() => setStatusFilter(t.key)}
+        >
+          {t.label}
+        </ToggleBtn>
+      ))}
+    </div>
   );
 
-  // Arrastrar/redimensionar en el calendario reprograma la cita (y su evento).
-  const reschedule = useMutation({
-    mutationFn: async ({
-      id,
-      start,
-      end,
-    }: {
-      id: string;
-      start: Date;
-      end: Date;
-    }) => {
-      const row = appts.data?.find((a) => a.id === id);
-      const startLocal = toLocalNaive(start);
-      const endLocal = toLocalNaive(end);
-      await execute(
-        "UPDATE appointment SET start_at = ?, end_at = ?, updated_at = ? WHERE id = ?",
-        [startLocal, endLocal, new Date().toISOString(), id],
-      );
-      if (row?.google_calendar_event_id && isGoogleCalendarEnabled()) {
-        try {
-          await updateCalendarEvent(
-            row.google_calendar_event_id,
-            row.google_calendar_id,
-            { startLocal, endLocal },
-          );
-        } catch {
-          /* la reprogramación local ya quedó guardada */
-        }
-      }
-    },
-    onSuccess: invalidate,
-  });
-
   return (
-    <div className="mx-auto max-w-[1500px] space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="mx-auto max-w-[1500px] space-y-3 lg:space-y-5">
+      {/* Título y acción: en móvil el alta de cita ya vive en el botón central
+          de la barra inferior, así que no se repite acá. */}
+      <div className="hidden items-center justify-between gap-3 lg:flex">
         <h1 className="text-2xl font-semibold text-white">Agenda</h1>
         <div className="flex items-center gap-2">
-          {isGoogleCalendarEnabled() && (
-            <Button
-              variant="ghost"
-              onClick={exportGoogleJson}
-              disabled={exporting}
-              title="Exporta los eventos de Google a un JSON para importarlos"
-            >
-              <Download className="h-4 w-4" />
-              {exporting ? "Exportando…" : "Exportar de Google"}
+          <Link to={ROUTES.calendarView}>
+            <Button variant="ghost">
+              <CalendarRange className="h-4 w-4" /> Calendario
             </Button>
-          )}
+          </Link>
           <Button onClick={() => navigate(ROUTES.appointmentNew)}>
             <CalendarPlus className="h-4 w-4" /> Nueva cita
           </Button>
         </div>
       </div>
-      {exportMsg && <p className="text-sm text-white/60">{exportMsg}</p>}
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-        {/* Izquierda: Google Calendar embebido (se mantiene visible al hacer scroll) */}
-        <div className="space-y-2 xl:sticky xl:top-4 xl:self-start">
-          <h2 className="text-sm font-medium text-white/50">Google Calendar</h2>
-          <GoogleCalendarEmbed
-            className="h-[78vh]"
-            mode={
-              view === "calendar"
-                ? "WEEK"
-                : range === "today"
-                  ? "WEEK"
-                  : range === "week"
-                    ? "WEEK"
-                    : "MONTH"
+      {/* Una sola fila de control en móvil: rango + filtros + calendario. */}
+      <div className="flex items-center gap-2">
+        <div className="flex flex-1 gap-1 overflow-hidden rounded-xl bg-ink-800/60 p-1 lg:max-w-sm">
+          <ToggleBtn active={range === 'today'} onClick={() => setRange('today')}>
+            Hoy
+          </ToggleBtn>
+          <ToggleBtn active={range === 'week'} onClick={() => setRange('week')}>
+            Semana
+          </ToggleBtn>
+          <ToggleBtn active={range === 'month'} onClick={() => setRange('month')}>
+            Mes
+          </ToggleBtn>
+        </div>
+
+        <button
+          onClick={() => setFiltersOpen(true)}
+          aria-label="Filtros"
+          className="tap relative flex shrink-0 items-center justify-center rounded-xl bg-ink-800/60 px-3 text-white/60 active:bg-white/10 lg:hidden"
+        >
+          <SlidersHorizontal className="h-5 w-5" />
+          {activeFilters > 0 && (
+            <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-gold-400" />
+          )}
+        </button>
+
+        <Link
+          to={ROUTES.calendarView}
+          aria-label="Ver calendario"
+          className="tap flex shrink-0 items-center justify-center rounded-xl bg-ink-800/60 px-3 text-white/60 active:bg-white/10 lg:hidden"
+        >
+          <CalendarRange className="h-5 w-5" />
+        </Link>
+      </div>
+
+      {/* Filtros al aire en escritorio; en móvil van en la hoja. */}
+      <div className="hidden items-center gap-2 lg:flex">
+        <Select
+          value={staffFilter}
+          onChange={(e) => setStaffFilter(e.target.value)}
+          className="w-64"
+        >
+          <option value="">Todos los colaboradores</option>
+          {(staff.data ?? []).map((s) => (
+            <option key={s.id} value={s.id}>
+              {fullName(s.first_name, s.last_name ?? '')}
+            </option>
+          ))}
+        </Select>
+        <div className="w-80">{statusTabs}</div>
+      </div>
+
+      {/* Contexto en una línea: rango, cantidad y filtros activos. */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-0.5 text-xs text-white/45">
+        <span className="capitalize text-white/60">{label}</span>
+        <span>·</span>
+        <span>
+          {appts.isLoading ? '…' : `${filteredRows.length} citas`}
+        </span>
+        {staffFilter && (
+          <button
+            onClick={() => setStaffFilter('')}
+            className="flex items-center gap-1 rounded-full bg-gold/15 px-2 py-0.5 text-gold-200 lg:hidden"
+          >
+            {staffName}
+            <X className="h-3 w-3" />
+          </button>
+        )}
+        {statusFilter !== 'all' && (
+          <button
+            onClick={() => setStatusFilter('all')}
+            className="flex items-center gap-1 rounded-full bg-gold/15 px-2 py-0.5 text-gold-200 lg:hidden"
+          >
+            {STATUS_TABS.find((t) => t.key === statusFilter)?.label}
+            <X className="h-3 w-3" />
+          </button>
+        )}
+      </div>
+
+      {appts.isLoading ? (
+        <ListSkeleton />
+      ) : filteredRows.length === 0 ? (
+        <Card>
+          <EmptyState
+            icon={CalendarDays}
+            title="Sin citas"
+            description={
+              (appts.data?.length ?? 0) > 0
+                ? 'Ninguna cita coincide con los filtros.'
+                : 'No hay reservas para el rango seleccionado.'
             }
           />
+        </Card>
+      ) : (
+        <ListView
+          rows={filteredRows}
+          showDate={range !== 'today'}
+          onAttend={startAttention}
+          onOpen={(a) => navigate(`${ROUTES.appointment}/${a.id}`)}
+        />
+      )}
+
+      <Modal
+        open={filtersOpen}
+        onClose={() => setFiltersOpen(false)}
+        title="Filtros"
+        className="sm:max-w-sm"
+      >
+        <p className="mb-2 text-xs uppercase tracking-wide text-white/40">
+          Colaborador
+        </p>
+        <Select
+          value={staffFilter}
+          onChange={(e) => setStaffFilter(e.target.value)}
+        >
+          <option value="">Todos los colaboradores</option>
+          {(staff.data ?? []).map((s) => (
+            <option key={s.id} value={s.id}>
+              {fullName(s.first_name, s.last_name ?? '')}
+            </option>
+          ))}
+        </Select>
+
+        <p className="mb-2 mt-4 text-xs uppercase tracking-wide text-white/40">
+          Estado
+        </p>
+        {statusTabs}
+
+        <div className="mt-5 flex gap-2">
+          <Button
+            variant="ghost"
+            className={cn('flex-1', activeFilters === 0 && 'opacity-50')}
+            onClick={() => {
+              setStaffFilter('');
+              setStatusFilter('all');
+            }}
+          >
+            Limpiar
+          </Button>
+          <Button className="flex-1" onClick={() => setFiltersOpen(false)}>
+            Ver {filteredRows.length} citas
+          </Button>
         </div>
-
-        {/* Derecha: agenda del sistema */}
-        <div className="space-y-4">
-          {/* Rango + vista */}
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            {view === "calendar" ? (
-              <span />
-            ) : (
-              <div className="flex gap-1 rounded-xl bg-ink-800/60 p-1">
-                <ToggleBtn
-                  active={range === "today"}
-                  onClick={() => setRange("today")}
-                >
-                  Hoy
-                </ToggleBtn>
-                <ToggleBtn
-                  active={range === "week"}
-                  onClick={() => setRange("week")}
-                >
-                  Esta semana
-                </ToggleBtn>
-                <ToggleBtn
-                  active={range === "month"}
-                  onClick={() => setRange("month")}
-                >
-                  Este mes
-                </ToggleBtn>
-              </div>
-            )}
-            <div className="flex gap-1 rounded-xl bg-ink-800/60 p-1">
-              <ToggleBtn
-                active={view === "list"}
-                onClick={() => setView("list")}
-              >
-                <List className="h-4 w-4" />
-              </ToggleBtn>
-              <ToggleBtn
-                active={view === "calendar"}
-                onClick={() => setView("calendar")}
-              >
-                <CalendarRange className="h-4 w-4" />
-              </ToggleBtn>
-            </div>
-          </div>
-
-          {view === "calendar" ? (
-            <AgendaCalendar
-              events={events}
-              date={calDate}
-              view={calView}
-              onNavigate={setCalDate}
-              onView={setCalView}
-              onSelectEvent={(id) => navigate(`${ROUTES.appointment}/${id}`)}
-              onDrop={(id, start, end) => {
-                const row = appts.data?.find((a) => a.id === id);
-                const staffId = row?.staff_id;
-                const conflict = staffId
-                  ? (appts.data ?? []).find(
-                      (a) =>
-                        a.id !== id &&
-                        a.staff_id === staffId &&
-                        new Date(a.start_at) < end &&
-                        start < new Date(a.end_at),
-                    )
-                  : undefined;
-                if (
-                  conflict &&
-                  !window.confirm(
-                    `Se solapa con otra cita de ${
-                      row?.staff_name ?? "la estilista"
-                    } (${
-                      conflict.customer_name ?? "sin cliente"
-                    }). ¿Reprogramar de todas formas?`,
-                  )
-                ) {
-                  return;
-                }
-                reschedule.mutate({ id, start, end });
-              }}
-              onSelectSlot={(start) =>
-                navigate(`${ROUTES.appointmentNew}?date=${ymd(start)}`)
-              }
-            />
-          ) : (
-            <>
-              <p className="text-center text-sm capitalize text-white/60">
-                {label}
-              </p>
-
-              {/* Filtros: por colaborador y por estado */}
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="min-w-[180px] flex-1">
-                  <Select
-                    value={staffFilter}
-                    onChange={(e) => setStaffFilter(e.target.value)}
-                  >
-                    <option value="">Todos los colaboradores</option>
-                    {(staff.data ?? []).map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {fullName(s.first_name, s.last_name ?? "")}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-                <div className="flex gap-1 rounded-xl bg-ink-800/60 p-1">
-                  <ToggleBtn
-                    active={statusFilter === "all"}
-                    onClick={() => setStatusFilter("all")}
-                  >
-                    Todos
-                  </ToggleBtn>
-                  <ToggleBtn
-                    active={statusFilter === "reserved"}
-                    onClick={() => setStatusFilter("reserved")}
-                  >
-                    Reservados
-                  </ToggleBtn>
-                  <ToggleBtn
-                    active={statusFilter === "attended"}
-                    onClick={() => setStatusFilter("attended")}
-                  >
-                    Atendidos
-                  </ToggleBtn>
-                </div>
-              </div>
-
-              {filteredRows.length === 0 ? (
-                <Card>
-                  <EmptyState
-                    icon={CalendarDays}
-                    title="Sin citas"
-                    description={
-                      (appts.data?.length ?? 0) > 0
-                        ? "Ninguna cita coincide con los filtros."
-                        : "No hay reservas para el rango seleccionado."
-                    }
-                  />
-                </Card>
-              ) : (
-                <ListView
-                  rows={filteredRows}
-                  showDate={range !== "today"}
-                  onAttend={startAttention}
-                />
-              )}
-            </>
-          )}
-        </div>
-      </div>
+      </Modal>
     </div>
   );
 }

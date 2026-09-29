@@ -7,6 +7,21 @@
     color-scheme: dark;
   }
 
+  /* Altura de la barra de navegación inferior (móvil) + notch. Las barras de
+     acción fijas de cada flujo se apoyan en esta variable. */
+  :root {
+    --nav-h: calc(4rem + env(safe-area-inset-bottom));
+  }
+  @media (min-width: 1024px) {
+    :root {
+      --nav-h: 0px;
+    }
+  }
+
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+
   html,
   body,
   #root {
@@ -186,5 +201,63 @@
     @apply w-full min-h-[44px] rounded-xl border border-white/10 bg-ink-800/60
       px-3.5 py-2.5 text-white/90 placeholder:text-white/30
       focus:border-gold/50 focus:ring-2 focus:ring-gold/30;
+  }
+
+  /* ─── Utilidades móviles ─── */
+
+  /* Fila de chips/filtros que se desliza en horizontal sin barra visible. */
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Fila desplazable a sangre (se come el padding lateral del contenedor). */
+  .edge-row {
+    @apply -mx-4 flex gap-2 overflow-x-auto px-4 lg:mx-0 lg:px-0;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .edge-row::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Barra de acción fija de un flujo (agendar, atender, POS). Se apoya sobre
+     la navegación inferior en móvil y al pie de la ventana en escritorio. */
+  .action-bar {
+    @apply fixed inset-x-0 z-30 border-t border-white/10 bg-ink-950/95 px-4 py-3
+      backdrop-blur-xl lg:px-8;
+    bottom: var(--nav-h);
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+  }
+  @media (min-width: 1024px) {
+    .action-bar {
+      padding-bottom: 0.75rem;
+      /* El sidebar (w-64) es fijo en escritorio: la barra arranca después de
+         él, si no tapa el pie del menú. */
+      left: 16rem;
+    }
+  }
+
+  /* Espacio inferior para que la barra de acción no tape el contenido. */
+  .pb-action {
+    padding-bottom: calc(6.5rem + env(safe-area-inset-bottom));
+  }
+
+  /* Objetivo táctil mínimo recomendado (44×44). */
+  .tap {
+    @apply min-h-[44px] min-w-[44px];
+  }
+
+  /* Píldora de opción (chips de rango, horarios, categorías). */
+  .chip {
+    @apply flex shrink-0 items-center justify-center gap-1.5 rounded-xl border
+      border-white/10 bg-white/[0.03] px-3.5 py-2 text-sm font-medium
+      text-white/70 transition active:scale-[0.97];
+  }
+  .chip-on {
+    @apply border-gold/60 bg-gold/15 text-gold-100 shadow-gold-glow;
   }
 }

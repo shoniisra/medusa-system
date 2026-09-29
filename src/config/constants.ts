@@ -73,6 +73,7 @@ export const ROUTES = {
   clients: '/clientes',
   client: '/clientes', // + /:id
   calendar: '/agenda',
+  calendarView: '/calendario',
   tasks: '/tareas',
   reminders: '/recordatorios',
   appointmentNew: '/agenda/cita/nueva',

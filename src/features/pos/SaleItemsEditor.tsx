@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Plus, Trash2, Scissors, Package } from 'lucide-react';
+import { Plus, Minus, Trash2, Scissors, Package } from 'lucide-react';
 import { money, num, fullName } from '@/lib/format';
 import { SERVICE_CATEGORIES } from '@/config/constants';
 import { cn } from '@/lib/cn';
@@ -138,9 +138,144 @@ export function SaleItemsEditor({
     <Card>
       <CardHeader
         title="Detalle de venta"
-        subtitle="Clic en una celda para editar el precio, descuento o descripción"
+        subtitle="Tocá un valor para editarlo: precio, descuento o descripción"
       />
-      <div className="overflow-x-auto">
+      {/* Móvil: una tarjeta por línea (la tabla no entra en un teléfono) */}
+      <div className="space-y-2.5 lg:hidden">
+        {items.length === 0 && (
+          <p className="rounded-2xl border border-dashed border-white/10 py-8 text-center text-sm text-white/40">
+            Sin ítems. Agregá un servicio o producto abajo.
+          </p>
+        )}
+        {items.map((i) => {
+          const c = lineCommission(i, rules);
+          const assignable = !!(i.service_id || i.category);
+          return (
+            <div
+              key={i.id}
+              className="rounded-2xl border border-white/10 bg-white/[0.03] p-3"
+              style={{
+                borderLeft: `3px solid ${
+                  assignable ? i.staff_color || '#64748b' : 'transparent'
+                }`,
+              }}
+            >
+              <div className="flex items-start gap-2">
+                <div className="min-w-0 flex-1 text-[15px] font-medium text-white">
+                  <InlineEdit
+                    value={i.description}
+                    align="left"
+                    onCommit={(v) =>
+                      v.trim() && onUpdateItem(i.id, { description: v.trim() })
+                    }
+                  />
+                </div>
+                <button
+                  onClick={() => onRemoveItem(i.id)}
+                  aria-label="Eliminar ítem"
+                  className="tap -mr-1 flex shrink-0 items-center justify-center rounded-lg text-white/40 hover:text-danger"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+
+              {assignable && (
+                <div className="mt-2">
+                  <Select
+                    value={i.assigned_staff_id ?? ''}
+                    onChange={(e) => onReassign(i.id, e.target.value || null)}
+                  >
+                    <option value="">Sin asignar</option>
+                    {staff.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {fullName(s.first_name, s.last_name)}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+              )}
+
+              <div className="mt-2 grid grid-cols-3 gap-2 text-sm">
+                <div className="rounded-xl bg-white/[0.04] px-2 py-1.5">
+                  <span className="block text-[10px] uppercase tracking-wide text-white/40">
+                    Cant.
+                  </span>
+                  {i.product_id ? (
+                    <QtyStepper
+                      value={i.quantity}
+                      onChange={(q) => onUpdateItem(i.id, { quantity: q })}
+                    />
+                  ) : (
+                    <span className="text-white/70">1</span>
+                  )}
+                </div>
+                <div className="rounded-xl bg-white/[0.04] px-2 py-1.5">
+                  <span className="block text-[10px] uppercase tracking-wide text-white/40">
+                    Descuento
+                  </span>
+                  <InlineEdit
+                    value={i.discount_amount}
+                    type="number"
+                    align="left"
+                    display={money(i.discount_amount)}
+                    onCommit={(v) => {
+                      const disc = Math.max(0, round2(Number(v) || 0));
+                      onUpdateItem(i.id, {
+                        discount_amount: disc,
+                        final_unit_price: round2(i.list_unit_price - disc),
+                      });
+                    }}
+                  />
+                </div>
+                <div className="rounded-xl bg-gold/10 px-2 py-1.5">
+                  <span className="block text-[10px] uppercase tracking-wide text-gold-200/60">
+                    A cobrar
+                  </span>
+                  <span className="block font-semibold text-gold-100">
+                    <InlineEdit
+                      value={i.final_unit_price}
+                      type="number"
+                      align="left"
+                      display={money(i.final_unit_price)}
+                      onCommit={(v) => {
+                        const fin = round2(Number(v) || 0);
+                        onUpdateItem(i.id, {
+                          final_unit_price: fin,
+                          discount_amount: Math.max(
+                            0,
+                            round2(i.list_unit_price - fin),
+                          ),
+                        });
+                      }}
+                    />
+                  </span>
+                </div>
+              </div>
+
+              {c && (
+                <p className="mt-2 text-xs text-white/40">
+                  Comisión estilista:{' '}
+                  <span className="text-white/70">
+                    {c.commission_type === 'percentage'
+                      ? `${num(c.commission_rate)}% · ${money(c.commission_amount)}`
+                      : money(c.commission_amount)}
+                  </span>
+                </p>
+              )}
+            </div>
+          );
+        })}
+
+        {items.length > 0 && (
+          <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.04] px-3.5 py-3">
+            <span className="text-sm font-medium text-white/60">Total</span>
+            <span className="kpi-gold text-lg">{money(total)}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Escritorio: tabla completa con todas las columnas */}
+      <div className="hidden overflow-x-auto lg:block">
         <table className="w-full border-collapse text-sm">
           <thead>
             <tr className="text-left text-xs uppercase tracking-wide text-white/40 [&>th]:pb-2 [&>th]:font-medium">
@@ -295,20 +430,20 @@ export function SaleItemsEditor({
       </div>
 
       {/* Agregar ítems */}
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="mt-4 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
         <Button
-          size="sm"
           variant={adding === 'service' ? 'gold' : 'outline'}
           onClick={() => setAdding(adding === 'service' ? null : 'service')}
+          className="sm:h-9 sm:px-3.5"
         >
-          <Scissors className="h-4 w-4" /> Agregar servicio
+          <Scissors className="h-4 w-4" /> Servicio
         </Button>
         <Button
-          size="sm"
           variant={adding === 'product' ? 'gold' : 'outline'}
           onClick={() => setAdding(adding === 'product' ? null : 'product')}
+          className="sm:h-9 sm:px-3.5"
         >
-          <Package className="h-4 w-4" /> Agregar producto
+          <Package className="h-4 w-4" /> Producto
         </Button>
       </div>
 
@@ -366,7 +501,7 @@ export function SaleItemsEditor({
 
       {adding === 'product' && (
         <div className="mt-3 grid grid-cols-2 gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3 sm:grid-cols-4">
-          <div className="sm:col-span-2">
+          <div className="col-span-2">
             <Select
               label="Producto"
               value={productId}
@@ -387,7 +522,11 @@ export function SaleItemsEditor({
             value={qty}
             onChange={(e) => setQty(e.target.value)}
           />
-          <Button className="self-end" onClick={addProduct} disabled={!productId}>
+          <Button
+            className="col-span-2 self-end sm:col-span-1"
+            onClick={addProduct}
+            disabled={!productId}
+          >
             <Plus className="h-4 w-4" /> Agregar
           </Button>
         </div>
@@ -454,5 +593,39 @@ export function InlineEdit({
         align === 'right' ? 'text-right' : 'text-left',
       )}
     />
+  );
+}
+
+/** Cantidad con −/+ : en un teléfono es más rápido y seguro que tipear. */
+function QtyStepper({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (q: number) => void;
+}) {
+  const set = (q: number) => onChange(Math.max(1, Math.floor(q)));
+  return (
+    <span className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => set(value - 1)}
+        aria-label="Quitar uno"
+        className="flex h-7 w-7 items-center justify-center rounded-lg bg-white/10 text-white/80 active:scale-95"
+      >
+        <Minus className="h-3.5 w-3.5" />
+      </button>
+      <span className="min-w-[1.25rem] text-center font-medium text-white">
+        {value}
+      </span>
+      <button
+        type="button"
+        onClick={() => set(value + 1)}
+        aria-label="Agregar uno"
+        className="flex h-7 w-7 items-center justify-center rounded-lg bg-white/10 text-white/80 active:scale-95"
+      >
+        <Plus className="h-3.5 w-3.5" />
+      </button>
+    </span>
   );
 }

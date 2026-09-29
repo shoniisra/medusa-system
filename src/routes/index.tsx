@@ -34,6 +34,11 @@ const CalendarPage = lazy(() =>
     default: m.CalendarPage,
   })),
 );
+const CalendarViewPage = lazy(() =>
+  import('@/features/calendar/CalendarViewPage').then((m) => ({
+    default: m.CalendarViewPage,
+  })),
+);
 const AppointmentPage = lazy(() =>
   import('@/features/calendar/AppointmentPage').then((m) => ({
     default: m.AppointmentPage,
@@ -82,6 +87,10 @@ export const router = createBrowserRouter([
           { path: ROUTES.pos, element: lazyRoute(<PosPage />) },
           { path: ROUTES.cashflow, element: lazyRoute(<CashflowPage />) },
           { path: ROUTES.calendar, element: lazyRoute(<CalendarPage />) },
+          {
+            path: ROUTES.calendarView,
+            element: lazyRoute(<CalendarViewPage />),
+          },
           { path: ROUTES.tasks, element: lazyRoute(<TasksPage />) },
           { path: ROUTES.reminders, element: lazyRoute(<RemindersPage />) },
           {

@@ -6,6 +6,7 @@ import {
   Users,
   Contact,
   CalendarDays,
+  CalendarRange,
   ClipboardList,
   FileText,
   Settings,
@@ -32,6 +33,7 @@ const NAV_SECTIONS: {
     title: 'Citas Agendadas',
     items: [
       { to: ROUTES.calendar, label: 'Agenda', icon: CalendarDays },
+      { to: ROUTES.calendarView, label: 'Calendario', icon: CalendarRange },
       { to: ROUTES.tasks, label: 'Tareas', icon: ClipboardList },
       { to: ROUTES.reminders, label: 'Recordatorios', icon: BellRing },
     ],

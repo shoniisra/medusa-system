@@ -41,7 +41,13 @@ export const timeShort = (iso: string | null | undefined): string => {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' });
+  // 24 h: en una lista de citas en móvil, "10:00–11:00" se lee de un vistazo;
+  // "10:00 a. m.–11:00 a. m." ocupa el doble y se corta.
+  return d.toLocaleTimeString(LOCALE, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
 };
 
 /** "YYYY-MM-DD" del día actual en la zona local. */
