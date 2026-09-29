@@ -61,6 +61,7 @@ import {
   PhoneInput,
 } from '@/components/ui';
 import { findCustomerByPhone } from '@/features/clients/customerLookup';
+import { validatePhone } from '@/lib/phone';
 import {
   createSale,
   loadCommissionRules,
@@ -71,6 +72,7 @@ import type {
   AppointmentStatus,
   BankAccount,
   CashSession,
+  Customer,
   DraftCommission,
   DraftSaleItem,
   PaymentMethod,
@@ -139,6 +141,41 @@ function ymdLocal(d: Date): string {
   return toLocalNaive(d).slice(0, 10);
 }
 
+/**
+ * Hora libre a mano. La rejilla y el calendario avanzan de a bloques; esto
+ * permite cualquier minuto en múltiplos de 5 (14:45, 17:15…).
+ */
+function TimeField({
+  value,
+  onChange,
+  className,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  className?: string;
+}) {
+  return (
+    <label
+      className={cn(
+        'flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-sm text-white/60',
+        className,
+      )}
+    >
+      Otra hora
+      <input
+        type="time"
+        value={value}
+        step={300}
+        onChange={(e) => {
+          if (!e.target.value) return;
+          onChange(e.target.value);
+        }}
+        className="rounded-lg border border-white/10 bg-ink-800/60 px-2.5 py-2 text-white"
+      />
+    </label>
+  );
+}
+
 /* ═══════════════════════════ Nueva cita ═══════════════════════════ */
 
 /** Categoría de servicio elegida al agendar, con su estilista (opcional). */
@@ -174,6 +211,17 @@ function NewAppointment() {
   // Fecha / hora / abono
   const [date, setDate] = useState(params.get('date') || todayLocalISO());
   const [time, setTime] = useState('10:00');
+  /**
+   * ¿La hora la eligió el usuario? Mientras no la toque, el asistente puede
+   * proponer el primer hueco libre. Apenas la elige, su decisión manda: ir y
+   * volver entre pasos (o cambiar categorías) ya no se la pisa.
+   */
+  const timePicked = useRef(false);
+  const pickTime = useCallback((v: string) => {
+    timePicked.current = true;
+    setTime(v);
+    setConflicts([]);
+  }, []);
   const [deposit, setDeposit] = useState('0');
   const [customDeposit, setCustomDeposit] = useState(false);
   // El abono debe elegirse explícitamente (5/10/20/Otro) antes de agendar.
@@ -227,6 +275,68 @@ function NewAppointment() {
     setCustomerId('');
     setTimeout(() => phoneRef.current?.focus(), 0);
   }
+
+  /**
+   * Cliente nuevo: se guarda apenas se confirma, no al agendar. Así el registro
+   * queda en la lista aunque después se abandone el asistente sin crear la cita.
+   */
+  const createClient = useMutation({
+    mutationFn: async () => {
+      const fn = firstName.trim();
+      if (!fn) throw new Error('El nombre del cliente es obligatorio.');
+      const ph = phone.trim();
+      const phoneError = validatePhone(ph);
+      if (phoneError) throw new Error(phoneError);
+      if (ph) {
+        const hit = await findCustomerByPhone(orgId, ph);
+        if (hit) {
+          throw new Error(
+            `Ese número ya es de ${fullName(hit.first_name, hit.last_name)}. Buscalo en la lista en vez de crear uno nuevo.`,
+          );
+        }
+      }
+      const id = genId();
+      await execute(
+        `INSERT INTO customer (id, organization_id, first_name, last_name, phone)
+         VALUES (?, ?, ?, ?, ?)`,
+        [id, orgId, fn, lastName.trim() || null, ph || null],
+      );
+      const now = new Date().toISOString();
+      const row: Customer = {
+        id,
+        organization_id: orgId,
+        first_name: fn,
+        last_name: lastName.trim() || null,
+        phone: ph || null,
+        email: null,
+        birth_date: null,
+        notes: null,
+        allergies: null,
+        hair_notes: null,
+        preferred_staff_id: null,
+        first_visit_at: null,
+        last_visit_at: null,
+        active: 1,
+        created_at: now,
+        updated_at: now,
+      };
+      return row;
+    },
+    onSuccess: (row) => {
+      // Disponible al instante en el buscador y en el resumen, sin esperar
+      // al refetch de la lista.
+      qc.setQueryData<Customer[]>(['customers', orgId], (old) =>
+        old ? [...old, row] : old,
+      );
+      qc.invalidateQueries({ queryKey: ['customers', orgId] });
+      setNewClient(false);
+      setCustomerId(row.id);
+      setClientSearch('');
+      setError('');
+    },
+    onError: (e) =>
+      setError(e instanceof Error ? e.message : 'No se pudo crear el cliente.'),
+  });
 
   function clearClient() {
     setNewClient(false);
@@ -332,11 +442,13 @@ function NewAppointment() {
         end_at: string;
         staff_id: string | null;
         staff_color: string | null;
+        google_color_hex: string | null;
         cust: string | null;
       }>(
         `SELECT a.id, a.start_at, a.end_at,
                 ai.assigned_staff_id AS staff_id,
                 s.color AS staff_color,
+                a.google_color_hex,
                 c.first_name AS cust
            FROM appointment a
            JOIN appointment_item ai ON ai.appointment_id = a.id
@@ -370,7 +482,8 @@ function NewAppointment() {
       title: r.cust || 'Ocupado',
       start: new Date(r.start_at),
       end: new Date(r.end_at),
-      color: r.staff_color || '#64748b',
+      // Sin estilista asignada, vale el color que tiene el evento en Google.
+      color: r.staff_color || r.google_color_hex || '#64748b',
       proposed: false,
     }));
     const start = new Date(`${date}T${time}:00`);
@@ -422,6 +535,10 @@ function NewAppointment() {
         throw new Error('El nombre del cliente es obligatorio.');
 
       const newPhone = newClient ? phone.trim() : '';
+      if (newClient) {
+        const phoneError = validatePhone(newPhone);
+        if (phoneError) throw new Error(phoneError);
+      }
       if (newClient && newPhone) {
         const hit = await findCustomerByPhone(orgId, newPhone);
         if (hit) {
@@ -671,6 +788,8 @@ function NewAppointment() {
    */
   useEffect(() => {
     if (!slots.length) return;
+    // La eligió el usuario: no se toca aunque cambien día, estilista o duración.
+    if (timePicked.current) return;
     const current = slots.find((s) => s.label === time);
     if (current && !current.past && !current.taken) return;
     const next = slots.find((s) => !s.past && !s.taken);
@@ -846,10 +965,7 @@ function NewAppointment() {
                     <button
                       key={s.min}
                       type="button"
-                      onClick={() => {
-                        setTime(s.label);
-                        setConflicts([]);
-                      }}
+                      onClick={() => pickTime(s.label)}
                       className={cn(
                         'flex min-h-[52px] flex-col items-center justify-center rounded-xl border text-sm font-semibold transition active:scale-[0.97]',
                         on
@@ -877,20 +993,7 @@ function NewAppointment() {
               </div>
             )}
 
-            <label className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-sm text-white/60">
-              Otra hora
-              <input
-                type="time"
-                value={time}
-                step={300}
-                onChange={(e) => {
-                  if (!e.target.value) return;
-                  setTime(e.target.value);
-                  setConflicts([]);
-                }}
-                className="rounded-lg border border-white/10 bg-ink-800/60 px-2.5 py-2 text-white"
-              />
-            </label>
+            <TimeField className="mt-3" value={time} onChange={pickTime} />
           </Card>
 
           {/* Escritorio: calendario semanal con los huecos reales */}
@@ -910,14 +1013,14 @@ function NewAppointment() {
               }}
               onSelectSlot={(start) => {
                 setDate(ymdLocal(start));
-                setTime(
+                pickTime(
                   `${String(start.getHours()).padStart(2, '0')}:${String(
                     start.getMinutes(),
                   ).padStart(2, '0')}`,
                 );
-                setConflicts([]);
               }}
             />
+            <TimeField className="mt-3" value={time} onChange={pickTime} />
           </Card>
 
           <p className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm">
@@ -1028,13 +1131,40 @@ function NewAppointment() {
             )}
 
             {newClient && (
-              <div className="mt-3">
+              <div className="mt-3 space-y-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <Input
+                    label="Nombre"
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                    placeholder="Nombre"
+                  />
+                  <Input
+                    label="Apellido"
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                    placeholder="Apellido"
+                  />
+                </div>
                 <PhoneInput
                   ref={phoneRef}
                   label="WhatsApp"
                   value={phone}
                   onChange={setPhone}
                 />
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  loading={createClient.isPending}
+                  disabled={!firstName.trim() || !!validatePhone(phone)}
+                  onClick={() => createClient.mutate()}
+                >
+                  Guardar cliente
+                </Button>
+                <p className="text-xs text-white/40">
+                  Queda registrado en la lista de clientes al guardarlo, aunque
+                  todavía no agendes la cita.
+                </p>
               </div>
             )}
           </Card>
@@ -1398,8 +1528,8 @@ function SlotPicker({
         onView={onView}
         onNavigate={onNavigate}
         views={['week', 'day']}
-        step={30}
-        timeslots={1}
+        step={15}
+        timeslots={2}
         min={new Date(1970, 0, 1, 7, 0)}
         max={new Date(1970, 0, 1, 21, 0)}
         selectable
