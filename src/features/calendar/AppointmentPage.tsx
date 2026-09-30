@@ -1649,17 +1649,27 @@ function EditAppointment({ id }: { id: string }) {
       ),
   });
 
-  // Seña realmente cobrada (pagos de la cita sin venta asociada todavía).
+  // Seña realmente cobrada (pagos de la cita sin venta asociada todavía). Se
+  // traen uno por uno para poder anular un abono mal registrado (duplicado).
   const deposits = useQuery({
     queryKey: ['appointment-deposits', id],
     queryFn: () =>
-      queryOne<{ paid: number }>(
-        `SELECT COALESCE(SUM(amount), 0) AS paid FROM payment
-          WHERE appointment_id = ? AND sale_id IS NULL AND status = 'confirmed'`,
+      query<DepositRow>(
+        `SELECT p.id, p.amount, p.paid_at, p.reference, p.bank_account_id,
+                pm.method_type, ba.name AS bank_name,
+                cm.id AS movement_id, cs.status AS session_status
+           FROM payment p
+           JOIN payment_method pm ON pm.id = p.payment_method_id
+           LEFT JOIN bank_account ba ON ba.id = p.bank_account_id
+           LEFT JOIN cash_movement cm ON cm.payment_id = p.id
+           LEFT JOIN cash_session cs ON cs.id = cm.cash_session_id
+          WHERE p.appointment_id = ? AND p.sale_id IS NULL AND p.status = 'confirmed'
+          ORDER BY p.paid_at`,
         [id],
       ),
   });
-  const depositPaid = deposits.data?.paid ?? 0;
+  const depositList = deposits.data ?? [];
+  const depositPaid = depositList.reduce((a, d) => a + d.amount, 0);
 
   const serviceItems = (items.data ?? []).filter((i) => i.service_id);
 
@@ -1676,6 +1686,7 @@ function EditAppointment({ id }: { id: string }) {
   const [voidOpen, setVoidOpen] = useState(false);
   const [customerOpen, setCustomerOpen] = useState(false);
   const [depositOpen, setDepositOpen] = useState(false);
+  const [voidDeposit, setVoidDeposit] = useState<DepositRow | null>(null);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['appointment-items', id] });
@@ -1685,6 +1696,20 @@ function EditAppointment({ id }: { id: string }) {
   const refreshHead = () => {
     qc.invalidateQueries({ queryKey: ['appointment-head', id] });
     qc.invalidateQueries({ queryKey: ['appointments'] });
+  };
+
+  // Tras tocar abonos: cita + saldos de cuentas, caja y ledger de finanzas.
+  const refreshMoney = () => {
+    qc.invalidateQueries({ queryKey: ['appointment-deposits', id] });
+    refreshHead();
+    for (const key of [
+      ['fin-accounts'],
+      ['fin-summary'],
+      ['transactions'],
+      ['cash-expected'],
+    ]) {
+      qc.invalidateQueries({ queryKey: key });
+    }
   };
 
   // Observaciones de la cita: se guardan a mano (el botón aparece al cambiarlas).
@@ -2145,10 +2170,47 @@ function EditAppointment({ id }: { id: string }) {
                 </div>
                 {depositPaid > 0 && (
                   <>
-                    <Row
-                      label="Abono ya pagado"
-                      value={`−${money(depositPaid)}`}
-                    />
+                    {/* El abono cobrado es un dato tan importante como el saldo:
+                        va destacado en verde, con el detalle de cada cobro
+                        debajo para poder anular uno mal cargado (duplicado). */}
+                    <div className="space-y-2 rounded-2xl border border-success/30 bg-success/[0.08] p-3 shadow-[0_0_24px_-8px_rgba(62,207,142,0.45)]">
+                      <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-success/80">
+                        <Wallet className="h-3.5 w-3.5 shrink-0" /> Abono ya
+                        pagado
+                      </p>
+                      <p className="kpi-success text-3xl leading-none">
+                        −{money(depositPaid)}
+                      </p>
+                      {!attendedWithSale && (
+                        <ul className="space-y-1.5 border-t border-success/20 pt-2">
+                          {depositList.map((d) => (
+                            <li
+                              key={d.id}
+                              className="flex items-start justify-between gap-2 text-xs"
+                            >
+                              <span className="min-w-0">
+                                <span className="font-semibold text-white/90">
+                                  {money(d.amount)}
+                                </span>
+                                <span className="text-white/50">
+                                  {' '}
+                                  · {dateShort(d.paid_at)}
+                                </span>
+                                <span className="block truncate text-[11px] text-white/40">
+                                  {d.bank_name ?? 'Efectivo'}
+                                </span>
+                              </span>
+                              <button
+                                onClick={() => setVoidDeposit(d)}
+                                className="shrink-0 font-medium text-danger hover:underline"
+                              >
+                                Anular
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
                     <div className="flex items-center justify-between border-t border-white/10 pt-2">
                       <span className="font-medium text-white/70">
                         Saldo a cobrar
@@ -2235,6 +2297,11 @@ function EditAppointment({ id }: { id: string }) {
               <p className="kpi-gold text-xl leading-tight">
                 {money(depositPaid > 0 ? balance : total)}
               </p>
+              {depositPaid > 0 && (
+                <p className="kpi-success text-sm leading-tight">
+                  Abono −{money(depositPaid)}
+                </p>
+              )}
             </div>
             <Button
               size="lg"
@@ -2300,16 +2367,21 @@ function EditAppointment({ id }: { id: string }) {
           onClose={() => setDepositOpen(false)}
           onDone={() => {
             setDepositOpen(false);
-            qc.invalidateQueries({ queryKey: ['appointment-deposits', id] });
-            refreshHead();
-            for (const key of [
-              ['fin-accounts'],
-              ['fin-summary'],
-              ['transactions'],
-              ['cash-expected'],
-            ]) {
-              qc.invalidateQueries({ queryKey: key });
-            }
+            refreshMoney();
+          }}
+        />
+      )}
+
+      {voidDeposit && (
+        <VoidDepositModal
+          deposit={voidDeposit}
+          branchId={branchId}
+          userId={userId}
+          customerName={head.data.customer_name}
+          onClose={() => setVoidDeposit(null)}
+          onDone={() => {
+            setVoidDeposit(null);
+            refreshMoney();
           }}
         />
       )}
@@ -2674,6 +2746,160 @@ function DepositModal({
         >
           <Check className="h-4 w-4" /> Registrar abono
         </Button>
+      </div>
+    </Modal>
+  );
+}
+
+interface DepositRow {
+  id: string;
+  amount: number;
+  paid_at: string;
+  reference: string | null;
+  bank_account_id: string | null;
+  method_type: string;
+  bank_name: string | null;
+  /** Movimiento de caja generado por el abono (solo si fue en efectivo). */
+  movement_id: string | null;
+  session_status: string | null;
+}
+
+/**
+ * Anula UN abono de la cita (típicamente uno cargado dos veces por error):
+ *  - el `payment` pasa a "voided", así deja de contar en ingresos y saldos, y
+ *    el abono de la cita baja solo (el saldo a cobrar se recalcula);
+ *  - si el abono fue en efectivo y su caja sigue abierta, se borra el
+ *    `cash_movement` (la caja esperada baja sin dejar un movimiento fantasma);
+ *  - si esa caja ya se cerró, se revierte con una salida en la caja abierta de
+ *    hoy (requiere caja abierta, igual que la anulación de venta);
+ *  - si fue a una cuenta bancaria, alcanza con anular el pago.
+ */
+function VoidDepositModal({
+  deposit,
+  branchId,
+  userId,
+  customerName,
+  onClose,
+  onDone,
+}: {
+  deposit: DepositRow;
+  branchId: string;
+  userId: string | null;
+  customerName: string | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [error, setError] = useState('');
+
+  const cash = useQuery({
+    queryKey: ['open-cash', branchId],
+    enabled: !!branchId,
+    queryFn: () =>
+      queryOne<CashSession>(
+        `SELECT cs.* FROM cash_session cs
+           JOIN cash_register cr ON cr.id = cs.cash_register_id
+          WHERE cr.branch_id = ? AND cs.status = 'open'
+          ORDER BY cs.opened_at DESC LIMIT 1`,
+        [branchId],
+      ),
+  });
+  const sessionId = cash.data?.id ?? null;
+
+  const inOpenCash = !!deposit.movement_id && deposit.session_status === 'open';
+  const inClosedCash =
+    !!deposit.movement_id && deposit.session_status !== 'open';
+  const blocked = inClosedCash && !sessionId;
+
+  const voidIt = useMutation({
+    mutationFn: async () => {
+      const now = new Date().toISOString();
+      const stmts: { sql: string; args: (string | number | null)[] }[] = [
+        {
+          sql: `UPDATE payment SET status = 'voided' WHERE id = ?`,
+          args: [deposit.id],
+        },
+      ];
+      if (inOpenCash) {
+        stmts.push({
+          sql: 'DELETE FROM cash_movement WHERE id = ?',
+          args: [deposit.movement_id],
+        });
+      } else if (inClosedCash && sessionId) {
+        stmts.push({
+          sql: `INSERT INTO cash_movement
+                  (id, cash_session_id, branch_id, movement_type, direction, amount,
+                   movement_at, payment_id, description, created_by)
+                VALUES (?, ?, ?, 'adjustment', 'out', ?, ?, ?, ?, ?)`,
+          args: [
+            genId(),
+            sessionId,
+            branchId,
+            deposit.amount,
+            now,
+            deposit.id,
+            `Anulación abono ${customerName ?? ''}`.trim(),
+            userId,
+          ],
+        });
+      }
+      await batch(stmts);
+    },
+    onSuccess: onDone,
+    onError: (e) =>
+      setError(e instanceof Error ? e.message : 'No se pudo anular el abono.'),
+  });
+
+  return (
+    <Modal open onClose={onClose} title="Anular abono">
+      <div className="space-y-4">
+        <div className="rounded-xl bg-white/5 p-3 text-sm">
+          <div className="flex justify-between text-white/60">
+            <span>
+              {dateShort(deposit.paid_at)} · {deposit.bank_name ?? 'Efectivo'}
+            </span>
+            <span className="kpi-gold">{money(deposit.amount)}</span>
+          </div>
+          {deposit.reference && (
+            <p className="mt-1 truncate text-xs text-white/40">
+              {deposit.reference}
+            </p>
+          )}
+        </div>
+
+        <p className="text-sm text-white/70">
+          Este cobro deja de contar como ingreso y el abono de la cita baja{' '}
+          {money(deposit.amount)}, así que el saldo a cobrar se recalcula solo.
+          {inOpenCash && ' También se quita el efectivo de la caja abierta.'}
+          {inClosedCash &&
+            ' El efectivo entró en una caja ya cerrada: se revierte con una salida en la caja de hoy.'}
+        </p>
+
+        {blocked && (
+          <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
+            <AlertTriangle className="h-3.5 w-3.5" /> El abono fue en efectivo de
+            una caja ya cerrada y no hay caja abierta. Abrí la caja para poder
+            revertir el efectivo.
+          </p>
+        )}
+        {error && <p className="text-xs text-danger">{error}</p>}
+
+        <div className="flex gap-2">
+          <Button variant="outline" className="flex-1" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button
+            className="flex-1"
+            variant="danger"
+            disabled={voidIt.isPending || blocked}
+            loading={voidIt.isPending}
+            onClick={() => {
+              setError('');
+              voidIt.mutate();
+            }}
+          >
+            Anular abono
+          </Button>
+        </div>
       </div>
     </Modal>
   );
@@ -3152,9 +3378,11 @@ function ConfirmSaleModal({
             <span>Total {money(total)}</span>
           </div>
           {depositPaid > 0 && (
-            <div className="flex justify-between text-white/60">
-              <span>Seña ya cobrada</span>
-              <span className="text-emerald-300">−{money(depositPaid)}</span>
+            <div className="flex items-center justify-between text-white/60">
+              <span>Abono ya cobrado</span>
+              <span className="kpi-success text-xl leading-none">
+                −{money(depositPaid)}
+              </span>
             </div>
           )}
           <div className="flex justify-between border-t border-white/10 pt-1 font-medium text-white">
