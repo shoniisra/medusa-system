@@ -567,7 +567,8 @@ function NewAppointment() {
             selectedCustomer?.last_name,
           );
 
-      // Google Calendar: se sincroniza siempre que esté configurado.
+      // Google Calendar: se sincroniza siempre que esté configurado. La cita se
+      // guarda igual si Google falla; el evento es un extra.
       let googleEventId: string | null = null;
       let calendarId: string | null = null;
       if (isGoogleCalendarEnabled()) {
@@ -575,9 +576,16 @@ function NewAppointment() {
           'SELECT google_calendar_id FROM branch WHERE id = ?',
           [branchId],
         );
-        calendarId = branchRow?.google_calendar_id ?? null;
+        calendarId = branchRow?.google_calendar_id?.trim() || null;
         const firstAssigned = cats.find((c) => c.staffId)?.staffId ?? null;
         const firstStaff = staff.data?.find((x) => x.id === firstAssigned);
+        if (!calendarId) {
+          // Sin calendario en la sucursal no hay dónde crear el evento: la
+          // service account no tiene "primary". Se avisa y se sigue.
+          console.warn(
+            'La sucursal no tiene google_calendar_id: la cita no se replica en Google Calendar.',
+          );
+        }
         try {
           const descLines = cats.map(
             (c) => `• ${c.category} — ${staffName(c.staffId)}`,
@@ -585,15 +593,18 @@ function NewAppointment() {
           descLines.push('');
           descLines.push(`Abono: ${money(dep)}`);
           descLines.push('Detalle y total: se cargan al atender.');
-          googleEventId = await createCalendarEvent({
-            summary: `${cats.map((c) => c.category).join(', ')} — ${clientLabel} (abono ${money(dep)})`,
-            description: descLines.join('\n'),
-            startLocal,
-            endLocal,
-            calendarId,
-            colorHex: firstStaff?.color,
-          });
-        } catch {
+          googleEventId = calendarId
+            ? await createCalendarEvent({
+                summary: `${cats.map((c) => c.category).join(', ')} — ${clientLabel} (abono ${money(dep)})`,
+                description: descLines.join('\n'),
+                startLocal,
+                endLocal,
+                calendarId,
+                colorHex: firstStaff?.color,
+              })
+            : null;
+        } catch (e) {
+          console.warn('No se pudo crear el evento en Google Calendar:', e);
           googleEventId = null;
         }
       }

@@ -7,12 +7,14 @@ import {
   ChevronDown,
   Download,
   Check,
+  PlugZap,
 } from 'lucide-react';
 import { execute } from '@/lib/db';
 import { toLocalNaive } from '@/lib/format';
 import { useSession } from '@/store/session';
 import { ROUTES } from '@/config/constants';
 import {
+  checkGoogleCalendar,
   isGoogleCalendarEnabled,
   updateCalendarEvent,
   listCalendarEvents,
@@ -65,6 +67,7 @@ export function CalendarViewPage() {
   const [selected, setSelected] = useState<AppointmentRow | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState('');
+  const [checking, setChecking] = useState(false);
 
   const { from, to } = useMemo(() => windowFor(date), [date]);
   const appts = useAppointments(from, to);
@@ -114,6 +117,31 @@ export function CalendarViewPage() {
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['appointments'] }),
   });
+
+  /**
+   * Diagnóstico de la conexión con Google. La sincronización corre en el
+   * servidor con una service account, así que cuando algo no llega a Google el
+   * salón no ve ningún error: esto lo hace visible (falta compartir el
+   * calendario, falta el ID en la sucursal, faltan los secrets).
+   */
+  async function checkGoogle() {
+    setExportMsg('');
+    setChecking(true);
+    try {
+      const r = await checkGoogleCalendar(branch?.google_calendar_id);
+      if (r.ok) {
+        setExportMsg(
+          r.calendarId
+            ? `Conectado al calendario de la sucursal como ${r.serviceAccount}.`
+            : `Service account activa (${r.serviceAccount}), pero la sucursal no tiene calendario asignado.`,
+        );
+      } else {
+        setExportMsg(r.error ?? 'No se pudo conectar con Google Calendar.');
+      }
+    } finally {
+      setChecking(false);
+    }
+  }
 
   // Exporta los eventos de Google a un JSON descargable (herramienta de
   // migración: el mapeo color→estilista se hace fuera de la app).
@@ -341,6 +369,14 @@ export function CalendarViewPage() {
               Descarga los eventos de Google (−120 / +180 días) para migrarlos o
               revisarlos fuera de la app.
             </p>
+            <button
+              onClick={checkGoogle}
+              disabled={checking}
+              className="mt-1.5 flex w-full items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3.5 py-3 text-sm text-white/75 disabled:opacity-50"
+            >
+              <PlugZap className="h-4 w-4" />
+              {checking ? 'Probando…' : 'Probar conexión con Google'}
+            </button>
           </>
         )}
         {exportMsg && (

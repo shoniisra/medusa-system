@@ -9,3 +9,9 @@ dist-ssr
 *.log
 .vite
 .wrangler
+
+# Claves JSON de service accounts de Google (descargadas de Google Cloud).
+# Nunca deben entrar al repo: dan acceso de escritura a los calendarios.
+*service-account*.json
+*-key.json
+medusa-*-*.json

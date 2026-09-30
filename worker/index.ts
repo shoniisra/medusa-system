@@ -1,5 +1,6 @@
 import { createClient, type Client, type InValue } from '@libsql/client/web';
 import { handleGcalSync } from './gcalSync';
+import { handleGcal } from './gcal';
 
 /**
  * Worker de Cloudflare: sirve los assets estáticos de la SPA y expone un proxy
@@ -15,6 +16,9 @@ interface Env {
   TURSO_AUTH_TOKEN: string;
   /** Secreto compartido con el Apps Script que sincroniza Google Calendar. */
   GCAL_SYNC_SECRET: string;
+  /** Service account que escribe en los calendarios (sistema → Google). */
+  GCAL_SA_EMAIL?: string;
+  GCAL_SA_PRIVATE_KEY?: string;
   ASSETS: { fetch: (req: Request) => Promise<Response> };
 }
 
@@ -51,6 +55,14 @@ export default {
           { status: 400 },
         );
       }
+    }
+
+    // Escritura/lectura de Google Calendar con la service account. Corre acá
+    // para que nadie tenga que iniciar sesión en Google desde el navegador.
+    if (url.pathname === '/api/gcal' && request.method === 'POST') {
+      const payload = await request.json().catch(() => null);
+      const { status, body } = await handleGcal(payload, env);
+      return Response.json(body, { status });
     }
 
     if (url.pathname === '/api/db' && request.method === 'POST') {

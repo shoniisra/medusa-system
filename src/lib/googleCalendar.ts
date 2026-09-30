@@ -1,22 +1,21 @@
 /**
- * Integración opcional con Google Calendar (Google Identity Services, flujo de
- * token en el navegador). Se activa solo si existe VITE_GOOGLE_CLIENT_ID.
+ * Integración con Google Calendar desde el cliente.
  *
- * Requisitos para activarla:
- *  1. Crear un proyecto en Google Cloud Console.
- *  2. Habilitar "Google Calendar API".
- *  3. Crear credenciales OAuth 2.0 (tipo "Aplicación web"), agregar el origen
- *     (ej. http://localhost:5173 y el dominio de producción).
- *  4. Poner el Client ID en .env → VITE_GOOGLE_CLIENT_ID.
+ * Acá NO hay OAuth ni tokens: todo pasa por el Worker en POST /api/gcal, que
+ * firma con una service account (worker/gcal.ts). Antes esto usaba Google
+ * Identity Services en el navegador y cada usuaria tenía que iniciar sesión con
+ * su cuenta de Google, chocando con la pantalla de "app en modo de prueba". El
+ * calendario es del salón, no de cada usuaria: el único login de la app es
+ * Cloudflare Access.
  *
- * La cita SIEMPRE se guarda en la BDD; el evento en Google es un extra que el
- * usuario habilita con un checkbox (consentimiento explícito por acción).
+ * El calendario destino es siempre `branch.google_calendar_id` (la service
+ * account no tiene "primary"); si falta, el servidor devuelve un error claro.
+ *
+ * La cita SIEMPRE se guarda en la BDD; el evento en Google es un extra y sus
+ * fallas nunca deben tumbar el guardado local.
  */
 
 import { GOOGLE_EVENT_COLORS as PALETTE_EVENT_COLORS } from '@/config/colors';
-
-const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
-const SCOPE = 'https://www.googleapis.com/auth/calendar.events';
 
 /**
  * Zona horaria para los eventos. El sistema guarda y muestra las horas como
@@ -29,75 +28,79 @@ const TIMEZONE =
     Intl.DateTimeFormat().resolvedOptions().timeZone) ||
   'America/Guayaquil';
 
-export const isGoogleCalendarEnabled = (): boolean => !!CLIENT_ID;
+/**
+ * `false` solo cuando el servidor confirmó que no hay service account. Arranca
+ * en `true` para que la UI de calendario se pinte sin esperar un round-trip: si
+ * no está configurado, el primer /api/gcal lo corrige y las acciones fallan de
+ * forma controlada (la cita local ya quedó guardada).
+ */
+let serverConfigured = true;
 
-/* Tipos mínimos de GIS para no depender de @types/google.accounts. */
-interface TokenResponse {
-  access_token?: string;
-  expires_in?: number;
-  error?: string;
-}
-interface TokenClient {
-  requestAccessToken: (opts?: { prompt?: string }) => void;
-}
-interface GoogleGlobal {
-  accounts: {
-    oauth2: {
-      initTokenClient: (cfg: {
-        client_id: string;
-        scope: string;
-        callback: (resp: TokenResponse) => void;
-      }) => TokenClient;
-    };
-  };
-}
-declare global {
-  interface Window {
-    google?: GoogleGlobal;
-  }
+export const isGoogleCalendarEnabled = (): boolean => serverConfigured;
+
+interface GcalPayload {
+  action: 'create' | 'patch' | 'delete' | 'list' | 'status';
+  calendarId?: string | null;
+  eventId?: string;
+  timeZone?: string;
+  summary?: string;
+  description?: string;
+  colorId?: string;
+  startLocal?: string;
+  endLocal?: string;
+  timeMinIso?: string;
+  timeMaxIso?: string;
 }
 
-let scriptPromise: Promise<void> | null = null;
-let cachedToken: string | null = null;
-let cachedExpiry = 0;
-
-function loadGis(): Promise<void> {
-  if (window.google?.accounts?.oauth2) return Promise.resolve();
-  if (!scriptPromise) {
-    scriptPromise = new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = 'https://accounts.google.com/gsi/client';
-      s.async = true;
-      s.defer = true;
-      s.onload = () => resolve();
-      s.onerror = () => reject(new Error('No se pudo cargar Google Identity.'));
-      document.head.appendChild(s);
-    });
-  }
-  return scriptPromise;
-}
-
-async function getAccessToken(): Promise<string> {
-  if (!CLIENT_ID) throw new Error('Google Calendar no está configurado.');
-  if (cachedToken && Date.now() < cachedExpiry) return cachedToken;
-  await loadGis();
-
-  return new Promise((resolve, reject) => {
-    const client = window.google!.accounts.oauth2.initTokenClient({
-      client_id: CLIENT_ID,
-      scope: SCOPE,
-      callback: (resp) => {
-        if (resp.error || !resp.access_token) {
-          reject(new Error(resp.error ?? 'Autorización de Google cancelada.'));
-          return;
-        }
-        cachedToken = resp.access_token;
-        cachedExpiry = Date.now() + ((resp.expires_in ?? 3600) - 60) * 1000;
-        resolve(resp.access_token);
-      },
-    });
-    client.requestAccessToken({ prompt: '' });
+/** Llama al puente del Worker. Lanza Error con el mensaje que mandó el server. */
+async function callGcal<T>(payload: GcalPayload): Promise<T> {
+  const res = await fetch('/api/gcal', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ timeZone: TIMEZONE, ...payload }),
   });
+  const data = (await res.json().catch(() => ({}))) as { error?: string };
+  // 503 = el servidor no tiene la service account: apagamos la integración.
+  if (res.status === 503) {
+    serverConfigured = false;
+    throw new Error(data.error ?? 'Google Calendar no está configurado.');
+  }
+  if (!res.ok) {
+    throw new Error(data.error ?? `Google Calendar respondió ${res.status}.`);
+  }
+  return data as T;
+}
+
+/**
+ * Diagnóstico para la UI: dice si el servidor tiene la service account y si
+ * llega al calendario de la sucursal. No lanza; devuelve el detalle.
+ */
+export async function checkGoogleCalendar(
+  calendarId?: string | null,
+): Promise<{
+  ok: boolean;
+  serviceAccount?: string | null;
+  calendarId?: string | null;
+  error?: string;
+}> {
+  try {
+    const r = await callGcal<{
+      configured: boolean;
+      serviceAccount?: string | null;
+      calendarId?: string | null;
+      error?: string;
+    }>({ action: 'status', calendarId });
+    serverConfigured = r.configured;
+    return {
+      ok: r.configured && !r.error,
+      serviceAccount: r.serviceAccount ?? null,
+      calendarId: r.calendarId ?? null,
+      error: r.error,
+    };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 /**
@@ -158,30 +161,16 @@ export interface CalendarEventInput {
 export async function createCalendarEvent(
   input: CalendarEventInput,
 ): Promise<string> {
-  const token = await getAccessToken();
-  const calId = encodeURIComponent(input.calendarId?.trim() || 'primary');
-  const res = await fetch(
-    `https://www.googleapis.com/calendar/v3/calendars/${calId}/events`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        summary: input.summary,
-        description: input.description,
-        start: { dateTime: input.startLocal, timeZone: TIMEZONE },
-        end: { dateTime: input.endLocal, timeZone: TIMEZONE },
-        colorId: hexToGoogleColorId(input.colorHex),
-      }),
-    },
-  );
-  if (!res.ok) {
-    throw new Error(`Google Calendar respondió ${res.status}.`);
-  }
-  const data = (await res.json()) as { id: string };
-  return data.id;
+  const { id } = await callGcal<{ id: string }>({
+    action: 'create',
+    calendarId: input.calendarId,
+    summary: input.summary,
+    description: input.description,
+    startLocal: input.startLocal,
+    endLocal: input.endLocal,
+    colorId: hexToGoogleColorId(input.colorHex),
+  });
+  return id;
 }
 
 /** Actualiza (PATCH) campos de un evento existente. Best-effort. */
@@ -196,31 +185,16 @@ export async function updateCalendarEvent(
     endLocal?: string;
   },
 ): Promise<void> {
-  const token = await getAccessToken();
-  const calId = encodeURIComponent(calendarId?.trim() || 'primary');
-  const body: Record<string, unknown> = {};
-  if (patch.summary != null) body.summary = patch.summary;
-  if (patch.description != null) body.description = patch.description;
-  if (patch.colorHex) {
-    const cid = hexToGoogleColorId(patch.colorHex);
-    if (cid) body.colorId = cid;
-  }
-  if (patch.startLocal) body.start = { dateTime: patch.startLocal, timeZone: TIMEZONE };
-  if (patch.endLocal) body.end = { dateTime: patch.endLocal, timeZone: TIMEZONE };
-  const res = await fetch(
-    `https://www.googleapis.com/calendar/v3/calendars/${calId}/events/${encodeURIComponent(eventId)}`,
-    {
-      method: 'PATCH',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    },
-  );
-  if (!res.ok && res.status !== 404 && res.status !== 410) {
-    throw new Error(`Google Calendar respondió ${res.status} al actualizar.`);
-  }
+  await callGcal<{ ok: boolean }>({
+    action: 'patch',
+    calendarId,
+    eventId,
+    summary: patch.summary,
+    description: patch.description,
+    colorId: hexToGoogleColorId(patch.colorHex),
+    startLocal: patch.startLocal,
+    endLocal: patch.endLocal,
+  });
 }
 
 /* ─────────────────────── Lectura / exportación ──────────────────────── */
@@ -274,42 +248,21 @@ function toNaiveLocal(dt?: { dateTime?: string; date?: string }): {
 }
 
 /**
- * Lista los eventos de un calendario en un rango (paginado). Requiere que el
- * usuario autorice Google (mismo flujo que la creación de eventos).
+ * Lista los eventos de un calendario en un rango (paginado en el Worker).
+ * Se usa para la exportación/migración; no requiere login de Google.
  */
 export async function listCalendarEvents(opts: {
   calendarId?: string | null;
   timeMinIso: string;
   timeMaxIso: string;
 }): Promise<RawCalendarEvent[]> {
-  const token = await getAccessToken();
-  const calId = encodeURIComponent(opts.calendarId?.trim() || 'primary');
-  const out: RawCalendarEvent[] = [];
-  let pageToken: string | undefined;
-  do {
-    const params = new URLSearchParams({
-      timeMin: opts.timeMinIso,
-      timeMax: opts.timeMaxIso,
-      singleEvents: 'true',
-      orderBy: 'startTime',
-      maxResults: '2500',
-    });
-    if (pageToken) params.set('pageToken', pageToken);
-    const res = await fetch(
-      `https://www.googleapis.com/calendar/v3/calendars/${calId}/events?${params.toString()}`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
-    if (!res.ok) {
-      throw new Error(`Google Calendar respondió ${res.status} al listar.`);
-    }
-    const data = (await res.json()) as {
-      items?: RawCalendarEvent[];
-      nextPageToken?: string;
-    };
-    for (const it of data.items ?? []) out.push(it);
-    pageToken = data.nextPageToken;
-  } while (pageToken);
-  return out;
+  const { items } = await callGcal<{ items: RawCalendarEvent[] }>({
+    action: 'list',
+    calendarId: opts.calendarId,
+    timeMinIso: opts.timeMinIso,
+    timeMaxIso: opts.timeMaxIso,
+  });
+  return items ?? [];
 }
 
 /** Normaliza eventos crudos a `ExportedEvent` (color resuelto, horas locales). */
@@ -342,14 +295,5 @@ export async function deleteCalendarEvent(
   eventId: string,
   calendarId?: string | null,
 ): Promise<void> {
-  const token = await getAccessToken();
-  const calId = encodeURIComponent(calendarId?.trim() || 'primary');
-  const res = await fetch(
-    `https://www.googleapis.com/calendar/v3/calendars/${calId}/events/${encodeURIComponent(eventId)}`,
-    { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
-  );
-  // 410 = ya borrado; 404 = no existe. Ambos son aceptables.
-  if (!res.ok && res.status !== 410 && res.status !== 404) {
-    throw new Error(`Google Calendar respondió ${res.status} al borrar.`);
-  }
+  await callGcal<{ ok: boolean }>({ action: 'delete', calendarId, eventId });
 }
