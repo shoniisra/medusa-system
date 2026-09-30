@@ -19,6 +19,8 @@ import {
   UserCheck,
   Wallet,
   Save,
+  Merge,
+  CopyCheck,
 } from 'lucide-react';
 import { query, queryOne, execute } from '@/lib/db';
 import {
@@ -50,6 +52,8 @@ import { phoneToWaDigits } from '@/lib/phone';
 import { findCustomerByPhone } from './customerLookup';
 import { validatePhone } from '@/lib/phone';
 import type { Customer, CustomerColorRecord } from '@/types';
+import { duplicateGroups } from './mergeCustomers';
+import { DuplicatesModal, MergePickerModal } from './MergeClientsModal';
 
 /* ═══════════════════════════ Lista de clientes ═══════════════════════════ */
 
@@ -74,6 +78,7 @@ export function ClientsPage() {
   const [pageSize, setPageSize] = useState(25);
   const [page, setPage] = useState(1);
   const [createOpen, setCreateOpen] = useState(false);
+  const [dupsOpen, setDupsOpen] = useState(false);
 
   const clients = useQuery({
     queryKey: ['clients', orgId],
@@ -104,6 +109,9 @@ export function ClientsPage() {
     const revenue = all.reduce((s, c) => s + (c.spent || 0), 0);
     return { total: all.length, withWa, buyers, revenue };
   }, [all]);
+
+  // Grupos de contactos que parecen la misma persona (nombre/WhatsApp/email).
+  const dupGroups = useMemo(() => duplicateGroups(all), [all]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -153,9 +161,17 @@ export function ClientsPage() {
             {stats.total.toLocaleString('es-EC')} en total
           </p>
         </div>
-        <Button onClick={() => setCreateOpen(true)}>
-          <UserPlus className="h-4 w-4" /> Nuevo cliente
-        </Button>
+        <div className="flex items-center gap-2">
+          {dupGroups.length > 0 && (
+            <Button variant="ghost" onClick={() => setDupsOpen(true)}>
+              <CopyCheck className="h-4 w-4" />
+              {dupGroups.length} duplicado{dupGroups.length > 1 ? 's' : ''}
+            </Button>
+          )}
+          <Button onClick={() => setCreateOpen(true)}>
+            <UserPlus className="h-4 w-4" /> Nuevo cliente
+          </Button>
+        </div>
       </div>
 
       {/* Resumen */}
@@ -380,6 +396,12 @@ export function ClientsPage() {
       <CreateClientModal
         open={createOpen}
         onClose={() => setCreateOpen(false)}
+      />
+
+      <DuplicatesModal
+        open={dupsOpen}
+        onClose={() => setDupsOpen(false)}
+        customers={all}
       />
     </div>
   );
@@ -633,6 +655,7 @@ export function ClientDetailPage() {
 function ClientDetail({ customer }: { customer: Customer }) {
   const id = customer.id;
   const navigate = useNavigate();
+  const [mergeOpen, setMergeOpen] = useState(false);
   const qc = useQueryClient();
   const toast = useToast();
   const [confirmLeave, setConfirmLeave] = useState(false);
@@ -726,12 +749,36 @@ function ClientDetail({ customer }: { customer: Customer }) {
         onBack={handleBack}
         title={fullName(c.first_name, c.last_name)}
         right={
-          c.allergies ? (
-            <Badge tone="danger">
-              <TriangleAlert className="mr-1 inline h-3 w-3" /> Alergias
-            </Badge>
-          ) : undefined
+          <div className="flex items-center gap-2">
+            {c.allergies && (
+              <Badge tone="danger">
+                <TriangleAlert className="mr-1 inline h-3 w-3" /> Alergias
+              </Badge>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setMergeOpen(true)}
+              disabled={form.dirty}
+              title={
+                form.dirty
+                  ? 'Guardá o descartá los cambios antes de combinar'
+                  : 'Combinar con un contacto duplicado'
+              }
+            >
+              <Merge className="h-4 w-4" /> Combinar
+            </Button>
+          </div>
         }
+      />
+
+      <MergePickerModal
+        open={mergeOpen}
+        customer={c}
+        onClose={() => setMergeOpen(false)}
+        onMerged={(keptId) => {
+          if (keptId !== id) navigate(`${ROUTES.client}/${keptId}`, { replace: true });
+        }}
       />
 
       {/* Métricas */}
