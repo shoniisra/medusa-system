@@ -267,3 +267,57 @@
     @apply border-gold/60 bg-gold/15 text-gold-100 shadow-gold-glow;
   }
 }
+
+/* ─── Notificaciones flotantes (ui/Toast) ─── */
+@layer components {
+  /* El aviso baja desde arriba y se va por el mismo lado, en móvil y en
+     escritorio: la pila vive arriba y centrada en los dos tamaños. */
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateY(-14px) scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes toast-out {
+    from {
+      opacity: 1;
+      transform: none;
+    }
+    to {
+      opacity: 0;
+      transform: translateY(-10px) scale(0.96);
+    }
+  }
+  @keyframes toast-bar {
+    from {
+      transform: scaleX(1);
+    }
+    to {
+      transform: scaleX(0);
+    }
+  }
+
+  .animate-toast-in {
+    animation: toast-in 0.26s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .animate-toast-out {
+    animation: toast-out 0.22s ease-in both;
+  }
+  .animate-toast-bar {
+    animation: toast-bar linear both;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-toast-in,
+    .animate-toast-out {
+      animation-duration: 0.01ms;
+    }
+    .animate-toast-bar {
+      animation: none;
+    }
+  }
+}

@@ -20,7 +20,7 @@ import {
   isGoogleCalendarEnabled,
   updateCalendarEvent,
 } from '@/lib/googleCalendar';
-import { Button, Input, Modal, Select } from '@/components/ui';
+import { Button, Input, Modal, Select, useToast } from '@/components/ui';
 import { useStaff } from '@/features/pos/useCatalog';
 import type { AppointmentStatus } from '@/types';
 import { isNoCharge, isOverdue, ymd } from './appointmentBoard';
@@ -57,6 +57,19 @@ interface ReassignRow {
 
 type Mode = 'menu' | 'reassign' | 'reschedule' | 'confirmDelete';
 
+/** Título del aviso flotante para cada estado nuevo de la cita. */
+const STATUS_TOAST: Partial<Record<AppointmentStatus, string>> = {
+  reserved: 'Cita reservada',
+  confirmed: 'Cita en atención',
+  attended: 'Cita atendida',
+  cancelled: 'Cita cancelada',
+  no_show: 'Marcada como no asistió',
+};
+
+/** Cliente + fecha: el detalle de una línea que acompaña al aviso. */
+const apptLabel = (a: ApptActionTarget) =>
+  `${a.customer_name ?? 'Cita'} · ${dateShort(a.start_at.slice(0, 10))}`;
+
 /**
  * Menú de acciones de una cita, único para toda la app: agenda, tablero de
  * tareas, calendario e inicio abren este mismo modal, así las opciones y su
@@ -76,6 +89,7 @@ export function AppointmentActionsModal({
   const navigate = useNavigate();
   const qc = useQueryClient();
   const staff = useStaff();
+  const toast = useToast();
 
   const [mode, setMode] = useState<Mode>('menu');
   const [date, setDate] = useState(appt.start_at.slice(0, 10));
@@ -106,8 +120,11 @@ export function AppointmentActionsModal({
     qc.invalidateQueries({ queryKey: ['overdue-count'] });
   };
 
-  const fail = (e: unknown, fallback: string) =>
-    setError(e instanceof Error ? e.message : fallback);
+  const fail = (e: unknown, fallback: string) => {
+    const msg = e instanceof Error ? e.message : fallback;
+    setError(msg);
+    toast.error(fallback, e instanceof Error ? e.message : undefined);
+  };
 
   /** Datos de Google de la cita (solo se leen cuando una acción los necesita). */
   const syncRow = () =>
@@ -123,9 +140,10 @@ export function AppointmentActionsModal({
         new Date().toISOString(),
         appt.id,
       ]),
-    onSuccess: () => {
+    onSuccess: (_r, status) => {
       invalidate();
       onClose();
+      toast.success(STATUS_TOAST[status] ?? 'Cita actualizada', apptLabel(appt));
     },
     onError: (e) => fail(e, 'No se pudo cambiar el estado.'),
   });
@@ -182,6 +200,10 @@ export function AppointmentActionsModal({
     onSuccess: () => {
       invalidate();
       onClose();
+      toast.success(
+        'Cita reprogramada',
+        `${dateShort(date)} · ${time} — ${apptLabel(appt)}`,
+      );
     },
     onError: (e) => fail(e, 'No se pudo reprogramar.'),
   });
@@ -232,6 +254,7 @@ export function AppointmentActionsModal({
         qc.invalidateQueries({ queryKey: key });
       }
       onClose();
+      toast.info('Cita eliminada', apptLabel(appt));
     },
     onError: (e) => fail(e, 'No se pudo eliminar la cita.'),
   });
@@ -474,6 +497,7 @@ function ReassignPanel({
   onBack: () => void;
   onDone: () => void;
 }) {
+  const toast = useToast();
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
 
@@ -537,9 +561,15 @@ function ReassignPanel({
         }
       }
     },
-    onSuccess: onDone,
-    onError: (e) =>
-      setError(e instanceof Error ? e.message : 'No se pudo reasignar.'),
+    onSuccess: () => {
+      toast.success('Colaborador reasignado');
+      onDone();
+    },
+    onError: (e) => {
+      const msg = e instanceof Error ? e.message : 'No se pudo reasignar.';
+      setError(msg);
+      toast.error('No se pudo reasignar', msg);
+    },
   });
 
   const items = rows.data ?? [];

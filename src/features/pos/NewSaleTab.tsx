@@ -36,6 +36,7 @@ import {
   Modal,
   Badge,
   PhoneInput,
+  useToast,
 } from '@/components/ui';
 import type {
   BankAccount,
@@ -505,6 +506,7 @@ function ConfirmSalePosModal({
   onDone: () => void;
 }) {
   const userId = useSession((s) => s.user?.id ?? null);
+  const toast = useToast();
   // Destino del cobro: una cuenta bancaria (transferencia) o "cash" (efectivo).
   const [dest, setDest] = useState('');
   const [reference, setReference] = useState('');
@@ -670,9 +672,19 @@ function ConfirmSalePosModal({
 
       await batch(stmts);
     },
-    onSuccess: onDone,
-    onError: (e) =>
-      setError(e instanceof Error ? e.message : 'No se pudo confirmar la venta.'),
+    onSuccess: () => {
+      toast.success(
+        'Venta registrada',
+        `${customerName || 'Consumidor final'} · ${money(total)}`,
+      );
+      onDone();
+    },
+    onError: (e) => {
+      const msg =
+        e instanceof Error ? e.message : 'No se pudo confirmar la venta.';
+      setError(msg);
+      toast.error('No se pudo confirmar la venta', msg);
+    },
   });
 
   const canConfirm = !confirm.isPending && !!method && total > 0;

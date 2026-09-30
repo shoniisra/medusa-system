@@ -10,7 +10,7 @@ import {
   PlugZap,
 } from 'lucide-react';
 import { execute } from '@/lib/db';
-import { toLocalNaive } from '@/lib/format';
+import { dateShort, timeShort, toLocalNaive } from '@/lib/format';
 import { useSession } from '@/store/session';
 import { ROUTES } from '@/config/constants';
 import {
@@ -20,7 +20,7 @@ import {
   listCalendarEvents,
   normalizeEvents,
 } from '@/lib/googleCalendar';
-import { Modal } from '@/components/ui';
+import { Modal, useToast } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { GoogleCalendarEmbed } from './GoogleCalendarEmbed';
 import { AgendaCalendar, type AgendaEvent, type AgendaView } from './AgendaCalendar';
@@ -68,6 +68,7 @@ export function CalendarViewPage() {
   const [exporting, setExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState('');
   const [checking, setChecking] = useState(false);
+  const toast = useToast();
 
   const { from, to } = useMemo(() => windowFor(date), [date]);
   const appts = useAppointments(from, to);
@@ -115,7 +116,11 @@ export function CalendarViewPage() {
         }
       }
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['appointments'] }),
+    onSuccess: (_r, { start }) => {
+      qc.invalidateQueries({ queryKey: ['appointments'] });
+      toast.success('Cita reprogramada', `${dateShort(ymd(start))} · ${timeShort(toLocalNaive(start))}`);
+    },
+    onError: (e: Error) => toast.error('No se pudo reprogramar', e.message),
   });
 
   /**

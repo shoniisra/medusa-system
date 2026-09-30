@@ -5,7 +5,7 @@ import { qk } from '@/lib/queryClient';
 import { money, dateShort } from '@/lib/format';
 import { useBranchId } from '@/store/session';
 import { INVOICE_COLUMNS, CONSUMIDOR_FINAL_LABEL } from '@/config/constants';
-import { Card, Badge, EmptyState, Button } from '@/components/ui';
+import { Card, Badge, EmptyState, Button, useToast } from '@/components/ui';
 import type { InvoiceRequestStatus, VInvoiceKanban } from '@/types';
 
 const NEXT: Record<InvoiceRequestStatus, InvoiceRequestStatus | null> = {
@@ -24,6 +24,7 @@ const PREV: Record<InvoiceRequestStatus, InvoiceRequestStatus | null> = {
 export function InvoicesPage() {
   const branchId = useBranchId();
   const qc = useQueryClient();
+  const toast = useToast();
 
   const kanban = useQuery({
     queryKey: qk.invoiceKanban(branchId),
@@ -52,8 +53,13 @@ export function InvoicesPage() {
         [status, processed, id],
       );
     },
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: qk.invoiceKanban(branchId) }),
+    onSuccess: (_r, { status }) => {
+      qc.invalidateQueries({ queryKey: qk.invoiceKanban(branchId) });
+      toast.success(
+        status === 'done' ? 'Factura emitida' : 'Solicitud actualizada',
+      );
+    },
+    onError: (e: Error) => toast.error('No se pudo actualizar', e.message),
   });
 
   return (

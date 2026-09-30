@@ -4,7 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { CalendarPlus, ClipboardCheck, ClipboardList } from 'lucide-react';
 import { execute } from '@/lib/db';
 import { ROUTES } from '@/config/constants';
-import { Card, Button, EmptyState } from '@/components/ui';
+import { Card, Button, EmptyState, useToast } from '@/components/ui';
 import { useStaff } from '@/features/pos/useCatalog';
 import {
   type AppointmentRow,
@@ -23,6 +23,14 @@ import {
 } from './TaskToolbar';
 import { CloseOverdueModal, useOverduePending } from './CloseOverdueModal';
 import type { AppointmentStatus } from '@/types';
+
+/** Aviso al mover una tarjeta de columna en el tablero. */
+const MOVE_TOAST: Partial<Record<AppointmentStatus, string>> = {
+  reserved: 'Cita devuelta a Reservadas',
+  confirmed: 'Cita en atención',
+  cancelled: 'Cita cancelada',
+  no_show: 'Marcada como no asistió',
+};
 
 /**
  * Tablero de tareas tipo Trello: las citas del rango agrupadas por estado.
@@ -108,6 +116,8 @@ export function TasksPage() {
     navigate(`${ROUTES.appointment}/${a.id}?atender=1`);
   };
 
+  const toast = useToast();
+
   const setStatus = useMutation({
     mutationFn: ({ id, status }: { id: string; status: AppointmentStatus }) =>
       execute('UPDATE appointment SET status = ?, updated_at = ? WHERE id = ?', [
@@ -115,7 +125,13 @@ export function TasksPage() {
         new Date().toISOString(),
         id,
       ]),
-    onSuccess: invalidate,
+    onSuccess: (_r, { status }) => {
+      invalidate();
+      // Arrastrar una tarjeta no deja rastro en pantalla más que el movimiento:
+      // el aviso confirma que el cambio llegó a la base.
+      toast.success(MOVE_TOAST[status] ?? 'Cita actualizada');
+    },
+    onError: (e: Error) => toast.error('No se pudo mover la cita', e.message),
   });
 
   /**

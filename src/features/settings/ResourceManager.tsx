@@ -24,6 +24,7 @@ import {
   Select,
   Badge,
   EmptyState,
+  useToast,
 } from '@/components/ui';
 import type { Branch } from '@/types';
 import type { Field, ResourceConfig } from './resources';
@@ -37,9 +38,13 @@ import {
 type Row = Record<string, unknown>;
 type FormState = Record<string, string | boolean>;
 
+/** "servicio" → "Servicio": los avisos arrancan con mayúscula. */
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
 export function ResourceManager({ resource }: { resource: ResourceConfig }) {
   const orgId = useOrgId();
   const qc = useQueryClient();
+  const toast = useToast();
   const [editing, setEditing] = useState<Row | null>(null);
   const [creating, setCreating] = useState(false);
   const [toDelete, setToDelete] = useState<Row | null>(null);
@@ -105,7 +110,13 @@ export function ResourceManager({ resource }: { resource: ResourceConfig }) {
         row.active ? 0 : 1,
         row.id as string,
       ]),
-    onSuccess: invalidate,
+    onSuccess: (_r, row) => {
+      invalidate();
+      toast.info(
+        `${cap(resource.singular)} ${row.active ? 'desactivado' : 'activado'}`,
+      );
+    },
+    onError: (e: Error) => toast.error('No se pudo cambiar el estado', e.message),
   });
 
   const remove = useMutation({
@@ -114,7 +125,9 @@ export function ResourceManager({ resource }: { resource: ResourceConfig }) {
     onSuccess: () => {
       setToDelete(null);
       invalidate();
+      toast.info(`${cap(resource.singular)} eliminado`);
     },
+    onError: (e: Error) => toast.error('No se pudo eliminar', e.message),
   });
 
   const cols = resource.columns;
@@ -376,6 +389,7 @@ function ResourceForm({
   onSaved: () => void;
 }) {
   const orgId = useOrgId();
+  const toast = useToast();
   const isEdit = !!row;
 
   const initial = useMemo<FormState>(() => {
@@ -453,8 +467,17 @@ function ResourceForm({
         );
       }
     },
-    onSuccess: onSaved,
-    onError: (e) => setError(e instanceof Error ? e.message : 'Error al guardar'),
+    onSuccess: () => {
+      toast.success(
+        isEdit ? 'Cambios guardados' : `${cap(resource.singular)} creado`,
+      );
+      onSaved();
+    },
+    onError: (e) => {
+      const msg = e instanceof Error ? e.message : 'Error al guardar';
+      setError(msg);
+      toast.error('No se pudo guardar', msg);
+    },
   });
 
   return (

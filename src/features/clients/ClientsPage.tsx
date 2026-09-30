@@ -18,6 +18,7 @@ import {
   ChevronsRight,
   UserCheck,
   Wallet,
+  Save,
 } from 'lucide-react';
 import { query, queryOne, execute } from '@/lib/db';
 import {
@@ -42,6 +43,7 @@ import {
   Badge,
   EmptyState,
   PhoneInput,
+  useToast,
 } from '@/components/ui';
 import { ROUTES } from '@/config/constants';
 import { phoneToWaDigits } from '@/lib/phone';
@@ -452,6 +454,7 @@ function CreateClientModal({
   const orgId = useOrgId();
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const toast = useToast();
 
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
@@ -493,11 +496,20 @@ function CreateClientModal({
       return id;
     },
     onError: (e: Error & { hit?: { id: string; name: string } }) => {
-      if (e.hit) setDup(e.hit);
+      if (e.hit) {
+        setDup(e.hit);
+        toast.error('Cliente duplicado', `Ese número ya es de ${e.hit.name}.`);
+      } else {
+        toast.error('No se pudo crear el cliente', e.message);
+      }
     },
     onSuccess: (id) => {
       qc.invalidateQueries({ queryKey: ['clients', orgId] });
       qc.invalidateQueries({ queryKey: ['customers', orgId] });
+      toast.success(
+        'Cliente creado',
+        fullName(firstName.trim(), lastName.trim() || null),
+      );
       setFirstName('');
       setLastName('');
       setPhone('');
@@ -588,7 +600,6 @@ interface HistoryRow {
 export function ClientDetailPage() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
-  const qc = useQueryClient();
 
   const client = useQuery({
     queryKey: ['client', id],
@@ -596,6 +607,35 @@ export function ClientDetailPage() {
     queryFn: () =>
       queryOne<Customer>('SELECT * FROM customer WHERE id = ?', [id]),
   });
+
+  if (client.isLoading) return null;
+  if (!client.data) {
+    return (
+      <div className="mx-auto max-w-5xl space-y-6">
+        <Header onBack={() => navigate(ROUTES.clients)} title="Cliente" />
+        <Card>
+          <EmptyState icon={Users} title="Cliente no encontrado" />
+        </Card>
+      </div>
+    );
+  }
+
+  return <ClientDetail customer={client.data} />;
+}
+
+/**
+ * Detalle del cliente.
+ *
+ * Vive aparte de la página (y no dentro de la ficha) porque el borrador del
+ * formulario está izado acá: el botón de regresar necesita saber si quedan
+ * cambios sin guardar para poder ofrecer guardar o descartar antes de salir.
+ */
+function ClientDetail({ customer }: { customer: Customer }) {
+  const id = customer.id;
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [confirmLeave, setConfirmLeave] = useState(false);
 
   const metrics = useQuery({
     queryKey: ['client-metrics', id],
@@ -650,19 +690,31 @@ export function ClientDetailPage() {
       ),
   });
 
-  if (client.isLoading) return null;
-  if (!client.data) {
-    return (
-      <div className="mx-auto max-w-5xl space-y-6">
-        <Header onBack={() => navigate(ROUTES.clients)} title="Cliente" />
-        <Card>
-          <EmptyState icon={Users} title="Cliente no encontrado" />
-        </Card>
-      </div>
-    );
-  }
+  const form = useClientDraft(customer, {
+    onSaved: () => {
+      qc.invalidateQueries({ queryKey: ['client', id] });
+      qc.invalidateQueries({ queryKey: ['clients'] });
+      qc.invalidateQueries({ queryKey: ['customers'] });
+      toast.success('Cambios guardados', 'La ficha del cliente quedó actualizada.');
+    },
+    onFail: (msg) => toast.error('No se pudo guardar', msg),
+  });
 
-  const c = client.data;
+  const goBack = () => navigate(ROUTES.clients);
+
+  /** Guarda y sale; si el guardado falla nos quedamos para poder corregir. */
+  const saveAndExit = async () => {
+    try {
+      await form.save.mutateAsync();
+      goBack();
+    } catch {
+      setConfirmLeave(false);
+    }
+  };
+
+  const handleBack = () => (form.dirty ? setConfirmLeave(true) : goBack());
+
+  const c = customer;
   const m = metrics.data;
   const visits = m?.visits ?? 0;
   const spent = m?.spent ?? 0;
@@ -671,7 +723,7 @@ export function ClientDetailPage() {
   return (
     <div className="mx-auto max-w-5xl space-y-6">
       <Header
-        onBack={() => navigate(ROUTES.clients)}
+        onBack={handleBack}
         title={fullName(c.first_name, c.last_name)}
         right={
           c.allergies ? (
@@ -771,42 +823,113 @@ export function ClientDetailPage() {
 
         {/* Ficha editable */}
         <div className="lg:col-span-1">
-          <ClientForm
-            customer={c}
-            onSaved={() => {
-              qc.invalidateQueries({ queryKey: ['client', id] });
-              qc.invalidateQueries({ queryKey: ['clients'] });
-            }}
-          />
+          <ClientForm form={form} onSave={saveAndExit} onCancel={goBack} />
         </div>
       </div>
+
+      {/* Salida con cambios pendientes: guardar o descartar, nunca perder
+          los datos en silencio. */}
+      <Modal
+        open={confirmLeave}
+        onClose={() => setConfirmLeave(false)}
+        title="Cambios sin guardar"
+        className="sm:max-w-md"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-white/70">
+            La ficha de <b className="text-white">{fullName(c.first_name, c.last_name)}</b>{' '}
+            tiene cambios que todavía no se guardaron.
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Button
+              className="sm:order-2"
+              loading={form.save.isPending}
+              onClick={saveAndExit}
+            >
+              <Save className="h-4 w-4" /> Guardar cambios
+            </Button>
+            <Button
+              variant="outline"
+              className="sm:order-1"
+              disabled={form.save.isPending}
+              onClick={() => {
+                setConfirmLeave(false);
+                goBack();
+              }}
+            >
+              Salir sin guardar
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
 
-function ClientForm({
-  customer,
-  onSaved,
-}: {
-  customer: Customer;
-  onSaved: () => void;
-}) {
-  const staff = useStaff();
-  const navigate = useNavigate();
-  const [firstName, setFirstName] = useState(customer.first_name);
-  const [lastName, setLastName] = useState(customer.last_name ?? '');
-  const [phone, setPhone] = useState(customer.phone ?? '');
-  const [email, setEmail] = useState(customer.email ?? '');
-  const [birth, setBirth] = useState(customer.birth_date ?? '');
-  const [preferred, setPreferred] = useState(customer.preferred_staff_id ?? '');
-  const [notes, setNotes] = useState(customer.notes ?? '');
-  const [allergies, setAllergies] = useState(customer.allergies ?? '');
-  const [hairNotes, setHairNotes] = useState(customer.hair_notes ?? '');
+/* ──────────────────────── Borrador de la ficha ──────────────────────── */
+
+interface ClientDraft {
+  firstName: string;
+  lastName: string;
+  phone: string;
+  email: string;
+  birth: string;
+  preferred: string;
+  notes: string;
+  allergies: string;
+  hairNotes: string;
+}
+
+function draftFromCustomer(c: Customer): ClientDraft {
+  return {
+    firstName: c.first_name,
+    lastName: c.last_name ?? '',
+    phone: c.phone ?? '',
+    email: c.email ?? '',
+    birth: c.birth_date ?? '',
+    preferred: c.preferred_staff_id ?? '',
+    notes: c.notes ?? '',
+    allergies: c.allergies ?? '',
+    hairNotes: c.hair_notes ?? '',
+  };
+}
+
+type ClientDraftState = ReturnType<typeof useClientDraft>;
+
+/**
+ * Estado editable de la ficha + su guardado.
+ *
+ * `dirty` compara contra lo que hay en base (lo que devuelve la query), así
+ * que después de guardar se apaga solo cuando llega el refetch: no hay que
+ * sincronizar una copia "inicial" a mano.
+ */
+function useClientDraft(
+  customer: Customer,
+  { onSaved, onFail }: { onSaved: () => void; onFail: (msg: string) => void },
+) {
+  const stored = draftFromCustomer(customer);
+  const [draft, setDraft] = useState(stored);
+  const [loadedId, setLoadedId] = useState(customer.id);
   const [dup, setDup] = useState<{ id: string; name: string } | null>(null);
+
+  // Cambiar de cliente sin desmontar la pantalla (p. ej. abrir la ficha del
+  // duplicado) tiene que traer el borrador del nuevo, no arrastrar el anterior.
+  if (loadedId !== customer.id) {
+    setLoadedId(customer.id);
+    setDraft(stored);
+    setDup(null);
+  }
+
+  const set = <K extends keyof ClientDraft>(key: K, value: ClientDraft[K]) =>
+    setDraft((d) => ({ ...d, [key]: value }));
+
+  const dirty = (Object.keys(stored) as (keyof ClientDraft)[]).some(
+    (k) => draft[k] !== stored[k],
+  );
 
   const save = useMutation({
     mutationFn: async () => {
-      const canonical = phone.trim() || null;
+      const canonical = draft.phone.trim() || null;
       const phoneError = validatePhone(canonical);
       if (phoneError) throw new Error(phoneError);
       if (canonical) {
@@ -829,25 +952,46 @@ function ClientForm({
            updated_at = ?
          WHERE id = ?`,
         [
-          firstName.trim(),
-          lastName.trim() || null,
+          draft.firstName.trim(),
+          draft.lastName.trim() || null,
           canonical,
-          email.trim() || null,
-          birth || null,
-          preferred || null,
-          notes.trim() || null,
-          allergies.trim() || null,
-          hairNotes.trim() || null,
+          draft.email.trim() || null,
+          draft.birth || null,
+          draft.preferred || null,
+          draft.notes.trim() || null,
+          draft.allergies.trim() || null,
+          draft.hairNotes.trim() || null,
           new Date().toISOString(),
           customer.id,
         ],
       );
     },
     onError: (e: Error & { hit?: { id: string; name: string } }) => {
-      if (e.hit) setDup(e.hit);
+      if (e.hit) {
+        setDup(e.hit);
+        onFail(`Ese número ya es de ${e.hit.name}.`);
+      } else {
+        onFail(e.message);
+      }
     },
     onSuccess: onSaved,
   });
+
+  return { draft, set, dirty, dup, setDup, save };
+}
+
+function ClientForm({
+  form,
+  onSave,
+  onCancel,
+}: {
+  form: ClientDraftState;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const staff = useStaff();
+  const navigate = useNavigate();
+  const { draft, set, dirty, dup, setDup, save } = form;
 
   return (
     <Card className="sticky top-4">
@@ -856,20 +1000,20 @@ function ClientForm({
         <div className="grid grid-cols-2 gap-3">
           <Input
             label="Nombre"
-            value={firstName}
-            onChange={(e) => setFirstName(e.target.value)}
+            value={draft.firstName}
+            onChange={(e) => set('firstName', e.target.value)}
           />
           <Input
             label="Apellido"
-            value={lastName}
-            onChange={(e) => setLastName(e.target.value)}
+            value={draft.lastName}
+            onChange={(e) => set('lastName', e.target.value)}
           />
         </div>
         <PhoneInput
           label="WhatsApp"
-          value={phone}
+          value={draft.phone}
           onChange={(v) => {
-            setPhone(v);
+            set('phone', v);
             setDup(null);
           }}
         />
@@ -890,19 +1034,19 @@ function ClientForm({
         <Input
           label="Email"
           type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          value={draft.email}
+          onChange={(e) => set('email', e.target.value)}
         />
         <Input
           label="Cumpleaños"
           type="date"
-          value={birth}
-          onChange={(e) => setBirth(e.target.value)}
+          value={draft.birth}
+          onChange={(e) => set('birth', e.target.value)}
         />
         <Select
           label="Estilista preferido"
-          value={preferred}
-          onChange={(e) => setPreferred(e.target.value)}
+          value={draft.preferred}
+          onChange={(e) => set('preferred', e.target.value)}
         >
           <option value="">Sin preferencia</option>
           {staff.data?.map((s) => (
@@ -914,32 +1058,49 @@ function ClientForm({
 
         <TextArea
           label="Alergias / sensibilidades"
-          value={allergies}
-          onChange={setAllergies}
+          value={draft.allergies}
+          onChange={(v) => set('allergies', v)}
           placeholder="Ej. alergia a la parafenilendiamina (tintes)"
           danger
         />
         <TextArea
           label="Notas capilares"
-          value={hairNotes}
-          onChange={setHairNotes}
+          value={draft.hairNotes}
+          onChange={(v) => set('hairNotes', v)}
           placeholder="Condición del cabello, historial químico, advertencias…"
         />
         <TextArea
           label="Notas generales"
-          value={notes}
-          onChange={setNotes}
+          value={draft.notes}
+          onChange={(v) => set('notes', v)}
           placeholder="Preferencias, observaciones…"
         />
 
-        <Button
-          className="w-full"
-          disabled={!firstName.trim()}
-          loading={save.isPending}
-          onClick={() => save.mutate()}
-        >
-          Guardar ficha
-        </Button>
+        {/* Guardar y Cancelar salen los dos a la lista de clientes. Apilados:
+            la columna de la ficha es angosta y en dos columnas el texto parte. */}
+        <div className="space-y-2 pt-1">
+          <Button
+            className="w-full"
+            disabled={!draft.firstName.trim() || !dirty}
+            loading={save.isPending}
+            onClick={onSave}
+          >
+            <Save className="h-4 w-4" /> Guardar cambios
+          </Button>
+          <Button
+            variant="outline"
+            className="w-full"
+            disabled={save.isPending}
+            onClick={onCancel}
+          >
+            Cancelar
+          </Button>
+          {dirty && (
+            <p className="text-center text-xs text-gold-200/70">
+              Hay cambios sin guardar.
+            </p>
+          )}
+        </div>
       </div>
     </Card>
   );
@@ -952,6 +1113,7 @@ function ColorRecordsCard({ customerId }: { customerId: string }) {
   const userId = useSession((s) => s.user?.id ?? null);
   const staff = useStaff();
   const qc = useQueryClient();
+  const toast = useToast();
   const [open, setOpen] = useState(false);
 
   const records = useQuery({
@@ -1004,14 +1166,19 @@ function ColorRecordsCard({ customerId }: { customerId: string }) {
       setDate(todayISO());
       setOpen(false);
       qc.invalidateQueries({ queryKey: ['color-records', customerId] });
+      toast.success('Proceso de color registrado');
     },
+    onError: (e: Error) => toast.error('No se pudo registrar', e.message),
   });
 
   const del = useMutation({
     mutationFn: (recId: string) =>
       execute('DELETE FROM customer_color_record WHERE id = ?', [recId]),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: ['color-records', customerId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['color-records', customerId] });
+      toast.info('Proceso de color eliminado');
+    },
+    onError: (e: Error) => toast.error('No se pudo eliminar', e.message),
   });
 
   const staffName = (sid: string | null) => {

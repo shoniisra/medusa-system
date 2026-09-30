@@ -5,4 +5,6 @@ export { Badge } from './Badge';
 export { Input, Select } from './Input';
 export { PhoneInput } from './PhoneInput';
 export { Modal } from './Modal';
+export { ToastProvider, useToast } from './Toast';
+export type { ToastOptions, ToastTone } from './Toast';
 export { EmptyState } from './EmptyState';

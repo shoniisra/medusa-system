@@ -13,6 +13,7 @@ import {
   Select,
   EmptyState,
   Badge,
+  useToast,
 } from '@/components/ui';
 import type { BankAccount, PaymentMethod, SaleWithBalance } from '@/types';
 
@@ -111,6 +112,7 @@ function PaymentModal({
   onClose: () => void;
 }) {
   const qc = useQueryClient();
+  const toast = useToast();
 
   const [amount, setAmount] = useState(String(sale.balance));
   const [dest, setDest] = useState(''); // 'cash' | bank account id
@@ -199,7 +201,9 @@ function PaymentModal({
         qc.invalidateQueries({ queryKey: ['cash-expected', ctx.sessionId] });
       }
       onClose();
+      toast.success('Cobro registrado', `${sale.sale_number} · ${money(Number(amount) || 0)}`);
     },
+    onError: (e: Error) => toast.error('No se pudo registrar el cobro', e.message),
   });
 
   return (

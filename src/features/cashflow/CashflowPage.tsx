@@ -32,6 +32,7 @@ import {
   Modal,
   EmptyState,
   Badge,
+  useToast,
 } from '@/components/ui';
 import { CollectSection } from './CollectSection';
 import type {
@@ -605,6 +606,7 @@ const INCOME_REASONS: { value: string; label: string }[] = [
 
 function IncomeModal({ ctx, onClose }: { ctx: Ctx; onClose: () => void }) {
   const invalidate = useInvalidateFinance();
+  const toast = useToast();
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
   const [description, setDescription] = useState('');
@@ -673,7 +675,9 @@ function IncomeModal({ ctx, onClose }: { ctx: Ctx; onClose: () => void }) {
     onSuccess: () => {
       invalidate();
       onClose();
+      toast.success('Ingreso registrado', money(Number(amount) || 0));
     },
+    onError: (e: Error) => toast.error('No se pudo registrar el ingreso', e.message),
   });
 
   return (
@@ -751,6 +755,7 @@ function IncomeModal({ ctx, onClose }: { ctx: Ctx; onClose: () => void }) {
 
 function ExpenseModal({ ctx, onClose }: { ctx: Ctx; onClose: () => void }) {
   const invalidate = useInvalidateFinance();
+  const toast = useToast();
   const [description, setDescription] = useState('');
   const [amount, setAmount] = useState('');
   const [categoryId, setCategoryId] = useState('');
@@ -826,7 +831,9 @@ function ExpenseModal({ ctx, onClose }: { ctx: Ctx; onClose: () => void }) {
     onSuccess: () => {
       invalidate();
       onClose();
+      toast.success('Gasto registrado', money(Number(amount) || 0));
     },
+    onError: (e: Error) => toast.error('No se pudo registrar el gasto', e.message),
   });
 
   return (
@@ -900,6 +907,7 @@ function ExpenseModal({ ctx, onClose }: { ctx: Ctx; onClose: () => void }) {
 
 function TransferModal({ ctx, onClose }: { ctx: Ctx; onClose: () => void }) {
   const invalidate = useInvalidateFinance();
+  const toast = useToast();
   const [amount, setAmount] = useState('');
   const [from, setFrom] = useState(''); // 'cash' | bank id
   const [to, setTo] = useState('');
@@ -983,7 +991,9 @@ function TransferModal({ ctx, onClose }: { ctx: Ctx; onClose: () => void }) {
     onSuccess: () => {
       invalidate();
       onClose();
+      toast.success('Transferencia registrada', money(Number(amount) || 0));
     },
+    onError: (e: Error) => toast.error('No se pudo transferir', e.message),
   });
 
   const options = (
@@ -1223,6 +1233,7 @@ function AdjustBalanceModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const toast = useToast();
   const [real, setReal] = useState(String(target.current.toFixed(2)));
   const methods = usePaymentMethods(ctx.orgId, target.kind === 'bank');
 
@@ -1281,7 +1292,11 @@ function AdjustBalanceModal({
         );
       }
     },
-    onSuccess: onSaved,
+    onSuccess: () => {
+      toast.success('Saldo ajustado', `${target.name} · ${money(Number(real) || 0)}`);
+      onSaved();
+    },
+    onError: (e: Error) => toast.error('No se pudo ajustar el saldo', e.message),
   });
 
   return (
@@ -1329,6 +1344,7 @@ function AdjustBalanceModal({
 }
 
 function OpenForm({ ctx, onOpened }: { ctx: Ctx; onOpened: () => void }) {
+  const toast = useToast();
   const [opening, setOpening] = useState<string | null>(null);
 
   const register = useQuery({
@@ -1374,7 +1390,11 @@ function OpenForm({ ctx, onOpened }: { ctx: Ctx; onOpened: () => void }) {
         [genId(), registerId, ctx.userId, new Date().toISOString(), Number(value)],
       );
     },
-    onSuccess: onOpened,
+    onSuccess: () => {
+      toast.success('Caja abierta', `Fondo inicial ${money(Number(value) || 0)}`);
+      onOpened();
+    },
+    onError: (e: Error) => toast.error('No se pudo abrir la caja', e.message),
   });
 
   if (register.isLoading) return null;
@@ -1440,6 +1460,7 @@ function OpenSessionCard({
   session: CashSession;
   onClosed: () => void;
 }) {
+  const toast = useToast();
   const [counted, setCounted] = useState('');
   const [closing, setClosing] = useState(false);
   const [withdraw, setWithdraw] = useState('');
@@ -1542,7 +1563,14 @@ function OpenSessionCard({
 
       await batch(stmts);
     },
-    onSuccess: onClosed,
+    onSuccess: () => {
+      toast.success(
+        'Caja cerrada',
+        diff ? `Diferencia ${money(diff)}` : 'Sin diferencia en el conteo',
+      );
+      onClosed();
+    },
+    onError: (e: Error) => toast.error('No se pudo cerrar la caja', e.message),
   });
 
   return (
@@ -1749,6 +1777,7 @@ function DebtRow({
   item: DebtCredit;
   onChanged: () => void;
 }) {
+  const toast = useToast();
   const pending = item.amount - item.paid_amount;
   const isDebt = item.kind === 'debt';
 
@@ -1760,7 +1789,11 @@ function DebtRow({
           WHERE id = ?`,
         [new Date().toISOString(), item.id],
       ),
-    onSuccess: onChanged,
+    onSuccess: () => {
+      toast.success(isDebt ? 'Deuda saldada' : 'Cobro registrado', item.counterparty);
+      onChanged();
+    },
+    onError: (e: Error) => toast.error('No se pudo saldar', e.message),
   });
 
   const remove = useMutation({
@@ -1769,7 +1802,11 @@ function DebtRow({
         `UPDATE debt_credit SET status='voided', updated_at=? WHERE id = ?`,
         [new Date().toISOString(), item.id],
       ),
-    onSuccess: onChanged,
+    onSuccess: () => {
+      toast.info('Registro anulado', item.counterparty);
+      onChanged();
+    },
+    onError: (e: Error) => toast.error('No se pudo anular', e.message),
   });
 
   return (
@@ -1830,6 +1867,7 @@ function DebtModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const toast = useToast();
   const [kind, setKind] = useState<DebtCreditKind>('debt');
   const [counterparty, setCounterparty] = useState('');
   const [description, setDescription] = useState('');
@@ -1859,7 +1897,14 @@ function DebtModal({
         ],
       );
     },
-    onSuccess: onSaved,
+    onSuccess: () => {
+      toast.success(
+        kind === 'debt' ? 'Deuda registrada' : 'Crédito registrado',
+        `${counterparty} · ${money(Number(amount) || 0)}`,
+      );
+      onSaved();
+    },
+    onError: (e: Error) => toast.error('No se pudo guardar', e.message),
   });
 
   return (

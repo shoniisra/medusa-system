@@ -21,6 +21,7 @@ import {
   Input,
   Modal,
   EmptyState,
+  useToast,
 } from '@/components/ui';
 import type {
   BankAccount,
@@ -710,6 +711,7 @@ function AdjustCommissionModal({
   const branchId = useBranchId();
   const userId = useSession((s) => s.user?.id ?? null);
   const qc = useQueryClient();
+  const toast = useToast();
   const [real, setReal] = useState(String(row.pending.toFixed(2)));
 
   const methods = useQuery({
@@ -756,7 +758,9 @@ function AdjustCommissionModal({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['commission-balance'] });
       onClose();
+      toast.success('Comisiones cuadradas', `${row.staff_name} · ${money(Number(real) || 0)}`);
     },
+    onError: (e: Error) => toast.error('No se pudo cuadrar', e.message),
   });
 
   return (
@@ -819,6 +823,7 @@ function PayCommissionModal({
   const branchId = useBranchId();
   const userId = useSession((s) => s.user?.id ?? null);
   const qc = useQueryClient();
+  const toast = useToast();
 
   const [amount, setAmount] = useState(String(row.pending.toFixed(2)));
   const [account, setAccount] = useState(''); // 'cash' | bank id
@@ -966,7 +971,9 @@ function PayCommissionModal({
       qc.invalidateQueries({ queryKey: ['transactions'] });
       qc.invalidateQueries({ queryKey: ['cash-expected'] });
       onClose();
+      toast.success('Comisiones pagadas', `${row.staff_name} · ${money(Number(amount) || 0)}`);
     },
+    onError: (e: Error) => toast.error('No se pudo pagar', e.message),
   });
 
   return (
@@ -1043,6 +1050,7 @@ function AdvanceModal({
   const branchId = useBranchId();
   const userId = useSession((s) => s.user?.id ?? null);
   const qc = useQueryClient();
+  const toast = useToast();
 
   const [staffId, setStaffId] = useState('');
   const [amount, setAmount] = useState('');
@@ -1196,6 +1204,10 @@ function AdvanceModal({
       await batch(stmts);
     },
     onSuccess: () => {
+      toast.success(
+        'Adelanto registrado',
+        `${selected ? fullName(selected.first_name, selected.last_name) : 'Colaborador'} · ${money(Number(amount) || 0)}`,
+      );
       setStaffId('');
       setAmount('');
       setAccount('');
@@ -1207,6 +1219,7 @@ function AdvanceModal({
       qc.invalidateQueries({ queryKey: ['cash-expected'] });
       onClose();
     },
+    onError: (e: Error) => toast.error('No se pudo registrar el adelanto', e.message),
   });
 
   return (

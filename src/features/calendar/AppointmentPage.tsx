@@ -61,6 +61,7 @@ import {
   Badge,
   Modal,
   PhoneInput,
+  useToast,
 } from '@/components/ui';
 import { findCustomerByPhone } from '@/features/clients/customerLookup';
 import { validatePhone } from '@/lib/phone';
@@ -88,6 +89,15 @@ export function AppointmentPage() {
 }
 
 /** Minutos → "1 h 30 min" / "45 min". */
+/** Aviso flotante para cada estado nuevo de la cita en su ficha. */
+const APPT_STATUS_TOAST: Partial<Record<AppointmentStatus, string>> = {
+  reserved: 'Cita reservada',
+  confirmed: 'Cita en atención',
+  attended: 'Cita atendida',
+  cancelled: 'Cita cancelada',
+  no_show: 'Marcada como no asistió',
+};
+
 function fmtDuration(min: number): string {
   if (!min) return '—';
   const h = Math.floor(min / 60);
@@ -189,6 +199,7 @@ interface DraftCat {
 
 function NewAppointment() {
   const navigate = useNavigate();
+  const toast = useToast();
   const orgId = useOrgId();
   const branchId = useBranchId();
   const userId = useSession((s) => s.user?.id ?? null);
@@ -336,9 +347,14 @@ function NewAppointment() {
       setCustomerId(row.id);
       setClientSearch('');
       setError('');
+      toast.success('Cliente creado', fullName(row.first_name, row.last_name));
     },
-    onError: (e) =>
-      setError(e instanceof Error ? e.message : 'No se pudo crear el cliente.'),
+    onError: (e) => {
+      const msg =
+        e instanceof Error ? e.message : 'No se pudo crear el cliente.';
+      setError(msg);
+      toast.error('No se pudo crear el cliente', msg);
+    },
   });
 
   function clearClient() {
@@ -708,10 +724,25 @@ function NewAppointment() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['appointments'] });
       qc.invalidateQueries({ queryKey: ['customers', orgId] });
+      // El aviso sobrevive al cambio de pantalla: se ve ya en el calendario.
+      toast.success(
+        'Cita creada',
+        `${
+          newClient
+            ? fullName(firstName, lastName)
+            : fullName(
+                selectedCustomer?.first_name ?? '',
+                selectedCustomer?.last_name,
+              )
+        } · ${dayLabel(date).dm} ${time}`,
+      );
       navigate(ROUTES.calendar);
     },
-    onError: (e) =>
-      setError(e instanceof Error ? e.message : 'No se pudo agendar.'),
+    onError: (e) => {
+      const msg = e instanceof Error ? e.message : 'No se pudo agendar.';
+      setError(msg);
+      toast.error('No se pudo agendar', msg);
+    },
   });
 
   function attemptSchedule(force: boolean) {
@@ -1597,6 +1628,7 @@ interface ItemRow {
 
 function EditAppointment({ id }: { id: string }) {
   const navigate = useNavigate();
+  const toast = useToast();
   const location = useLocation();
   const qc = useQueryClient();
   const services = useServices();
@@ -1728,7 +1760,9 @@ function EditAppointment({ id }: { id: string }) {
     onSuccess: () => {
       setNotesDraft(null);
       refreshHead();
+      toast.success('Observaciones guardadas');
     },
+    onError: (e: Error) => toast.error('No se pudo guardar', e.message),
   });
 
   const addService = useMutation({
@@ -1855,10 +1889,12 @@ function EditAppointment({ id }: { id: string }) {
         new Date().toISOString(),
         id,
       ]),
-    onSuccess: () => {
+    onSuccess: (_r, status) => {
       qc.invalidateQueries({ queryKey: ['appointment-head', id] });
       qc.invalidateQueries({ queryKey: ['appointments'] });
+      toast.success(APPT_STATUS_TOAST[status] ?? 'Cita actualizada');
     },
+    onError: (e: Error) => toast.error('No se pudo cambiar el estado', e.message),
   });
 
   const all = items.data ?? [];
@@ -2432,6 +2468,7 @@ function ApptCustomerModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const toast = useToast();
   const [firstName, setFirstName] = useState(initialFirst ?? '');
   const [lastName, setLastName] = useState(initialLast ?? '');
   const [phone, setPhone] = useState(initialPhone ?? '');
@@ -2495,9 +2532,16 @@ function ApptCustomerModal({
         },
       ]);
     },
-    onSuccess: onDone,
-    onError: (e) =>
-      setError(e instanceof Error ? e.message : 'No se pudo guardar el cliente.'),
+    onSuccess: () => {
+      toast.success('Cliente de la cita actualizado');
+      onDone();
+    },
+    onError: (e) => {
+      const msg =
+        e instanceof Error ? e.message : 'No se pudo guardar el cliente.';
+      setError(msg);
+      toast.error('No se pudo guardar el cliente', msg);
+    },
   });
 
   return (
@@ -2582,6 +2626,7 @@ function DepositModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const toast = useToast();
   const [amount, setAmount] = useState('');
   const [dest, setDest] = useState('');
   const [reference, setReference] = useState('');
@@ -2680,9 +2725,16 @@ function DepositModal({
       }
       await batch(stmts);
     },
-    onSuccess: onDone,
-    onError: (e) =>
-      setError(e instanceof Error ? e.message : 'No se pudo registrar el abono.'),
+    onSuccess: () => {
+      toast.success('Abono registrado', money(Number(amount) || 0));
+      onDone();
+    },
+    onError: (e) => {
+      const msg =
+        e instanceof Error ? e.message : 'No se pudo registrar el abono.';
+      setError(msg);
+      toast.error('No se pudo registrar el abono', msg);
+    },
   });
 
   return (
@@ -2927,6 +2979,7 @@ function VoidSaleModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const toast = useToast();
   const [error, setError] = useState('');
 
   // Venta de la cita + sus pagos (con tipo de método, para saber cuál es efectivo).
@@ -3027,9 +3080,16 @@ function VoidSaleModal({
 
       await batch(stmts);
     },
-    onSuccess: onDone,
-    onError: (e) =>
-      setError(e instanceof Error ? e.message : 'No se pudo anular la venta.'),
+    onSuccess: () => {
+      toast.info('Venta anulada', 'Se revirtieron los cobros y la caja.');
+      onDone();
+    },
+    onError: (e) => {
+      const msg =
+        e instanceof Error ? e.message : 'No se pudo anular la venta.';
+      setError(msg);
+      toast.error('No se pudo anular la venta', msg);
+    },
   });
 
   const blocked = cashTotal > 0 && !sessionId;
@@ -3145,6 +3205,7 @@ function ConfirmSaleModal({
   onDone: () => void;
 }) {
   const qc = useQueryClient();
+  const toast = useToast();
   // Saldo a cobrar = total − seña ya pagada.
   // El monto a cobrar es el saldo (total − seña) y no es editable: se cobra
   // exactamente lo que resta de la venta.
@@ -3358,10 +3419,15 @@ function ConfirmSaleModal({
       qc.invalidateQueries({ queryKey: ['sales'] });
       qc.invalidateQueries({ queryKey: ['overdue-pending'] });
       qc.invalidateQueries({ queryKey: ['overdue-count'] });
+      toast.success('Venta confirmada', `${customerName ?? 'Cliente'} · ${money(total)}`);
       onDone();
     },
-    onError: (e) =>
-      setError(e instanceof Error ? e.message : 'No se pudo confirmar la venta.'),
+    onError: (e) => {
+      const msg =
+        e instanceof Error ? e.message : 'No se pudo confirmar la venta.';
+      setError(msg);
+      toast.error('No se pudo confirmar la venta', msg);
+    },
   });
 
   const canConfirm =

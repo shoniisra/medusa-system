@@ -4,7 +4,7 @@ import { AlertTriangle, Check, ClipboardCheck } from 'lucide-react';
 import { batch, query } from '@/lib/db';
 import { dateShort, money, timeShort } from '@/lib/format';
 import { useBranchId } from '@/store/session';
-import { Button, Input, Modal } from '@/components/ui';
+import { Button, Input, Modal, useToast } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { NO_CHARGE_MARK, ymd } from '@/features/calendar/appointmentBoard';
 import type { AppointmentStatus } from '@/types';
@@ -75,6 +75,7 @@ const CHUNK = 40;
  */
 export function CloseOverdueModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
+  const toast = useToast();
   const rows = useOverduePending();
 
   const [scope, setScope] = useState<'month' | 'all'>('month');
@@ -142,9 +143,16 @@ export function CloseOverdueModal({ onClose }: { onClose: () => void }) {
       }
       setDone(n);
       onClose();
+      toast.success(
+        `${n} cita${n === 1 ? '' : 's'} cerrada${n === 1 ? '' : 's'} sin cobro`,
+        'Quedaron atendidas, sin venta ni ingreso registrado.',
+      );
     },
-    onError: (e) =>
-      setError(e instanceof Error ? e.message : 'No se pudieron cerrar.'),
+    onError: (e) => {
+      const msg = e instanceof Error ? e.message : 'No se pudieron cerrar.';
+      setError(msg);
+      toast.error('No se pudieron cerrar las citas', msg);
+    },
   });
 
   return (
