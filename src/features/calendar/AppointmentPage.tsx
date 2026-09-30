@@ -70,6 +70,7 @@ import {
   commissionForItem,
 } from '@/features/pos/createSale';
 import { SaleItemsEditor } from '@/features/pos/SaleItemsEditor';
+import { isNoCharge, stripNoCharge } from './appointmentBoard';
 import type {
   AppointmentStatus,
   BankAccount,
@@ -1662,6 +1663,12 @@ function EditAppointment({ id }: { id: string }) {
 
   const serviceItems = (items.data ?? []).filter((i) => i.service_id);
 
+  // Cita cerrada como atendida sin registrar el ingreso (cierre retroactivo):
+  // no tiene venta, así que se le puede registrar la venta después. Solo la
+  // atendida CON venta queda congelada.
+  const noCharge = !!head.data && isNoCharge(head.data);
+  const attendedWithSale = head.data?.status === 'attended' && !noCharge;
+
   const orgId = useOrgId();
   const branchId = useBranchId();
   const userId = useSession((s) => s.user?.id ?? null);
@@ -2078,7 +2085,7 @@ function EditAppointment({ id }: { id: string }) {
               <Select
                 label="Estado"
                 value={head.data.status}
-                disabled={head.data.status === 'attended'}
+                disabled={attendedWithSale}
                 onChange={(e) => {
                   const next = e.target.value as AppointmentStatus;
                   if (next === head.data!.status) return;
@@ -2098,7 +2105,7 @@ function EditAppointment({ id }: { id: string }) {
                   ),
                 )}
               </Select>
-              {head.data.status === 'attended' && (
+              {attendedWithSale && (
                 <div className="-mt-2 space-y-2">
                   <p className="text-xs text-white/40">
                     Cita atendida: ya tiene venta y cobro registrados.
@@ -2110,6 +2117,13 @@ function EditAppointment({ id }: { id: string }) {
                     Anular venta y cobro
                   </button>
                 </div>
+              )}
+              {noCharge && (
+                <p className="-mt-2 rounded-lg border border-amber-400/30 bg-amber-400/10 px-2.5 py-2 text-xs text-amber-100">
+                  Atendida <b>sin cobro registrado</b> (cierre retroactivo): no
+                  tiene venta ni ingreso. Si la vas a cobrar, cargá el detalle y
+                  confirmá la venta.
+                </p>
               )}
 
               {/* Totales */}
@@ -2179,7 +2193,7 @@ function EditAppointment({ id }: { id: string }) {
                 </div>
               )}
 
-              {head.data.status !== 'attended' && (
+              {!attendedWithSale && (
                 <>
                   <Button
                     variant="outline"
@@ -2211,7 +2225,7 @@ function EditAppointment({ id }: { id: string }) {
       </div>
 
       {/* Cobro siempre a mano en móvil: total + acción, sin scrollear */}
-      {head.data.status !== 'attended' && (
+      {!attendedWithSale && (
         <div className="action-bar [--nav-h:0px] lg:hidden">
           <div className="flex items-center gap-3">
             <div className="min-w-0 flex-1">
@@ -2971,11 +2985,14 @@ function ConfirmSaleModal({
     mutationFn: async () => {
       // Guarda anti-doble-venta: si la cita ya fue atendida, no se vuelve a
       // vender. Se relee el estado real en DB por si otra pestaña la cerró.
-      const current = await queryOne<{ status: AppointmentStatus }>(
-        'SELECT status FROM appointment WHERE id = ?',
-        [appointmentId],
-      );
-      if (current?.status === 'attended') {
+      const current = await queryOne<{
+        status: AppointmentStatus;
+        notes: string | null;
+      }>('SELECT status, notes FROM appointment WHERE id = ?', [appointmentId]);
+      // Una cita cerrada "sin cobro" está atendida pero no vendida: registrarle
+      // la venta ahora es justamente lo que falta (y le quita la marca).
+      const wasNoCharge = !!current && isNoCharge(current);
+      if (current?.status === 'attended' && !wasNoCharge) {
         throw new Error('Esta cita ya fue atendida y cobrada.');
       }
 
@@ -3093,11 +3110,19 @@ function ConfirmSaleModal({
         }
       }
 
-      // La cita queda atendida.
-      stmts.push({
-        sql: `UPDATE appointment SET status = 'attended', updated_at = ? WHERE id = ?`,
-        args: [now, appointmentId],
-      });
+      // La cita queda atendida. Si venía de un cierre "sin cobro", se le quita
+      // la marca de las observaciones: ya tiene venta y cobro.
+      if (wasNoCharge) {
+        stmts.push({
+          sql: `UPDATE appointment SET status = 'attended', notes = ?, updated_at = ? WHERE id = ?`,
+          args: [stripNoCharge(current?.notes), now, appointmentId],
+        });
+      } else {
+        stmts.push({
+          sql: `UPDATE appointment SET status = 'attended', updated_at = ? WHERE id = ?`,
+          args: [now, appointmentId],
+        });
+      }
 
       await batch(stmts);
     },
@@ -3105,6 +3130,8 @@ function ConfirmSaleModal({
       qc.invalidateQueries({ queryKey: ['appointment-head', appointmentId] });
       qc.invalidateQueries({ queryKey: ['appointments'] });
       qc.invalidateQueries({ queryKey: ['sales'] });
+      qc.invalidateQueries({ queryKey: ['overdue-pending'] });
+      qc.invalidateQueries({ queryKey: ['overdue-count'] });
       onDone();
     },
     onError: (e) =>

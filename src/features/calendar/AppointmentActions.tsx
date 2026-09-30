@@ -23,7 +23,7 @@ import {
 import { Button, Input, Modal, Select } from '@/components/ui';
 import { useStaff } from '@/features/pos/useCatalog';
 import type { AppointmentStatus } from '@/types';
-import { isOverdue, ymd } from './appointmentBoard';
+import { isNoCharge, isOverdue, ymd } from './appointmentBoard';
 
 /**
  * Cita sobre la que opera el menú de acciones. Es el mínimo que todas las
@@ -38,6 +38,8 @@ export interface ApptActionTarget {
   customer_name: string | null;
   service_name?: string | null;
   staff_name?: string | null;
+  /** Observaciones: identifican una cita cerrada sin cobro (`[Sin cobro]`). */
+  notes?: string | null;
 }
 
 /** Fila de la cita que necesitan las acciones que sincronizan con Google. */
@@ -81,6 +83,8 @@ export function AppointmentActionsModal({
   const [error, setError] = useState('');
 
   const isAttended = appt.status === 'attended';
+  // Atendida en un cierre masivo, sin venta ni cobro: todavía se puede cobrar.
+  const noCharge = isNoCharge(appt);
   const isActive = appt.status === 'reserved' || appt.status === 'confirmed';
   const overdue = isOverdue(appt);
   // Una cancelada o sin asistir vuelve a "Reservada" al reprogramarla.
@@ -97,6 +101,9 @@ export function AppointmentActionsModal({
     qc.invalidateQueries({ queryKey: ['appointment-items', appt.id] });
     qc.invalidateQueries({ queryKey: ['dashboard-metrics'] });
     qc.invalidateQueries({ queryKey: ['week-availability'] });
+    // Contadores de vencidas (menú lateral y cierre masivo en Tareas).
+    qc.invalidateQueries({ queryKey: ['overdue-pending'] });
+    qc.invalidateQueries({ queryKey: ['overdue-count'] });
   };
 
   const fail = (e: unknown, fallback: string) =>
@@ -316,6 +323,19 @@ export function AppointmentActionsModal({
             </Button>
           )}
 
+          {/* Cerrada sin cobro: la venta se puede registrar después. */}
+          {noCharge && (
+            <Button
+              className="w-full"
+              onClick={() => {
+                onClose();
+                navigate(`${ROUTES.appointment}/${appt.id}?atender=1`);
+              }}
+            >
+              <Check className="h-4 w-4" /> Registrar venta y cobro
+            </Button>
+          )}
+
           {!isAttended && (
             <div className="border-t border-white/10 pt-3">
               <Button
@@ -328,10 +348,16 @@ export function AppointmentActionsModal({
             </div>
           )}
 
-          {isAttended && (
+          {isAttended && !noCharge && (
             <p className="text-xs text-white/40">
               Cita atendida: ya tiene venta y cobro registrados. Para corregirla,
               anulá la venta desde la ficha.
+            </p>
+          )}
+          {noCharge && (
+            <p className="text-xs text-amber-200/70">
+              Atendida sin cobro registrado (cierre retroactivo): no tiene venta
+              ni ingreso. Si querés cobrarla, registrá la venta.
             </p>
           )}
           {error && <p className="text-xs text-danger">{error}</p>}

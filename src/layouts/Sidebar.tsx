@@ -17,6 +17,7 @@ import { ROUTES, APP_NAME } from "@/config/constants";
 import { query } from "@/lib/db";
 import { useBranchId } from "@/store/session";
 import { cn } from "@/lib/cn";
+import { ymd } from "@/features/calendar/appointmentBoard";
 
 /** Navegación por secciones; `title` opcional pinta un encabezado de grupo. */
 const NAV_SECTIONS: {
@@ -62,16 +63,19 @@ const NAV_SECTIONS: {
 /** Cuenta de citas vencidas (reservadas/atendiendo de días pasados). */
 function useOverdueCount(): number {
   const branchId = useBranchId();
+  // Fecha local del navegador: el reloj del servidor de la base va en UTC y de
+  // noche adelantaría el corte, contando como vencidas las citas de hoy.
+  const today = ymd(new Date());
   const q = useQuery({
-    queryKey: ["overdue-count", branchId],
+    queryKey: ["overdue-count", branchId, today],
     enabled: !!branchId,
     refetchInterval: 5 * 60 * 1000,
     queryFn: async () => {
       const rows = await query<{ n: number }>(
         `SELECT COUNT(*) AS n FROM appointment
           WHERE branch_id = ? AND status IN ('reserved','confirmed')
-            AND date(start_at) < date('now','localtime')`,
-        [branchId],
+            AND date(start_at) < ?`,
+        [branchId, today],
       );
       return rows[0]?.n ?? 0;
     },

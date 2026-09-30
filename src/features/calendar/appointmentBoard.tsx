@@ -69,8 +69,51 @@ export function isOverdue(a: {
   return a.start_at.slice(0, 10) < ymd(new Date());
 }
 
-export function rangeFor(mode: RangeMode): { from: string; to: string; label: string } {
-  const now = new Date();
+/**
+ * Marca que queda en `appointment.notes` cuando una cita vencida se cierra
+ * como atendida SIN registrar el ingreso (cierre retroactivo para cuadrar
+ * caja). El esquema no tiene columna para esto, así que la marca en las
+ * observaciones es la fuente de verdad: mientras esté, la cita se puede
+ * cobrar después (no está "vendida").
+ */
+export const NO_CHARGE_MARK = '[Sin cobro]';
+
+/** ¿Cita cerrada como atendida pero sin venta ni cobro registrados? */
+export function isNoCharge(a: {
+  status: AppointmentStatus;
+  notes?: string | null;
+}): boolean {
+  return a.status === 'attended' && (a.notes ?? '').includes(NO_CHARGE_MARK);
+}
+
+/** Quita la marca de "sin cobro" (al registrar la venta después). */
+export function stripNoCharge(notes: string | null | undefined): string | null {
+  const rest = (notes ?? '')
+    .split('\n')
+    .filter((l) => !l.trim().startsWith(NO_CHARGE_MARK))
+    .join('\n')
+    .trim();
+  return rest || null;
+}
+
+/** Mueve el ancla del rango un paso (día, semana o mes según el modo). */
+export function shiftAnchor(mode: RangeMode, anchor: string, step: number): string {
+  const d = new Date(`${anchor}T00:00:00`);
+  if (mode === 'today') d.setDate(d.getDate() + step);
+  else if (mode === 'week') d.setDate(d.getDate() + step * 7);
+  else d.setMonth(d.getMonth() + step, 1);
+  return ymd(d);
+}
+
+/**
+ * Rango de fechas del modo elegido. `anchor` ("YYYY-MM-DD") permite mirar otro
+ * día, semana o mes; sin ancla es siempre el rango de hoy.
+ */
+export function rangeFor(
+  mode: RangeMode,
+  anchor?: string,
+): { from: string; to: string; label: string } {
+  const now = anchor ? new Date(`${anchor}T00:00:00`) : new Date();
   if (mode === 'today') {
     const t = ymd(now);
     return { from: t, to: t, label: dateShort(t) };
@@ -245,6 +288,11 @@ export function ListView({
                       Vencida
                     </span>
                   )}
+                  {isNoCharge(a) && (
+                    <span className="rounded bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-200">
+                      Sin cobro
+                    </span>
+                  )}
                   {/* El estado va junto a la hora en móvil; en escritorio, al final. */}
                   <span className="lg:hidden">
                     <Badge tone={meta.tone}>{meta.label}</Badge>
@@ -283,12 +331,15 @@ export function KanbanView({
   rows,
   onSelect,
   onMove,
+  columns = STATUS_ORDER,
 }: {
   rows: AppointmentRow[];
   /** Click en una tarjeta: abre el menú de acciones de la cita. */
   onSelect: (a: AppointmentRow) => void;
   /** Mover una tarjeta a otra columna (estado destino). */
   onMove?: (a: AppointmentRow, toStatus: AppointmentStatus) => void;
+  /** Columnas visibles (por defecto todos los estados, en orden). */
+  columns?: AppointmentStatus[];
 }) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overStatus, setOverStatus] = useState<AppointmentStatus | null>(null);
@@ -316,7 +367,7 @@ export function KanbanView({
 
   return (
     <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-2 lg:mx-0 lg:snap-none lg:px-0">
-      {STATUS_ORDER.map((status) => {
+      {columns.map((status) => {
         const meta = APPOINTMENT_STATUS[status];
         const items = byStatus[status];
         // ¿Se puede soltar acá la tarjeta que se arrastra?
@@ -349,9 +400,11 @@ export function KanbanView({
               if (row && onMove && row.status !== status) onMove(row, status);
             }}
           >
-            <div className="mb-2 flex items-center justify-between px-1">
+            <div className="mb-2 flex items-center justify-between gap-2 rounded-lg bg-white/[0.04] px-2 py-1.5">
               <Badge tone={meta.tone}>{meta.label}</Badge>
-              <span className="text-xs text-white/40">{items.length}</span>
+              <span className="rounded-md bg-white/10 px-1.5 py-0.5 text-[11px] font-semibold text-white/60">
+                {items.length}
+              </span>
             </div>
             <div className="space-y-2">
               {items.length === 0 ? (
@@ -364,6 +417,7 @@ export function KanbanView({
                   const locked = a.status === LOCKED_FROM;
                   const draggable = canDrag && !locked;
                   const overdue = isOverdue(a);
+                  const noCharge = isNoCharge(a);
                   return (
                     <div
                       key={a.id}
@@ -399,6 +453,11 @@ export function KanbanView({
                             {overdue && (
                               <span className="rounded bg-danger/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-danger">
                                 Vencida
+                              </span>
+                            )}
+                            {noCharge && (
+                              <span className="rounded bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-200">
+                                Sin cobro
                               </span>
                             )}
                           </div>

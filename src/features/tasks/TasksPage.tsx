@@ -1,22 +1,27 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CalendarPlus, ClipboardList } from 'lucide-react';
-import { query, execute } from '@/lib/db';
-import { fullName } from '@/lib/format';
-import { useBranchId } from '@/store/session';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { CalendarPlus, ClipboardCheck, ClipboardList } from 'lucide-react';
+import { execute } from '@/lib/db';
 import { ROUTES } from '@/config/constants';
-import { Card, Button, EmptyState, Select } from '@/components/ui';
+import { Card, Button, EmptyState } from '@/components/ui';
 import { useStaff } from '@/features/pos/useCatalog';
 import {
   type AppointmentRow,
-  type RangeMode,
   rangeFor,
   isOverdue,
-  ToggleBtn,
+  useAppointments,
   KanbanView,
+  STATUS_ORDER,
 } from '@/features/calendar/appointmentBoard';
 import { AppointmentActionsModal } from '@/features/calendar/AppointmentActions';
+import {
+  TaskToolbar,
+  defaultTaskFilters,
+  activeFilterCount,
+  type TaskFilters,
+} from './TaskToolbar';
+import { CloseOverdueModal, useOverduePending } from './CloseOverdueModal';
 import type { AppointmentStatus } from '@/types';
 
 /**
@@ -25,57 +30,66 @@ import type { AppointmentStatus } from '@/types';
  * en una tarjeta. Resalta las citas vencidas (reservadas de días pasados).
  */
 export function TasksPage() {
-  const branchId = useBranchId();
   const qc = useQueryClient();
   const navigate = useNavigate();
 
-  const [range, setRange] = useState<RangeMode>('today');
+  const [filters, setFilters] = useState<TaskFilters>(defaultTaskFilters);
+  const patch = (p: Partial<TaskFilters>) =>
+    setFilters((f) => ({ ...f, ...p }));
+
   const [selected, setSelected] = useState<AppointmentRow | null>(null);
+  const [closeOverdue, setCloseOverdue] = useState(false);
   const [notice, setNotice] = useState('');
 
   const staff = useStaff();
-  const [staffFilter, setStaffFilter] = useState('');
 
-  const { from, to, label } = useMemo(() => rangeFor(range), [range]);
+  const { from, to, label } = useMemo(
+    () => rangeFor(filters.mode, filters.anchor),
+    [filters.mode, filters.anchor],
+  );
 
-  const appts = useQuery({
-    queryKey: ['appointments', branchId, from, to],
-    enabled: !!branchId,
-    queryFn: () =>
-      query<AppointmentRow>(
-        `SELECT a.id, a.start_at, a.end_at, a.status, a.notes,
-                a.google_calendar_id, a.google_calendar_event_id,
-                a.google_color_hex,
-                c.first_name || CASE WHEN c.last_name IS NOT NULL THEN ' ' || c.last_name ELSE '' END AS customer_name,
-                c.phone,
-                s.id AS staff_id,
-                s.first_name || CASE WHEN s.last_name IS NOT NULL THEN ' ' || s.last_name ELSE '' END AS staff_name,
-                s.color AS staff_color,
-                sv.name AS service_name
-           FROM appointment a
-           LEFT JOIN customer c ON c.id = a.customer_id
-           LEFT JOIN appointment_item ai
-                  ON ai.id = (SELECT ai2.id FROM appointment_item ai2
-                               WHERE ai2.appointment_id = a.id LIMIT 1)
-           LEFT JOIN staff_member s ON s.id = ai.assigned_staff_id
-           LEFT JOIN service sv ON sv.id = ai.service_id
-          WHERE a.branch_id = ? AND date(a.start_at) BETWEEN ? AND ?
-          ORDER BY a.start_at ASC`,
-        [branchId, from, to],
-      ),
-  });
+  const appts = useAppointments(from, to);
+  // Pila total de vencidas (independiente del rango): habilita el cierre masivo.
+  const overduePending = useOverduePending();
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['appointments'] });
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['appointments'] });
+    qc.invalidateQueries({ queryKey: ['overdue-pending'] });
+    qc.invalidateQueries({ queryKey: ['overdue-count'] });
+  };
 
   const filteredRows = useMemo(() => {
     let rows = appts.data ?? [];
-    if (staffFilter) rows = rows.filter((a) => a.staff_id === staffFilter);
+    const f = filters;
+    if (f.staffId) rows = rows.filter((a) => a.staff_id === f.staffId);
+    if (f.statuses.length)
+      rows = rows.filter((a) => f.statuses.includes(a.status));
+    if (f.onlyOverdue) rows = rows.filter(isOverdue);
+    const q = f.q.trim().toLowerCase();
+    if (q) {
+      rows = rows.filter((a) =>
+        [a.customer_name, a.service_name, a.staff_name, a.phone, a.notes].some(
+          (v) => (v ?? '').toLowerCase().includes(q),
+        ),
+      );
+    }
     return rows;
-  }, [appts.data, staffFilter]);
+  }, [appts.data, filters]);
 
-  const overdueCount = useMemo(
-    () => filteredRows.filter(isOverdue).length,
-    [filteredRows],
+  // Vencidas del rango visible (contador de la pastilla del filtro).
+  const overdueInView = useMemo(
+    () => (appts.data ?? []).filter(isOverdue).length,
+    [appts.data],
+  );
+  const overdueTotal = overduePending.data?.length ?? 0;
+
+  // Columnas visibles: filtrar por estado es mostrar solo esas listas.
+  const columns = useMemo(
+    () =>
+      filters.statuses.length
+        ? STATUS_ORDER.filter((s) => filters.statuses.includes(s))
+        : STATUS_ORDER,
+    [filters.statuses],
   );
 
   // Arrastrar a "Atendido" no marca la cita: abre la ficha para confirmar el
@@ -128,56 +142,41 @@ export function TasksPage() {
   };
 
   return (
-    <div className="mx-auto max-w-[1500px] space-y-4">
-      {/* Barra: título + rango + filtro + acción (se apila en móvil). */}
-      <div className="space-y-3">
-        <div className="flex items-center gap-2">
-          <h1 className="text-2xl font-semibold text-white">Tareas</h1>
-          {overdueCount > 0 && (
-            <span className="rounded-full bg-danger/20 px-2 py-0.5 text-xs font-medium text-danger">
-              {overdueCount} vencida{overdueCount > 1 ? 's' : ''}
-            </span>
-          )}
-          <span className="ml-auto hidden text-sm capitalize text-white/50 sm:inline">
-            {label}
+    <div className="mx-auto max-w-[1500px] space-y-3">
+      {/* Encabezado compacto: título + pila de vencidas + acciones. */}
+      <div className="flex items-center gap-2">
+        <h1 className="text-xl font-semibold text-white sm:text-2xl">Tareas</h1>
+        {overdueTotal > 0 && (
+          <span className="rounded-full bg-danger/20 px-2 py-0.5 text-xs font-medium text-danger">
+            {overdueTotal} vencida{overdueTotal > 1 ? 's' : ''}
           </span>
-          <Button
-            className="ml-auto shrink-0 sm:ml-0"
-            onClick={() => navigate(ROUTES.appointmentNew)}
-          >
+        )}
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          {overdueTotal > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCloseOverdue(true)}
+            >
+              <ClipboardCheck className="h-4 w-4" />
+              <span className="hidden sm:inline">Cerrar vencidas</span>
+            </Button>
+          )}
+          <Button size="sm" onClick={() => navigate(ROUTES.appointmentNew)}>
             <CalendarPlus className="h-4 w-4" />
             <span className="hidden sm:inline">Nueva cita</span>
           </Button>
         </div>
-
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <div className="flex flex-1 gap-1 rounded-xl bg-ink-800/60 p-1">
-            <ToggleBtn active={range === 'today'} onClick={() => setRange('today')}>
-              Hoy
-            </ToggleBtn>
-            <ToggleBtn active={range === 'week'} onClick={() => setRange('week')}>
-              Semana
-            </ToggleBtn>
-            <ToggleBtn active={range === 'month'} onClick={() => setRange('month')}>
-              Mes
-            </ToggleBtn>
-          </div>
-
-          <div className="sm:w-56">
-            <Select
-              value={staffFilter}
-              onChange={(e) => setStaffFilter(e.target.value)}
-            >
-              <option value="">Todos los colaboradores</option>
-              {(staff.data ?? []).map((s) => (
-                <option key={s.id} value={s.id}>
-                  {fullName(s.first_name, s.last_name ?? '')}
-                </option>
-              ))}
-            </Select>
-          </div>
-        </div>
       </div>
+
+      <TaskToolbar
+        filters={filters}
+        onChange={patch}
+        rangeLabel={label}
+        staff={staff.data ?? []}
+        overdueInView={overdueInView}
+        resultCount={filteredRows.length}
+      />
 
       {notice && (
         <p className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-center text-xs text-amber-200">
@@ -200,7 +199,7 @@ export function TasksPage() {
             icon={ClipboardList}
             title="Sin tareas"
             description={
-              (appts.data?.length ?? 0) > 0
+              (appts.data?.length ?? 0) > 0 || activeFilterCount(filters) > 0
                 ? 'Ninguna cita coincide con los filtros.'
                 : 'No hay citas para el rango seleccionado.'
             }
@@ -209,6 +208,7 @@ export function TasksPage() {
       ) : (
         <KanbanView
           rows={filteredRows}
+          columns={columns}
           onSelect={setSelected}
           onMove={handleMove}
         />
@@ -219,6 +219,10 @@ export function TasksPage() {
           appt={selected}
           onClose={() => setSelected(null)}
         />
+      )}
+
+      {closeOverdue && (
+        <CloseOverdueModal onClose={() => setCloseOverdue(false)} />
       )}
     </div>
   );
