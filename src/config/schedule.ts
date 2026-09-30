@@ -13,6 +13,7 @@
  */
 
 import type { SERVICE_CATEGORIES } from './constants';
+import { normalizeText } from '@/lib/text';
 
 type ServiceCategory = (typeof SERVICE_CATEGORIES)[number];
 
@@ -53,18 +54,12 @@ export const CATEGORY_MINUTES: Record<ServiceCategory, number> = {
   Pestañas: 30,
 };
 
-const normCategory = (s: string): string =>
-  s
-    .trim()
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '');
 
 /** Minutos de una categoría; tolera mayúsculas y acentos distintos. */
 export function minutesForCategory(category: string | null | undefined): number {
   if (!category) return DEFAULT_SERVICE_MINUTES;
   const key = (Object.keys(CATEGORY_MINUTES) as ServiceCategory[]).find(
-    (c) => normCategory(c) === normCategory(category),
+    (c) => normalizeText(c) === normalizeText(category),
   );
   return key ? CATEGORY_MINUTES[key] : DEFAULT_SERVICE_MINUTES;
 }

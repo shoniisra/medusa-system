@@ -15,6 +15,7 @@ import { Button, Card, CardHeader, Input, Modal, Select } from '@/components/ui'
 import { commissionForItem, type CommissionRule } from './createSale';
 import { useCreateProduct, type NewProductDraft } from './useCatalog';
 import type { CommissionType, Product, Service, StaffMember } from '@/types';
+import { normalizeText } from '@/lib/text';
 
 /**
  * Línea de la tabla de detalle de venta. La usan por igual "Atención de cita"
@@ -557,13 +558,6 @@ function QtyStepper({
 
 /* ───────────────── Hojas para agregar ítems (tarjetas) ───────────────── */
 
-/** Quita acentos y mayúsculas para buscar sin pelear con la ortografía. */
-const norm = (s: string): string =>
-  s
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '');
-
 const CARD_BASE =
   'flex min-h-[68px] flex-col items-center justify-center gap-1 rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-center text-sm font-medium text-white/85 transition active:scale-[0.97] hover:bg-white/[0.06]';
 
@@ -639,8 +633,8 @@ function AddServiceSheet({
   }, [services]);
 
   const list = useMemo(() => {
-    const term = norm(q.trim());
-    if (term) return services.filter((s) => norm(s.name).includes(term));
+    const term = normalizeText(q);
+    if (term) return services.filter((s) => normalizeText(s.name).includes(term));
     if (category) {
       return services.filter((s) => (s.category || OTHERS) === category);
     }
@@ -777,10 +771,10 @@ function AddProductSheet({
   }, [open]);
 
   const list = useMemo(() => {
-    const term = norm(q.trim());
+    const term = normalizeText(q);
     if (!term) return products;
     return products.filter(
-      (p) => norm(p.name).includes(term) || norm(p.sku ?? '').includes(term),
+      (p) => normalizeText(p.name).includes(term) || normalizeText(p.sku ?? '').includes(term),
     );
   }, [products, q]);
 

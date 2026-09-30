@@ -55,6 +55,31 @@ import type { Customer, CustomerColorRecord } from '@/types';
 import { duplicateGroups } from './mergeCustomers';
 import { DuplicatesModal, MergePickerModal } from './MergeClientsModal';
 
+/** Ese WhatsApp ya es de otra ficha: el aviso con atajo para abrirla. */
+function DuplicatePhoneNotice({
+  dup,
+  onOpen,
+}: {
+  dup: { id: string; name: string } | null;
+  onOpen: (id: string) => void;
+}) {
+  if (!dup) return null;
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-xl border border-danger/30 bg-danger/10 p-3 text-sm">
+      <span className="text-danger">
+        Ese número ya es de <b>{dup.name}</b>.
+      </span>
+      <button
+        type="button"
+        onClick={() => onOpen(dup.id)}
+        className="shrink-0 rounded-lg bg-danger/20 px-2.5 py-1 text-xs font-medium text-danger hover:bg-danger/30"
+      >
+        Abrir ficha
+      </button>
+    </div>
+  );
+}
+
 /* ═══════════════════════════ Lista de clientes ═══════════════════════════ */
 
 interface ClientRow extends Customer {
@@ -112,6 +137,11 @@ export function ClientsPage() {
 
   // Grupos de contactos que parecen la misma persona (nombre/WhatsApp/email).
   const dupGroups = useMemo(() => duplicateGroups(all), [all]);
+  // Fichas que sobran: un grupo de 3 son 2 duplicados, no 1.
+  const dupCount = useMemo(
+    () => dupGroups.reduce((n, g) => n + g.length - 1, 0),
+    [dupGroups],
+  );
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -162,10 +192,10 @@ export function ClientsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {dupGroups.length > 0 && (
+          {dupCount > 0 && (
             <Button variant="ghost" onClick={() => setDupsOpen(true)}>
               <CopyCheck className="h-4 w-4" />
-              {dupGroups.length} duplicado{dupGroups.length > 1 ? 's' : ''}
+              {dupCount} duplicado{dupCount > 1 ? 's' : ''}
             </Button>
           )}
           <Button onClick={() => setCreateOpen(true)}>
@@ -401,7 +431,7 @@ export function ClientsPage() {
       <DuplicatesModal
         open={dupsOpen}
         onClose={() => setDupsOpen(false)}
-        customers={all}
+        groups={dupGroups}
       />
     </div>
   );
@@ -566,23 +596,13 @@ function CreateClientModal({
             setDup(null);
           }}
         />
-        {dup && (
-          <div className="flex items-center justify-between gap-2 rounded-xl border border-danger/30 bg-danger/10 p-3 text-sm">
-            <span className="text-danger">
-              Ese número ya es de <b>{dup.name}</b>.
-            </span>
-            <button
-              type="button"
-              onClick={() => {
-                onClose();
-                navigate(`${ROUTES.client}/${dup.id}`);
-              }}
-              className="shrink-0 rounded-lg bg-danger/20 px-2.5 py-1 text-xs font-medium text-danger hover:bg-danger/30"
-            >
-              Abrir ficha
-            </button>
-          </div>
-        )}
+        <DuplicatePhoneNotice
+          dup={dup}
+          onOpen={(id) => {
+            onClose();
+            navigate(`${ROUTES.client}/${id}`);
+          }}
+        />
         <Input
           label="Email"
           type="email"
@@ -1064,20 +1084,10 @@ function ClientForm({
             setDup(null);
           }}
         />
-        {dup && (
-          <div className="flex items-center justify-between gap-2 rounded-xl border border-danger/30 bg-danger/10 p-3 text-sm">
-            <span className="text-danger">
-              Ese número ya es de <b>{dup.name}</b>.
-            </span>
-            <button
-              type="button"
-              onClick={() => navigate(`${ROUTES.client}/${dup.id}`)}
-              className="shrink-0 rounded-lg bg-danger/20 px-2.5 py-1 text-xs font-medium text-danger hover:bg-danger/30"
-            >
-              Abrir ficha
-            </button>
-          </div>
-        )}
+        <DuplicatePhoneNotice
+          dup={dup}
+          onOpen={(id) => navigate(`${ROUTES.client}/${id}`)}
+        />
         <Input
           label="Email"
           type="email"

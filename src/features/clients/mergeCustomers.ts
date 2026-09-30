@@ -1,5 +1,6 @@
 import { batch, query } from '@/lib/db';
 import { phoneToWaDigits } from '@/lib/phone';
+import { normalizeText } from '@/lib/text';
 import type { Customer, ID } from '@/types';
 
 /**
@@ -74,19 +75,9 @@ export async function customerRefCounts(customerId: ID): Promise<RefCount[]> {
 
 /* ───────────────────────── Detección de duplicados ───────────────────────── */
 
-/** Normaliza texto: sin acentos, minúsculas, espacios colapsados. */
-function norm(s: string): string {
-  return s
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 /** Clave por nombre completo: "Ana Pau" == "ana  pau" == first=Ana last=Pau. */
 export function nameKey(first: string, last: string | null): string {
-  return norm(`${first ?? ''} ${last ?? ''}`);
+  return normalizeText(`${first} ${last ?? ''}`);
 }
 
 /**
@@ -97,6 +88,39 @@ export function nameKey(first: string, last: string | null): string {
 export function phoneKey(phone: string | null): string {
   const d = phoneToWaDigits(phone);
   return d.length >= 7 ? d.slice(-9) : '';
+}
+
+/** Email normalizado, o '' si no hay. */
+function emailKey(email: string | null): string {
+  return email ? normalizeText(email) : '';
+}
+
+export type ContactField = 'phone' | 'email';
+
+/**
+ * Datos de contacto del duplicado que la combinación descarta: los del
+ * principal ganan (a diferencia de las notas, que se conservan juntas), así que
+ * un teléfono o un email distinto se pierde y hay que avisarlo.
+ */
+export function discardedContact(keep: Customer, dup: Customer): ContactField[] {
+  const out: ContactField[] = [];
+  const kp = phoneKey(keep.phone);
+  const dp = phoneKey(dup.phone);
+  if (kp && dp && kp !== dp) out.push('phone');
+  const ke = emailKey(keep.email);
+  const de = emailKey(dup.email);
+  if (ke && de && ke !== de) out.push('email');
+  return out;
+}
+
+/**
+ * Dato de contacto que se contradice: los dos tienen valor y es distinto.
+ * Combinar en ese caso pierde uno, así que el par no se sugiere solo (en un
+ * salón, dos "Karen" con números distintos son dos personas) y cuando lo elige
+ * la usuaria se le avisa qué se descarta.
+ */
+export function contactConflict(a: Customer, b: Customer): ContactField | null {
+  return discardedContact(a, b)[0] ?? null;
 }
 
 /** Nombre de pila normalizado (primera palabra del nombre completo). */
@@ -125,6 +149,10 @@ function namesRelated(a: Customer, b: Customer): boolean {
  * mismo teléfono / email con nombres compatibles. Transitivo (A~B y B~C ⇒ un
  * solo grupo). Devuelve solo los grupos de 2 o más, con la ficha más completa
  * primero (la sugerida como principal).
+ *
+ * Ojo: al ser transitivo, una ficha sin teléfono puede unir dos que SÍ tienen
+ * números distintos. El grupo sirve para revisar, pero los pares combinables
+ * salen de `mergeablePairs`, no de todas las combinaciones del grupo.
  */
 export function duplicateGroups<T extends Customer>(list: T[]): T[][] {
   const parent = list.map((_, i) => i);
@@ -154,11 +182,9 @@ export function duplicateGroups<T extends Customer>(list: T[]): T[][] {
   for (const idxs of byName.values()) {
     for (let i = 0; i < idxs.length; i++) {
       for (let j = i + 1; j < idxs.length; j++) {
-        const x = list[idxs[i]];
-        const y = list[idxs[j]];
-        const px = phoneKey(x.phone);
-        const py = phoneKey(y.phone);
-        if (!px || !py || px === py) union(idxs[i], idxs[j]);
+        if (!contactConflict(list[idxs[i]], list[idxs[j]])) {
+          union(idxs[i], idxs[j]);
+        }
       }
     }
   }
@@ -173,7 +199,8 @@ export function duplicateGroups<T extends Customer>(list: T[]): T[][] {
   list.forEach((c, i) => {
     const p = phoneKey(c.phone);
     if (p) push(`p:${p}`, i);
-    if (c.email) push(`e:${norm(c.email)}`, i);
+    const e = emailKey(c.email);
+    if (e) push(`e:${e}`, i);
   });
   for (const idxs of buckets.values()) {
     for (let i = 0; i < idxs.length; i++) {
@@ -194,6 +221,21 @@ export function duplicateGroups<T extends Customer>(list: T[]): T[][] {
   return [...groups.values()]
     .filter((g) => g.length > 1)
     .map((g) => [...g].sort((x, y) => completeness(y) - completeness(x)));
+}
+
+/**
+ * Pares de un grupo que se pueden combinar sin perder datos: se descartan los
+ * que tienen teléfono o email contradictorio, porque el grupo es transitivo y
+ * puede haber unido a dos personas distintas a través de una ficha sin número.
+ */
+export function mergeablePairs<T extends Customer>(group: T[]): [T, T][] {
+  const out: [T, T][] = [];
+  for (let i = 0; i < group.length; i++) {
+    for (let j = i + 1; j < group.length; j++) {
+      if (!contactConflict(group[i], group[j])) out.push([group[i], group[j]]);
+    }
+  }
+  return out;
 }
 
 /** Qué tan completa está una ficha: se sugiere como principal la más completa. */
@@ -218,7 +260,7 @@ function joinText(a: string | null, b: string | null): string | null {
   const x = (a ?? '').trim();
   const y = (b ?? '').trim();
   if (!x) return y || null;
-  if (!y || norm(x).includes(norm(y))) return x;
+  if (!y || normalizeText(x).includes(normalizeText(y))) return x;
   return `${x}\n${y}`;
 }
 
@@ -250,6 +292,12 @@ export function mergedFields(keep: Customer, dup: Customer) {
 /**
  * Mueve todo lo del duplicado al principal, fusiona los campos y borra el
  * duplicado. Atómico.
+ *
+ * Las fichas llegan del listado, que puede tener minutos de antigüedad. Se
+ * releen antes de escribir por dos razones: no pisar con datos viejos lo que se
+ * editó en otra pestaña, y no reparentar citas y ventas hacia una ficha que
+ * mientras tanto dejó de existir (el UPDATE final no afectaría ninguna fila y
+ * quedarían huérfanas sin que nadie se enterara).
  */
 export async function mergeCustomers(
   keep: Customer,
@@ -258,12 +306,23 @@ export async function mergeCustomers(
   if (keep.id === dup.id) {
     throw new Error('No se puede combinar un contacto con él mismo.');
   }
-  if (keep.organization_id !== dup.organization_id) {
+
+  const [rows, tables] = await Promise.all([
+    query<Customer>('SELECT * FROM customer WHERE id IN (?, ?)', [keep.id, dup.id]),
+    customerRefTables(),
+  ]);
+  const keepNow = rows.find((c) => c.id === keep.id);
+  const dupNow = rows.find((c) => c.id === dup.id);
+  if (!keepNow || !dupNow) {
+    throw new Error(
+      'Una de las fichas ya no existe. Recargá la lista de clientes e intentá de nuevo.',
+    );
+  }
+  if (keepNow.organization_id !== dupNow.organization_id) {
     throw new Error('Los contactos son de organizaciones distintas.');
   }
 
-  const tables = await customerRefTables();
-  const f = mergedFields(keep, dup);
+  const f = mergedFields(keepNow, dupNow);
 
   // Orden importante: primero se mueven las referencias, después se borra el
   // duplicado y SOLO entonces se escriben los campos fusionados. Si el

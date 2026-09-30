@@ -8,7 +8,9 @@ import type { Customer } from '@/types';
 import {
   completeness,
   customerRefCounts,
+  discardedContact,
   duplicateGroups,
+  mergeablePairs,
   mergeCustomers,
   mergedFields,
   tableLabel,
@@ -42,6 +44,9 @@ export function MergeClientsModal({ open, a, b, onClose, onMerged }: MergeProps)
   });
 
   const result = useMemo(() => mergedFields(keep, dup), [keep, dup]);
+  // Las notas se conservan juntas, pero el teléfono y el email del duplicado se
+  // pierden: si no coinciden hay que decirlo antes de borrar la ficha.
+  const discarded = useMemo(() => discardedContact(keep, dup), [keep, dup]);
 
   const merge = useMutation({
     mutationFn: () => mergeCustomers(keep, dup),
@@ -128,6 +133,24 @@ export function MergeClientsModal({ open, a, b, onClose, onMerged }: MergeProps)
           )}
         </div>
 
+        {discarded.length > 0 && (
+          <div className="flex gap-2 rounded-xl border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
+            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              <p className="font-medium">
+                Estos datos de la ficha duplicada se van a perder:
+              </p>
+              <ul className="mt-1 space-y-0.5 text-danger/85">
+                {discarded.includes('phone') && <li>WhatsApp {dup.phone}</li>}
+                {discarded.includes('email') && <li>Email {dup.email}</li>}
+              </ul>
+              <p className="mt-1 text-xs text-danger/70">
+                Si son dos personas distintas, cancelá y no combines.
+              </p>
+            </div>
+          </div>
+        )}
+
         {merge.isError && (
           <p className="flex items-center gap-2 text-sm text-danger">
             <TriangleAlert className="h-4 w-4" />
@@ -213,13 +236,13 @@ function Field({ label, value }: { label: string; value: string | null }) {
 export function DuplicatesModal({
   open,
   onClose,
-  customers,
+  groups,
 }: {
   open: boolean;
   onClose: () => void;
-  customers: Customer[];
+  /** Grupos ya detectados por el llamador (la lista los necesita para el contador). */
+  groups: Customer[][];
 }) {
-  const groups = useMemo(() => duplicateGroups(customers), [customers]);
   const [pair, setPair] = useState<[Customer, Customer] | null>(null);
 
   return (
@@ -253,21 +276,7 @@ export function DuplicatesModal({
                     </li>
                   ))}
                 </ul>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {pairsOf(g).map(([x, y]) => (
-                    <Button
-                      key={`${x.id}-${y.id}`}
-                      variant="ghost"
-                      className="text-xs"
-                      onClick={() => setPair([x, y])}
-                    >
-                      <Merge className="h-3.5 w-3.5" />
-                      {g.length > 2
-                        ? `Combinar estos dos: ${x.first_name} · ${y.first_name}`
-                        : 'Combinar'}
-                    </Button>
-                  ))}
-                </div>
+                <GroupActions group={g} onPick={setPair} />
               </div>
             ))}
           </div>
@@ -292,13 +301,49 @@ export function DuplicatesModal({
   );
 }
 
-/** Todos los pares de un grupo (los grupos casi siempre son de 2). */
-function pairsOf<T>(g: T[]): [T, T][] {
-  const out: [T, T][] = [];
-  for (let i = 0; i < g.length; i++) {
-    for (let j = i + 1; j < g.length; j++) out.push([g[i], g[j]]);
+/**
+ * Cómo se nombra una ficha cuando hay que distinguirla de otra homónima: el
+ * nombre no alcanza, lo que las diferencia es el dato de contacto.
+ */
+const describe = (c: Customer): string =>
+  `${fullName(c.first_name, c.last_name)} · ${c.phone || c.email || 'sin contacto'}`;
+
+/**
+ * Botones de combinación de un grupo. Solo se ofrecen los pares sin datos de
+ * contacto contradictorios: el agrupado es transitivo, así que una ficha sin
+ * teléfono puede haber unido a dos personas con números distintos.
+ */
+function GroupActions({
+  group,
+  onPick,
+}: {
+  group: Customer[];
+  onPick: (pair: [Customer, Customer]) => void;
+}) {
+  const pairs = mergeablePairs(group);
+  if (pairs.length === 0) {
+    return (
+      <p className="mt-2 text-xs text-white/40">
+        Tienen WhatsApp o email distintos: revisá si de verdad son la misma
+        persona y combinalas desde la ficha.
+      </p>
+    );
   }
-  return out;
+  return (
+    <div className="mt-2 flex flex-wrap gap-2">
+      {pairs.map(([x, y]) => (
+        <Button
+          key={`${x.id}-${y.id}`}
+          variant="ghost"
+          className="text-xs"
+          onClick={() => onPick([x, y])}
+        >
+          <Merge className="h-3.5 w-3.5" />
+          {group.length > 2 ? `Combinar ${describe(x)} ↔ ${describe(y)}` : 'Combinar'}
+        </Button>
+      ))}
+    </div>
+  );
 }
 
 /* ═════════════ Buscar con quién combinar (desde la ficha) ═════════════ */
@@ -318,12 +363,23 @@ export function MergePickerModal({
   const [target, setTarget] = useState<Customer | null>(null);
   const others = useCustomers();
 
+  const all = useMemo(
+    () => (others.data ?? []).filter((c) => c.id !== customer.id),
+    [others.data, customer.id],
+  );
+
+  // Detectar duplicados recorre toda la libreta: se calcula una sola vez y no
+  // en cada tecla, que además solo usa el filtro por texto.
+  const suggested = useMemo(
+    () =>
+      duplicateGroups([customer, ...all])
+        .find((g) => g.some((c) => c.id === customer.id))
+        ?.filter((c) => c.id !== customer.id) ?? [],
+    [customer, all],
+  );
+
   const list = useMemo(() => {
-    const all = (others.data ?? []).filter((c) => c.id !== customer.id);
     const q = search.trim().toLowerCase();
-    const suggested = duplicateGroups([customer, ...all])
-      .find((g) => g.some((c) => c.id === customer.id))
-      ?.filter((c) => c.id !== customer.id) ?? [];
     if (!q) return suggested.slice(0, 20);
     return all
       .filter((c) =>
@@ -332,7 +388,7 @@ export function MergePickerModal({
           .includes(q),
       )
       .slice(0, 20);
-  }, [others.data, customer, search]);
+  }, [all, suggested, search]);
 
   return (
     <>
