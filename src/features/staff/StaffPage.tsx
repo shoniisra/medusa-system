@@ -37,6 +37,63 @@ import type {
  */
 const ADJUST_COMMISSION_MARK = '[Ajuste de comisión]';
 
+/** Color de reserva para colaboradores sin color asignado. */
+const NO_COLOR = '#64748b';
+
+/** El mismo color con opacidad, para fondos y bordes teñidos (#RGB o #RRGGBB). */
+function tint(hex: string, alpha: number): string {
+  const h = hex.replace('#', '');
+  const full = h.length === 3 ? h.replace(/./g, (c) => c + c) : h;
+  if (full.length !== 6) return hex;
+  const a = Math.round(alpha * 255)
+    .toString(16)
+    .padStart(2, '0');
+  return `#${full}${a}`;
+}
+
+/** Punto con el color del colaborador, para identificarlo en filas y listas. */
+function StaffDot({ color }: { color: string | null }) {
+  const c = color || NO_COLOR;
+  return (
+    <span
+      className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+      style={{ backgroundColor: c, boxShadow: `0 0 0 3px ${tint(c, 0.25)}` }}
+    />
+  );
+}
+
+/** Iniciales del colaborador teñidas con su color. */
+function StaffInitials({
+  first,
+  last,
+  color,
+}: {
+  first: string;
+  last: string | null;
+  color: string | null;
+}) {
+  const c = color || NO_COLOR;
+  // Toma la inicial de las dos primeras palabras del nombre completo: algunos
+  // colaboradores tienen el nombre y el apellido juntos en `first_name`.
+  const words = `${first ?? ''} ${last ?? ''}`.trim().split(/\s+/);
+  const initials =
+    ((words[0]?.[0] ?? '') + (words[1]?.[0] ?? '')).toUpperCase() || '?';
+  return (
+    <span
+      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold"
+      style={{
+        backgroundColor: tint(c, 0.22),
+        color: c,
+        borderWidth: 1,
+        borderStyle: 'solid',
+        borderColor: tint(c, 0.55),
+      }}
+    >
+      {initials}
+    </span>
+  );
+}
+
 export function StaffPage() {
   const orgId = useOrgId();
   const [advanceOpen, setAdvanceOpen] = useState(false);
@@ -146,23 +203,40 @@ function TeamDailySection({ orgId }: { orgId: string }) {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {members.map((s) => {
             const g = byStaff.get(s.id);
+            const c = s.color || NO_COLOR;
             return (
               <div
                 key={s.id}
-                className="flex flex-col rounded-xl border border-white/10 p-3"
+                className="flex flex-col rounded-xl border p-3"
+                style={{
+                  borderColor: tint(c, 0.4),
+                  borderLeftWidth: 3,
+                  borderLeftColor: c,
+                  background: `linear-gradient(135deg, ${tint(c, 0.18)}, transparent 65%)`,
+                }}
               >
                 <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-white">
-                      {fullName(s.first_name, s.last_name)}
-                    </p>
-                    <p className="text-xs text-white/40">
-                      {s.employee_code ?? 'Sin código'} · Ciclo{' '}
-                      {s.default_pay_cycle}
-                    </p>
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <StaffInitials
+                      first={s.first_name}
+                      last={s.last_name}
+                      color={s.color}
+                    />
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-white">
+                        {fullName(s.first_name, s.last_name)}
+                      </p>
+                      <p className="text-xs text-white/40">
+                        {s.employee_code ?? 'Sin código'} · Ciclo{' '}
+                        {s.default_pay_cycle}
+                      </p>
+                    </div>
                   </div>
                   {g ? (
-                    <span className="kpi-gold shrink-0 text-sm">
+                    <span
+                      className="shrink-0 text-sm font-semibold"
+                      style={{ color: c }}
+                    >
                       {money(g.total)}
                     </span>
                   ) : (
@@ -173,12 +247,19 @@ function TeamDailySection({ orgId }: { orgId: string }) {
                 </div>
 
                 {g ? (
-                  <ul className="mt-3 divide-y divide-white/5 border-t border-white/5 pt-1">
+                  <ul
+                    className="mt-3 divide-y divide-white/5 border-t pt-1"
+                    style={{ borderTopColor: tint(c, 0.35) }}
+                  >
                     {g.items.map((it, i) => (
                       <li
                         key={i}
-                        className="flex items-center justify-between gap-3 py-1.5 text-sm"
+                        className="flex items-center gap-2 py-1.5 text-sm"
                       >
+                        <span
+                          className="h-1.5 w-1.5 shrink-0 rounded-full"
+                          style={{ backgroundColor: c }}
+                        />
                         <span className="min-w-0 flex-1 truncate text-white/80">
                           {it.service}
                           <span className="text-white/40">
@@ -210,6 +291,7 @@ function TeamDailySection({ orgId }: { orgId: string }) {
 interface LiquidationRow {
   staff_member_id: string;
   staff_name: string;
+  color: string | null;
   commission_total: number;
   advances_total: number;
   net_payable: number;
@@ -252,9 +334,10 @@ function LiquidationSection({ orgId }: { orgId: string }) {
     enabled: !!branchId && !!orgId,
     queryFn: async (): Promise<LiquidationRow[]> => {
       const [staff, commissions, advances] = await Promise.all([
-        query<{ id: string; name: string }>(
+        query<{ id: string; name: string; color: string | null }>(
           `SELECT id,
-                  first_name || CASE WHEN last_name IS NOT NULL THEN ' ' || last_name ELSE '' END AS name
+                  first_name || CASE WHEN last_name IS NOT NULL THEN ' ' || last_name ELSE '' END AS name,
+                  color
              FROM staff_member
             WHERE organization_id = ? AND active = 1
             ORDER BY first_name`,
@@ -290,6 +373,7 @@ function LiquidationSection({ orgId }: { orgId: string }) {
         return {
           staff_member_id: s.id,
           staff_name: s.name,
+          color: s.color,
           commission_total,
           advances_total,
           net_payable:
@@ -356,8 +440,21 @@ function LiquidationSection({ orgId }: { orgId: string }) {
             </thead>
             <tbody className="divide-y divide-white/5">
               {rows.map((r) => (
-                <tr key={r.staff_member_id}>
-                  <td className="py-2 text-white">{r.staff_name}</td>
+                <tr
+                  key={r.staff_member_id}
+                  style={{
+                    background: `linear-gradient(90deg, ${tint(
+                      r.color || NO_COLOR,
+                      0.16,
+                    )}, transparent 45%)`,
+                  }}
+                >
+                  <td className="py-2 text-white">
+                    <span className="flex items-center gap-2">
+                      <StaffDot color={r.color} />
+                      <span className="truncate">{r.staff_name}</span>
+                    </span>
+                  </td>
                   <td className="py-2 text-right text-white/70">
                     {money(r.commission_total)}
                   </td>
@@ -396,6 +493,7 @@ function LiquidationSection({ orgId }: { orgId: string }) {
 interface CommissionBalanceRow {
   staff_member_id: string;
   staff_name: string;
+  color: string | null;
   accrued: number;
   advances: number;
   paid: number;
@@ -419,9 +517,10 @@ function CommissionBalanceSection({ orgId }: { orgId: string }) {
     queryFn: async (): Promise<CommissionBalanceRow[]> => {
       const today = todayISO();
       const [staff, accrued, advances, payments] = await Promise.all([
-        query<{ id: string; name: string }>(
+        query<{ id: string; name: string; color: string | null }>(
           `SELECT id,
-                  first_name || CASE WHEN last_name IS NOT NULL THEN ' ' || last_name ELSE '' END AS name
+                  first_name || CASE WHEN last_name IS NOT NULL THEN ' ' || last_name ELSE '' END AS name,
+                  color
              FROM staff_member
             WHERE organization_id = ? AND active = 1
             ORDER BY first_name`,
@@ -468,6 +567,7 @@ function CommissionBalanceSection({ orgId }: { orgId: string }) {
         return {
           staff_member_id: s.id,
           staff_name: s.name,
+          color: s.color,
           accrued: acc,
           advances: adv,
           paid: pd,
@@ -501,8 +601,21 @@ function CommissionBalanceSection({ orgId }: { orgId: string }) {
             </thead>
             <tbody className="divide-y divide-white/5">
               {rows.map((r) => (
-                <tr key={r.staff_member_id}>
-                  <td className="py-2 text-white">{r.staff_name}</td>
+                <tr
+                  key={r.staff_member_id}
+                  style={{
+                    background: `linear-gradient(90deg, ${tint(
+                      r.color || NO_COLOR,
+                      0.16,
+                    )}, transparent 45%)`,
+                  }}
+                >
+                  <td className="py-2 text-white">
+                    <span className="flex items-center gap-2">
+                      <StaffDot color={r.color} />
+                      <span className="truncate">{r.staff_name}</span>
+                    </span>
+                  </td>
                   <td className="py-2 text-right text-white/70">
                     {money(r.accrued)}
                   </td>
@@ -982,6 +1095,7 @@ function AdvanceModal({
   const isCash = account === 'cash';
   const sessionId = session.data?.id ?? null;
   const needsSession = isCash && !sessionId;
+  const selected = staff.data?.find((s) => s.id === staffId) ?? null;
 
   const save = useMutation({
     mutationFn: async () => {
@@ -1110,6 +1224,27 @@ function AdvanceModal({
             </option>
           ))}
         </Select>
+        {selected && (
+          <div
+            className="flex items-center gap-2.5 rounded-xl border p-2.5"
+            style={{
+              borderColor: tint(selected.color || NO_COLOR, 0.4),
+              background: `linear-gradient(135deg, ${tint(
+                selected.color || NO_COLOR,
+                0.18,
+              )}, transparent 70%)`,
+            }}
+          >
+            <StaffInitials
+              first={selected.first_name}
+              last={selected.last_name}
+              color={selected.color}
+            />
+            <p className="truncate text-sm font-medium text-white">
+              {fullName(selected.first_name, selected.last_name)}
+            </p>
+          </div>
+        )}
         <Input
           label="Monto"
           type="number"

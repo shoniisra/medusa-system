@@ -1,5 +1,5 @@
-import { NavLink } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { NavLink } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import {
   LayoutDashboard,
   Wallet,
@@ -12,39 +12,49 @@ import {
   Settings,
   BellRing,
   ShoppingCart,
-} from 'lucide-react';
-import { ROUTES, APP_NAME } from '@/config/constants';
-import { query } from '@/lib/db';
-import { useBranchId } from '@/store/session';
-import { cn } from '@/lib/cn';
+} from "lucide-react";
+import { ROUTES, APP_NAME } from "@/config/constants";
+import { query } from "@/lib/db";
+import { useBranchId } from "@/store/session";
+import { cn } from "@/lib/cn";
 
 /** Navegación por secciones; `title` opcional pinta un encabezado de grupo. */
 const NAV_SECTIONS: {
   title?: string;
-  items: { to: string; label: string; icon: typeof LayoutDashboard; end?: boolean }[];
+  items: {
+    to: string;
+    label: string;
+    icon: typeof LayoutDashboard;
+    end?: boolean;
+  }[];
 }[] = [
   {
     items: [
-      { to: ROUTES.dashboard, label: 'Dashboard', icon: LayoutDashboard, end: true },
-      { to: ROUTES.pos, label: 'POS (venta sin cita)', icon: ShoppingCart },
+      {
+        to: ROUTES.dashboard,
+        label: "Dashboard",
+        icon: LayoutDashboard,
+        end: true,
+      },
+      { to: ROUTES.pos, label: "POS (venta sin cita)", icon: ShoppingCart },
     ],
   },
   {
-    title: 'Citas Agendadas',
+    title: "Citas Agendadas",
     items: [
-      { to: ROUTES.calendar, label: 'Agenda', icon: CalendarDays },
-      { to: ROUTES.calendarView, label: 'Calendario', icon: CalendarRange },
-      { to: ROUTES.tasks, label: 'Tareas', icon: ClipboardList },
-      { to: ROUTES.reminders, label: 'Recordatorios', icon: BellRing },
+      { to: ROUTES.calendar, label: "Agenda", icon: CalendarDays },
+      { to: ROUTES.calendarView, label: "Calendario", icon: CalendarRange },
+      { to: ROUTES.tasks, label: "Tareas", icon: ClipboardList },
+      { to: ROUTES.reminders, label: "Recordatorios", icon: BellRing },
     ],
   },
   {
     items: [
-      { to: ROUTES.cashflow, label: 'Finanzas', icon: Wallet },
-      { to: ROUTES.staff, label: 'Personal', icon: Users },
-      { to: ROUTES.clients, label: 'Clientes', icon: Contact },
-      { to: ROUTES.invoices, label: 'Facturación', icon: FileText },
-      { to: ROUTES.settings, label: 'Configuración', icon: Settings },
+      { to: ROUTES.cashflow, label: "Finanzas", icon: Wallet },
+      { to: ROUTES.staff, label: "Personal", icon: Users },
+      { to: ROUTES.clients, label: "Clientes", icon: Contact },
+      { to: ROUTES.invoices, label: "Facturación", icon: FileText },
+      { to: ROUTES.settings, label: "Configuración", icon: Settings },
     ],
   },
 ];
@@ -53,7 +63,7 @@ const NAV_SECTIONS: {
 function useOverdueCount(): number {
   const branchId = useBranchId();
   const q = useQuery({
-    queryKey: ['overdue-count', branchId],
+    queryKey: ["overdue-count", branchId],
     enabled: !!branchId,
     refetchInterval: 5 * 60 * 1000,
     queryFn: async () => {
@@ -73,7 +83,7 @@ function useOverdueCount(): number {
 function useTomorrowCount(): number {
   const branchId = useBranchId();
   const q = useQuery({
-    queryKey: ['tomorrow-count', branchId],
+    queryKey: ["tomorrow-count", branchId],
     enabled: !!branchId,
     refetchInterval: 5 * 60 * 1000,
     queryFn: async () => {
@@ -98,9 +108,9 @@ export function Sidebar() {
         <img
           src="/medusa-logo.jpg"
           alt="Medusa Estudio"
-          className="h-8 w-8 rounded-lg"
+          className="h-16 w-16 rounded-lg"
         />
-        <span className="brand-script text-3xl leading-none">{APP_NAME}</span>
+        <span className="brand-script text-2xl leading-none">{APP_NAME}</span>
       </div>
 
       <nav className="flex-1 space-y-4 px-3">
@@ -118,10 +128,10 @@ export function Sidebar() {
                 end={end}
                 className={({ isActive }) =>
                   cn(
-                    'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors',
+                    "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors",
                     isActive
-                      ? 'bg-gold/10 text-gold-200 shadow-gold-glow'
-                      : 'text-white/60 hover:bg-white/5 hover:text-white',
+                      ? "bg-gold/10 text-gold-200 shadow-gold-glow"
+                      : "text-white/60 hover:bg-white/5 hover:text-white",
                   )
                 }
               >
