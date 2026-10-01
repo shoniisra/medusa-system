@@ -131,8 +131,17 @@ export interface BankAccount {
 export interface Customer {
   id: ID;
   organization_id: ID;
+  /** Nombre real: el que sirve para identificar y para facturar. */
   first_name: string;
   last_name: string | null;
+  /** Alias: como se le dice en el salón ("Mica", "la vecina de Ana"). */
+  nickname: string | null;
+  /**
+   * Nombre tal como está en la agenda del teléfono (con el que se importó).
+   * Se guarda aparte para poder encontrar ahí el contacto incluso después de
+   * corregir el nombre real.
+   */
+  imported_name: string | null;
   phone: string | null; // WhatsApp
   email: string | null;
   birth_date: ISODate | null; // cumpleaños

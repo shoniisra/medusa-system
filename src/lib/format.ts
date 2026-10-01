@@ -65,6 +65,25 @@ export const fullName = (
   last?: string | null,
 ): string => (last ? `${first} ${last}` : first);
 
+/**
+ * Nombre de un cliente para mostrar: nombre real y, entre paréntesis, el alias
+ * cuando lo tiene.
+ *
+ * Hace falta porque los contactos entraron con el nombre de la agenda ("Mica",
+ * "Karen uñas") y después se les pone el nombre real para facturar: sin el
+ * alias al lado, la lista deja de ser reconocible. `fullName` sigue siendo el
+ * de estilistas y usuarios, que no tienen alias.
+ */
+export const customerName = (c: {
+  first_name: string;
+  last_name?: string | null;
+  nickname?: string | null;
+}): string => {
+  const real = fullName(c.first_name, c.last_name);
+  const alias = c.nickname?.trim();
+  return alias && alias !== real ? `${real} (${alias})` : real;
+};
+
 /** Date → "YYYY-MM-DDTHH:mm:ss" en hora local (naive, sin zona). */
 export const toLocalNaive = (d: Date): string => {
   const p = (n: number) => String(n).padStart(2, '0');

@@ -10,6 +10,7 @@ import { Badge, Button } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { invalidateAppointments } from '@/lib/queryClient';
 import type { AppointmentStatus } from '@/types';
+import { customerNameSql } from '@/features/clients/customerNameSql';
 
 /** Fila de cita usada por la agenda (lista/calendario) y el tablero de tareas. */
 export interface AppointmentRow {
@@ -167,7 +168,7 @@ export function useAppointments(from: string, to: string) {
         `SELECT a.id, a.start_at, a.end_at, a.status, a.notes,
                 a.google_calendar_id, a.google_calendar_event_id,
                 a.google_color_hex,
-                c.first_name || CASE WHEN c.last_name IS NOT NULL THEN ' ' || c.last_name ELSE '' END AS customer_name,
+                ${customerNameSql()} AS customer_name,
                 c.phone,
                 s.id AS staff_id,
                 s.first_name || CASE WHEN s.last_name IS NOT NULL THEN ' ' || s.last_name ELSE '' END AS staff_name,

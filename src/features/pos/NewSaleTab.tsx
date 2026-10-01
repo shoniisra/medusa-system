@@ -7,13 +7,13 @@ import {
   UserRound,
   X,
 } from 'lucide-react';
-import { batch, execute, type Stmt } from '@/lib/db';
+import { batch, execute, queryOne, type Stmt } from '@/lib/db';
 import {
   PaymentTargetFields,
   usePaymentTarget,
 } from '@/features/cashflow/accounts';
 import { searchCustomers } from '@/features/clients/customerSearch';
-import { genId, money, fullName } from '@/lib/format';
+import { genId, money, customerName, fullName } from '@/lib/format';
 import { useSession, useBranchId, useOrgId } from '@/store/session';
 import { usePosDraft } from '@/store/posDraft';
 import { useCustomers, useServices, useProducts, useStaff } from './useCatalog';
@@ -32,6 +32,12 @@ import {
   phoneOwner,
 } from '@/features/clients/customerLookup';
 import { DuplicatePhoneNotice } from '@/features/clients/DuplicatePhoneNotice';
+import {
+  fillCustomerGaps,
+  gapFillSummary,
+  renamedName,
+  type CustomerPatch,
+} from '@/features/clients/mergeCustomers';
 import { validatePhone } from '@/lib/phone';
 import { CONSUMIDOR_FINAL_LABEL } from '@/config/constants';
 import { invalidateCustomers, invalidateSales } from '@/lib/queryClient';
@@ -46,6 +52,7 @@ import {
   DetailRow,
 } from '@/components/ui';
 import type {
+  Customer,
   DraftCommission,
   DraftSaleItem,
   Product,
@@ -61,6 +68,7 @@ export function NewSaleTab() {
   const orgId = useOrgId();
   const branchId = useBranchId();
   const qc = useQueryClient();
+  const toast = useToast();
 
   const draft = usePosDraft();
   const services = useServices();
@@ -108,6 +116,45 @@ export function NewSaleTab() {
     setCustomerId('');
     setTimeout(() => phoneRef.current?.focus(), 0);
   }
+
+  /** Lo escrito en el alta rápida, en la forma en que se guarda. */
+  const typedPatch: CustomerPatch = {
+    first_name: firstName.trim(),
+    last_name: lastName.trim() || null,
+    phone: phone.trim() || null,
+  };
+
+  /** Nombre que quedaría en la ficha del número repetido si se la usa. */
+  const renameTo = phoneTaken ? renamedName(phoneTaken, typedPatch) : null;
+
+  /**
+   * El número ya tiene ficha: se usa esa para la venta y se le pone el nombre
+   * que se acaba de escribir (el viejo baja a alias, ver `fillCustomerGaps`).
+   * La fila se relee porque `phoneTaken` sale del cache de clientes.
+   */
+  const useExistingClient = useMutation({
+    mutationFn: async () => {
+      if (!phoneTaken) return null;
+      const row = await queryOne<Customer>(
+        'SELECT * FROM customer WHERE id = ?',
+        [phoneTaken.id],
+      );
+      if (!row) throw new Error('Esa ficha ya no existe. Recargá la pantalla.');
+      const gap = fillCustomerGaps(row, typedPatch);
+      if (gap) await batch([gap.stmt]);
+      return gap;
+    },
+    onSuccess: (gap) => {
+      invalidateCustomers(qc, orgId);
+      pickExisting(phoneTaken!);
+      toast.success(
+        `Ficha de ${gap?.renamedFrom ? renameTo : customerName(phoneTaken!)}`,
+        gapFillSummary(gap),
+      );
+    },
+    onError: (e: Error) =>
+      toast.error('No se pudo usar ese contacto', e.message),
+  });
   function clearClient() {
     setNewClient(false);
     setCustomerId('');
@@ -232,10 +279,9 @@ export function NewSaleTab() {
                   <p className="text-sm font-medium text-white">
                     {newClient
                       ? fullName(firstName, lastName) || 'Cliente nuevo'
-                      : fullName(
-                          selectedCustomer?.first_name ?? '',
-                          selectedCustomer?.last_name,
-                        )}
+                      : selectedCustomer
+                        ? customerName(selectedCustomer)
+                        : ''}
                   </p>
                   <p className="text-xs text-white/40">
                     {newClient
@@ -281,7 +327,7 @@ export function NewSaleTab() {
                         className="flex w-full items-center justify-between gap-3 px-3 py-3.5 text-left hover:bg-white/10"
                       >
                         <span className="text-sm text-white/90">
-                          {fullName(c.first_name, c.last_name)}
+                          {customerName(c)}
                         </span>
                         {c.phone && (
                           <span className="text-xs text-white/40">{c.phone}</span>
@@ -328,7 +374,9 @@ export function NewSaleTab() {
               />
               <DuplicatePhoneNotice
                 owner={phoneTaken}
-                onUse={() => phoneTaken && pickExisting(phoneTaken)}
+                renameTo={renameTo}
+                busy={useExistingClient.isPending}
+                onUse={() => useExistingClient.mutate()}
                 useHint="Usá esa ficha para esta venta en vez de crear un contacto nuevo."
               />
             </div>
@@ -448,11 +496,11 @@ export function NewSaleTab() {
         <ConfirmSalePosModal
           orgId={orgId}
           branchId={branchId}
-          customerName={
+          customerLabel={
             newClient
               ? fullName(firstName, lastName) || CONSUMIDOR_FINAL_LABEL
               : selectedCustomer
-                ? fullName(selectedCustomer.first_name, selectedCustomer.last_name)
+                ? customerName(selectedCustomer)
                 : CONSUMIDOR_FINAL_LABEL
           }
           customerId={customerId || null}
@@ -488,7 +536,7 @@ export function NewSaleTab() {
 function ConfirmSalePosModal({
   orgId,
   branchId,
-  customerName,
+  customerLabel,
   customerId,
   newClient,
   items,
@@ -501,7 +549,7 @@ function ConfirmSalePosModal({
 }: {
   orgId: string;
   branchId: string;
-  customerName: string;
+  customerLabel: string;
   customerId: string | null;
   newClient: { firstName: string; lastName: string; phone: string } | null;
   items: DraftSaleItem[];
@@ -535,7 +583,7 @@ function ConfirmSalePosModal({
           const hit = await findCustomerByPhone(orgId, newClient.phone);
           if (hit)
             throw new Error(
-              `Ese número ya es de ${fullName(hit.first_name, hit.last_name)}. Usá ese contacto en vez de crear uno nuevo.`,
+              `Ese número ya es de ${customerName(hit)}. Usá ese contacto en vez de crear uno nuevo.`,
             );
         }
         custId = genId();
@@ -642,7 +690,7 @@ function ConfirmSalePosModal({
     onSuccess: () => {
       toast.success(
         'Venta registrada',
-        `${customerName || 'Consumidor final'} · ${money(total)}`,
+        `${customerLabel || 'Consumidor final'} · ${money(total)}`,
       );
       onDone();
     },
@@ -662,7 +710,7 @@ function ConfirmSalePosModal({
         <div className="space-y-1 rounded-xl bg-white/5 p-3 text-sm">
           <div className="flex justify-between text-white/60">
             <span>Cliente</span>
-            <span className="text-white/80">{customerName}</span>
+            <span className="text-white/80">{customerLabel}</span>
           </div>
           <div className="flex justify-between border-t border-white/10 pt-1 font-medium text-white">
             <span>Total a cobrar</span>

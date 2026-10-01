@@ -9,6 +9,7 @@ import { cn } from '@/lib/cn';
 import { NO_CHARGE_MARK, ymd } from '@/features/calendar/appointmentBoard';
 import type { AppointmentStatus } from '@/types';
 import { invalidateAppointments } from '@/lib/queryClient';
+import { customerNameSql } from '@/features/clients/customerNameSql';
 
 /** Cita vencida pendiente de cerrar (reservada o atendiendo de un día pasado). */
 export interface OverdueRow {
@@ -38,7 +39,7 @@ export function useOverduePending() {
     queryFn: () =>
       query<OverdueRow>(
         `SELECT a.id, a.start_at, a.status,
-                c.first_name || CASE WHEN c.last_name IS NOT NULL THEN ' ' || c.last_name ELSE '' END AS customer_name,
+                ${customerNameSql()} AS customer_name,
                 COALESCE(sv.name, ai.category) AS service_name,
                 s.first_name || CASE WHEN s.last_name IS NOT NULL THEN ' ' || s.last_name ELSE '' END AS staff_name,
                 (SELECT COALESCE(SUM(p.amount), 0) FROM payment p

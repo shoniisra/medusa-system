@@ -27,6 +27,7 @@ import { query, queryOne, batch, execute, type Stmt } from '@/lib/db';
 import {
   genId,
   money,
+  customerName,
   fullName,
   toLocalNaive,
   dateShort,
@@ -90,6 +91,8 @@ import { DuplicatePhoneNotice } from '@/features/clients/DuplicatePhoneNotice';
 import { MergeClientsModal } from '@/features/clients/MergeClientsModal';
 import {
   fillCustomerGaps,
+  gapFillSummary,
+  renamedName,
   type CustomerPatch,
 } from '@/features/clients/mergeCustomers';
 import { validatePhone } from '@/lib/phone';
@@ -114,6 +117,7 @@ import type {
   PaymentMethod,
   Product,
 } from '@/types';
+import { customerNameSql } from '@/features/clients/customerNameSql';
 
 export function AppointmentPage() {
   const { id } = useParams();
@@ -309,6 +313,46 @@ function NewAppointment() {
     setClientSearch('');
   }
 
+  /** Lo escrito en el alta rápida, en la forma en que se guarda. */
+  const typedPatch: CustomerPatch = {
+    first_name: firstName.trim(),
+    last_name: lastName.trim() || null,
+    phone: phone.trim() || null,
+  };
+
+  /** Nombre que quedaría en la ficha del número repetido si se la usa. */
+  const renameTo = phoneTaken ? renamedName(phoneTaken, typedPatch) : null;
+
+  /**
+   * El número ya tiene ficha: en vez de hacer borrar y buscar a mano, se usa esa
+   * y se le pone el nombre que se acaba de escribir (el viejo baja a alias, ver
+   * `fillCustomerGaps`). La fila se relee: `phoneTaken` sale del cache de
+   * clientes y podría tener minutos.
+   */
+  const useExistingClient = useMutation({
+    mutationFn: async () => {
+      if (!phoneTaken) return null;
+      const row = await queryOne<Customer>(
+        'SELECT * FROM customer WHERE id = ?',
+        [phoneTaken.id],
+      );
+      if (!row) throw new Error('Esa ficha ya no existe. Recargá la pantalla.');
+      const gap = fillCustomerGaps(row, typedPatch);
+      if (gap) await batch([gap.stmt]);
+      return gap;
+    },
+    onSuccess: (gap) => {
+      invalidateCustomers(qc, orgId);
+      pickExisting(phoneTaken!);
+      toast.success(
+        `Ficha de ${gap?.renamedFrom ? renameTo : customerName(phoneTaken!)}`,
+        gapFillSummary(gap),
+      );
+    },
+    onError: (e: Error) =>
+      toast.error('No se pudo usar ese contacto', e.message),
+  });
+
   function startNewClient() {
     const parts = clientSearch.trim().split(/\s+/).filter(Boolean);
     setFirstName(parts[0] ?? '');
@@ -333,7 +377,7 @@ function NewAppointment() {
         const hit = await findCustomerByPhone(orgId, ph);
         if (hit) {
           throw new Error(
-            `Ese número ya es de ${fullName(hit.first_name, hit.last_name)}. Usá ese contacto en vez de crear uno nuevo.`,
+            `Ese número ya es de ${customerName(hit)}. Usá ese contacto en vez de crear uno nuevo.`,
           );
         }
       }
@@ -349,6 +393,8 @@ function NewAppointment() {
         organization_id: orgId,
         first_name: fn,
         last_name: lastName.trim() || null,
+        nickname: null,
+        imported_name: null,
         phone: ph || null,
         email: null,
         birth_date: null,
@@ -375,7 +421,7 @@ function NewAppointment() {
       setCustomerId(row.id);
       setClientSearch('');
       setError('');
-      toast.success('Cliente creado', fullName(row.first_name, row.last_name));
+      toast.success('Cliente creado', customerName(row));
     },
     onError: (e) => {
       const msg =
@@ -579,7 +625,7 @@ function NewAppointment() {
         const hit = await findCustomerByPhone(orgId, newPhone);
         if (hit) {
           throw new Error(
-            `Ese número ya es de ${fullName(hit.first_name, hit.last_name)}. Usá ese contacto en vez de crear uno nuevo.`,
+            `Ese número ya es de ${customerName(hit)}. Usá ese contacto en vez de crear uno nuevo.`,
           );
         }
       }
@@ -596,10 +642,9 @@ function NewAppointment() {
 
       const clientLabel = newClient
         ? fullName(firstName, lastName)
-        : fullName(
-            selectedCustomer?.first_name ?? '',
-            selectedCustomer?.last_name,
-          );
+        : selectedCustomer
+          ? customerName(selectedCustomer)
+          : '';
 
       // Google Calendar: se sincroniza siempre que esté configurado. La cita se
       // guarda igual si Google falla; el evento es un extra.
@@ -747,10 +792,9 @@ function NewAppointment() {
         `${
           newClient
             ? fullName(firstName, lastName)
-            : fullName(
-                selectedCustomer?.first_name ?? '',
-                selectedCustomer?.last_name,
-              )
+            : selectedCustomer
+              ? customerName(selectedCustomer)
+              : ''
         } · ${dayLabel(date).dm} ${time}`,
       );
       navigate(ROUTES.calendar);
@@ -1120,10 +1164,9 @@ function NewAppointment() {
                     <p className="truncate text-sm font-medium text-white">
                       {newClient
                         ? fullName(firstName, lastName) || 'Cliente nuevo'
-                        : fullName(
-                            selectedCustomer?.first_name ?? '',
-                            selectedCustomer?.last_name,
-                          )}
+                        : selectedCustomer
+                          ? customerName(selectedCustomer)
+                          : ''}
                     </p>
                     <p className="truncate text-xs text-white/40">
                       {newClient
@@ -1169,7 +1212,7 @@ function NewAppointment() {
                           className="flex w-full items-center justify-between gap-3 px-3 py-3.5 text-left hover:bg-white/10"
                         >
                           <span className="truncate text-sm text-white/90">
-                            {fullName(c.first_name, c.last_name)}
+                            {customerName(c)}
                           </span>
                           {c.phone && (
                             <span className="shrink-0 text-xs text-white/40">
@@ -1220,7 +1263,9 @@ function NewAppointment() {
                 />
                 <DuplicatePhoneNotice
                   owner={phoneTaken}
-                  onUse={() => phoneTaken && pickExisting(phoneTaken)}
+                  renameTo={renameTo}
+                  busy={useExistingClient.isPending}
+                  onUse={() => useExistingClient.mutate()}
                   useHint="Usá esa ficha para esta cita en vez de crear un contacto nuevo."
                 />
                 <Button
@@ -1629,6 +1674,8 @@ interface ApptHead {
   customer_name: string | null;
   customer_first_name: string | null;
   customer_last_name: string | null;
+  customer_nickname: string | null;
+  customer_imported_name: string | null;
   customer_phone: string | null;
   customer_email: string | null;
   customer_birth_date: string | null;
@@ -1675,9 +1722,11 @@ function EditAppointment({ id }: { id: string }) {
         `SELECT a.id, a.status, a.deposit_amount, a.start_at, a.end_at, a.notes,
                 a.customer_id, a.created_at,
                 a.google_calendar_id, a.google_calendar_event_id,
-                c.first_name || CASE WHEN c.last_name IS NOT NULL THEN ' ' || c.last_name ELSE '' END AS customer_name,
+                ${customerNameSql()} AS customer_name,
                 c.first_name AS customer_first_name,
                 c.last_name AS customer_last_name,
+                c.nickname AS customer_nickname,
+                c.imported_name AS customer_imported_name,
                 c.phone AS customer_phone,
                 c.email AS customer_email,
                 c.birth_date AS customer_birth_date,
@@ -2370,6 +2419,8 @@ function EditAppointment({ id }: { id: string }) {
           customerId={head.data.customer_id}
           firstName={head.data.customer_first_name}
           lastName={head.data.customer_last_name}
+          nickname={head.data.customer_nickname}
+          importedName={head.data.customer_imported_name}
           phone={head.data.customer_phone}
           email={head.data.customer_email}
           birthDate={head.data.customer_birth_date}
@@ -2440,6 +2491,8 @@ function ApptCustomerModal({
   customerId,
   firstName: initialFirst,
   lastName: initialLast,
+  nickname: initialNickname,
+  importedName: initialImported,
   phone: initialPhone,
   email: initialEmail,
   birthDate: initialBirth,
@@ -2451,6 +2504,8 @@ function ApptCustomerModal({
   customerId: string | null;
   firstName: string | null;
   lastName: string | null;
+  nickname: string | null;
+  importedName: string | null;
   phone: string | null;
   email: string | null;
   birthDate: string | null;
@@ -2461,6 +2516,8 @@ function ApptCustomerModal({
   const [draft, setDraft] = useState<CustomerDraft>({
     firstName: initialFirst ?? '',
     lastName: initialLast ?? '',
+    nickname: initialNickname ?? '',
+    importedName: initialImported ?? '',
     phone: initialPhone ?? '',
     email: initialEmail ?? '',
     birth: initialBirth ?? '',
@@ -2496,6 +2553,8 @@ function ApptCustomerModal({
   const patch: CustomerPatch = {
     first_name: draft.firstName.trim(),
     last_name: draft.lastName.trim() || null,
+    nickname: draft.nickname.trim() || null,
+    imported_name: draft.importedName.trim() || null,
     phone: draft.phone.trim() || null,
     email: normalizeEmail(draft.email) || null,
     birth_date: draft.birth || null,
@@ -2517,7 +2576,7 @@ function ApptCustomerModal({
           // No es un callejón sin salida: el modal ofrece combinar las dos
           // fichas (o usar la que existe), sin borrar lo que se escribió.
           const err = new Error(
-            `Ese número ya es de ${fullName(hit.first_name, hit.last_name)}.`,
+            `Ese número ya es de ${customerName(hit)}.`,
           ) as Error & { hit?: Customer };
           err.hit = hit;
           throw err;
@@ -2527,12 +2586,15 @@ function ApptCustomerModal({
       if (customerId) {
         await execute(
           `UPDATE customer
-              SET first_name = ?, last_name = ?, phone = ?, email = ?,
+              SET first_name = ?, last_name = ?, nickname = ?, imported_name = ?,
+                  phone = ?, email = ?,
                   birth_date = ?, updated_at = ?
             WHERE id = ?`,
           [
             name,
             draft.lastName.trim() || null,
+            draft.nickname.trim() || null,
+            draft.importedName.trim() || null,
             canonical,
             email || null,
             draft.birth || null,
@@ -2547,13 +2609,16 @@ function ApptCustomerModal({
       await batch([
         {
           sql: `INSERT INTO customer
-                  (id, organization_id, first_name, last_name, phone, email, birth_date)
-                VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                  (id, organization_id, first_name, last_name, nickname,
+                   imported_name, phone, email, birth_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           args: [
             newId,
             orgId,
             name,
             draft.lastName.trim() || null,
+            draft.nickname.trim() || null,
+            draft.importedName.trim() || null,
             canonical,
             email || null,
             draft.birth || null,

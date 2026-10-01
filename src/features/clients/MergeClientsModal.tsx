@@ -1,7 +1,8 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Merge, Search, TriangleAlert, ArrowRight, Users } from 'lucide-react';
-import { dateShort, fullName } from '@/lib/format';
+import { customerName, dateShort } from '@/lib/format';
+import { customerHaystack } from './customerSearch';
 import { useCustomers } from '@/features/pos/useCatalog';
 import { Badge, Button, EmptyState, Modal, useToast } from '@/components/ui';
 import type { Customer } from '@/types';
@@ -76,7 +77,7 @@ export function MergeClientsModal({
       void qc.invalidateQueries();
       toast.success(
         'Contactos combinados',
-        `Quedó una sola ficha de ${fullName(keep.first_name, keep.last_name)}.`,
+        `Quedó una sola ficha de ${customerName(keep)}.`,
       );
       onClose();
       onMerged?.(keep.id);
@@ -120,7 +121,7 @@ export function MergeClientsModal({
         <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
           <p className="mb-1 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-white/40">
             <ArrowRight className="h-3.5 w-3.5" /> Se mueve a{' '}
-            {fullName(keep.first_name, keep.last_name)}
+            {customerName(keep)}
           </p>
           {refs.isLoading ? (
             <p className="text-sm text-white/40">Calculando…</p>
@@ -145,7 +146,8 @@ export function MergeClientsModal({
             Ficha resultante
           </p>
           <dl className="grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-2">
-            <Field label="Nombre" value={fullName(result.first_name, result.last_name)} />
+            <Field label="Nombre" value={customerName(result)} />
+            <Field label="Nombre en la agenda" value={result.imported_name} />
             <Field label="WhatsApp" value={result.phone} />
             <Field label="Email" value={result.email} />
             <Field
@@ -228,7 +230,7 @@ function CandidateCard({
     >
       <div className="flex items-center justify-between gap-2">
         <p className="truncate font-medium text-white">
-          {fullName(customer.first_name, customer.last_name)}
+          {customerName(customer)}
         </p>
         {selected ? (
           <Badge tone="gold">Principal</Badge>
@@ -295,7 +297,7 @@ export function DuplicatesModal({
                   {g.map((c) => (
                     <li key={c.id} className="flex items-center gap-2 text-sm">
                       <span className="truncate font-medium text-white">
-                        {fullName(c.first_name, c.last_name)}
+                        {customerName(c)}
                       </span>
                       <span className="truncate text-xs text-white/40">
                         {c.phone || c.email || 'sin contacto'}
@@ -333,7 +335,7 @@ export function DuplicatesModal({
  * nombre no alcanza, lo que las diferencia es el dato de contacto.
  */
 const describe = (c: Customer): string =>
-  `${fullName(c.first_name, c.last_name)} · ${c.phone || c.email || 'sin contacto'}`;
+  `${customerName(c)} · ${c.phone || c.email || 'sin contacto'}`;
 
 /**
  * Botones de combinación de un grupo. Solo se ofrecen los pares sin datos de
@@ -409,11 +411,7 @@ export function MergePickerModal({
     const q = search.trim().toLowerCase();
     if (!q) return suggested.slice(0, 20);
     return all
-      .filter((c) =>
-        `${fullName(c.first_name, c.last_name)} ${c.phone ?? ''} ${c.email ?? ''}`
-          .toLowerCase()
-          .includes(q),
-      )
+      .filter((c) => customerHaystack(c).includes(q))
       .slice(0, 20);
   }, [all, suggested, search]);
 
@@ -450,7 +448,7 @@ export function MergePickerModal({
                   >
                     <div className="min-w-0">
                       <p className="truncate text-sm text-white/90">
-                        {fullName(c.first_name, c.last_name)}
+                        {customerName(c)}
                       </p>
                       <p className="truncate text-xs text-white/40">
                         {c.phone || c.email || 'Sin contacto'}

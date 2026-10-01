@@ -33,10 +33,12 @@ import {
   money,
   dateShort,
   timeShort,
+  customerName,
   fullName,
   todayISO,
   toLocalNaive,
 } from '@/lib/format';
+import { customerHaystack } from './customerSearch';
 import { useOrgId, useSession } from '@/store/session';
 import { useStaff } from '@/features/pos/useCatalog';
 import {
@@ -62,6 +64,8 @@ import type { Customer, CustomerColorRecord } from '@/types';
 import {
   duplicateGroups,
   fillCustomerGaps,
+  gapFillSummary,
+  renamedName,
   type CustomerPatch,
 } from './mergeCustomers';
 import {
@@ -144,11 +148,9 @@ export function ClientsPage() {
       if (status === 'buyers' && c.visits === 0) return false;
       if (status === 'new' && c.visits > 0) return false;
       if (!q) return true;
-      return (
-        fullName(c.first_name, c.last_name).toLowerCase().includes(q) ||
-        (c.phone ?? '').toLowerCase().includes(q) ||
-        (c.email ?? '').toLowerCase().includes(q)
-      );
+      // Alias y nombre de la agenda incluidos: después de normalizar los
+      // nombres para facturar, buscar "Mica" tiene que seguir encontrándola.
+      return customerHaystack(c).includes(q);
     });
     list = [...list].sort((a, b) => {
       switch (sort) {
@@ -159,9 +161,7 @@ export function ClientsPage() {
         case 'recent':
           return (b.last_visit ?? '').localeCompare(a.last_visit ?? '');
         default:
-          return fullName(a.first_name, a.last_name).localeCompare(
-            fullName(b.first_name, b.last_name),
-          );
+          return customerName(a).localeCompare(customerName(b));
       }
     });
     return list;
@@ -310,7 +310,7 @@ export function ClientsPage() {
                           />
                           <div className="min-w-0">
                             <p className="flex items-center gap-1.5 truncate font-medium text-white">
-                              {fullName(c.first_name, c.last_name)}
+                              {customerName(c)}
                               {c.allergies && (
                                 <TriangleAlert
                                   className="h-3.5 w-3.5 shrink-0 text-danger"
@@ -526,10 +526,15 @@ function CreateClientModal({
   const patch: CustomerPatch = {
     first_name: draft.firstName.trim(),
     last_name: draft.lastName.trim() || null,
+    nickname: draft.nickname.trim() || null,
+    imported_name: draft.importedName.trim() || null,
     phone: draft.phone.trim() || null,
     email: normalizeEmail(draft.email) || null,
     birth_date: draft.birth || null,
   };
+
+  /** Nombre que quedaría en la ficha existente si se la usa (null: no cambia). */
+  const renameTo = owner ? renamedName(owner, patch) : null;
 
   const close = () => {
     setDraft(EMPTY_CUSTOMER_DRAFT);
@@ -549,7 +554,7 @@ function CreateClientModal({
         const hit = await findCustomerByPhone(orgId, canonical);
         if (hit) {
           const err = new Error(
-            `Ese número ya es de ${fullName(hit.first_name, hit.last_name)}.`,
+            `Ese número ya es de ${customerName(hit)}.`,
           ) as Error & { hit?: Customer };
           err.hit = hit;
           throw err;
@@ -558,13 +563,16 @@ function CreateClientModal({
       const id = genId();
       await execute(
         `INSERT INTO customer
-           (id, organization_id, first_name, last_name, phone, email, birth_date)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+           (id, organization_id, first_name, last_name, nickname, imported_name,
+            phone, email, birth_date)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           orgId,
           draft.firstName.trim(),
           draft.lastName.trim() || null,
+          draft.nickname.trim() || null,
+          draft.importedName.trim() || null,
           canonical,
           email || null,
           draft.birth || null,
@@ -584,7 +592,11 @@ function CreateClientModal({
       invalidateCustomers(qc, orgId);
       toast.success(
         'Cliente creado',
-        fullName(draft.firstName.trim(), draft.lastName.trim() || null),
+        customerName({
+          first_name: draft.firstName.trim(),
+          last_name: draft.lastName.trim() || null,
+          nickname: draft.nickname.trim() || null,
+        }),
       );
       close();
       navigate(`${ROUTES.client}/${id}`);
@@ -598,20 +610,20 @@ function CreateClientModal({
    */
   const useExisting = useMutation({
     mutationFn: async () => {
-      if (!owner) return [] as string[];
+      if (!owner) return null;
       const gap = fillCustomerGaps(owner, patch);
       if (gap) await batch([gap.stmt]);
-      return gap?.fields ?? [];
+      return gap;
     },
-    onSuccess: (fields) => {
+    onSuccess: (gap) => {
       const id = owner!.id;
       invalidateCustomers(qc, orgId);
       void qc.invalidateQueries({ queryKey: ['client', id] });
+      // Si se renombró, el nombre viejo ya no sirve para encontrar el aviso:
+      // el título lleva el nuevo y el detalle dice cuál era.
       toast.success(
-        `Ficha de ${fullName(owner!.first_name, owner!.last_name)}`,
-        fields.length > 0
-          ? `Se le completó: ${fields.join(', ')}.`
-          : 'Ya tenía todos esos datos.',
+        `Ficha de ${gap?.renamedFrom ? renameTo : customerName(owner!)}`,
+        gapFillSummary(gap),
       );
       close();
       navigate(`${ROUTES.client}/${id}`);
@@ -629,6 +641,7 @@ function CreateClientModal({
           notice={
             <DuplicatePhoneNotice
               owner={owner}
+              renameTo={renameTo}
               busy={useExisting.isPending}
               onUse={() => useExisting.mutate()}
               onOpen={(id) => {
@@ -804,7 +817,7 @@ function ClientDetail({ customer }: { customer: Customer }) {
     <div className="mx-auto max-w-5xl space-y-6">
       <PageHeader
         onBack={handleBack}
-        title={fullName(c.first_name, c.last_name)}
+        title={customerName(c)}
         right={
           <div className="flex items-center gap-2">
             {c.allergies && (
@@ -962,7 +975,7 @@ function ClientDetail({ customer }: { customer: Customer }) {
       >
         <div className="space-y-4">
           <p className="text-sm text-white/70">
-            La ficha de <b className="text-white">{fullName(c.first_name, c.last_name)}</b>{' '}
+            La ficha de <b className="text-white">{customerName(c)}</b>{' '}
             tiene cambios que todavía no se guardaron.
           </p>
           <div className="grid gap-2 sm:grid-cols-2">
@@ -1004,6 +1017,8 @@ function draftFromCustomer(c: Customer): ClientDraft {
   return {
     firstName: c.first_name,
     lastName: c.last_name ?? '',
+    nickname: c.nickname ?? '',
+    importedName: c.imported_name ?? '',
     phone: c.phone ?? '',
     email: c.email ?? '',
     birth: c.birth_date ?? '',
@@ -1053,6 +1068,8 @@ function useClientDraft(
   const patch: CustomerPatch = {
     first_name: draft.firstName.trim(),
     last_name: draft.lastName.trim() || null,
+    nickname: draft.nickname.trim() || null,
+    imported_name: draft.importedName.trim() || null,
     phone: draft.phone.trim() || null,
     email: normalizeEmail(draft.email) || null,
     birth_date: draft.birth || null,
@@ -1081,7 +1098,7 @@ function useClientDraft(
         );
         if (hit && hit.id !== customer.id) {
           const err = new Error(
-            `Ese número ya es de ${fullName(hit.first_name, hit.last_name)}.`,
+            `Ese número ya es de ${customerName(hit)}.`,
           ) as Error & { hit?: Customer };
           err.hit = hit;
           throw err;
@@ -1089,13 +1106,16 @@ function useClientDraft(
       }
       return execute(
         `UPDATE customer SET
-           first_name = ?, last_name = ?, phone = ?, email = ?, birth_date = ?,
+           first_name = ?, last_name = ?, nickname = ?, imported_name = ?,
+           phone = ?, email = ?, birth_date = ?,
            preferred_staff_id = ?, notes = ?, allergies = ?, hair_notes = ?,
            updated_at = ?
          WHERE id = ?`,
         [
           draft.firstName.trim(),
           draft.lastName.trim() || null,
+          draft.nickname.trim() || null,
+          draft.importedName.trim() || null,
           canonical,
           email || null,
           draft.birth || null,

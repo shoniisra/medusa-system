@@ -10,7 +10,8 @@ import reactHooks from 'eslint-plugin-react-hooks';
  * viejos en pantalla).
  */
 export default tseslint.config(
-  { ignores: ['dist', 'node_modules', '.claude', 'public'] },
+  // scripts/: utilidades de node sueltas, fuera de los tsconfig del proyecto.
+  { ignores: ['dist', 'node_modules', '.claude', 'public', 'scripts'] },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   {

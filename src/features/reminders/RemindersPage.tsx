@@ -9,6 +9,7 @@ import { APPOINTMENT_STATUS } from '@/config/constants';
 import { Card, CardHeader, Badge, Button, EmptyState } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import type { AppointmentStatus } from '@/types';
+import { customerNameSql } from '@/features/clients/customerNameSql';
 
 interface ReminderRow {
   id: string;
@@ -89,7 +90,7 @@ export function RemindersPage() {
     queryFn: () =>
       query<ReminderRow>(
         `SELECT a.id, a.start_at, a.status,
-                c.first_name || CASE WHEN c.last_name IS NOT NULL THEN ' ' || c.last_name ELSE '' END AS customer_name,
+                ${customerNameSql()} AS customer_name,
                 c.phone,
                 (SELECT GROUP_CONCAT(ai.description, ', ')
                    FROM appointment_item ai WHERE ai.appointment_id = a.id) AS services

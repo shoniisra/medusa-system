@@ -3,14 +3,15 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Medusa Estudio — SaaS multi-sucursal de gestión de salones (frontend PWA)",
+  "description": "Medusa Estudio \u2014 SaaS multi-sucursal de gesti\u00f3n de salones (frontend PWA)",
   "scripts": {
     "dev": "vite",
     "build": "npm run lint && vite build",
     "preview": "vite preview",
     "lint": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.worker.json --noEmit && eslint .",
     "dup": "jscpd src worker --min-lines 12 --min-tokens 70",
-    "dead": "knip"
+    "dead": "knip",
+    "migrate": "node scripts/migrate.mjs"
   },
   "dependencies": {
     "@libsql/client": "^0.14.0",

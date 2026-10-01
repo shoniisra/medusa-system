@@ -5,6 +5,8 @@ import { DateInput, EmailInput, Input, PhoneInput } from '@/components/ui';
 export type CustomerDraft = {
   firstName: string;
   lastName: string;
+  nickname: string;
+  importedName: string;
   phone: string;
   email: string;
   birth: string;
@@ -13,13 +15,16 @@ export type CustomerDraft = {
 export const EMPTY_CUSTOMER_DRAFT: CustomerDraft = {
   firstName: '',
   lastName: '',
+  nickname: '',
+  importedName: '',
   phone: '',
   email: '',
   birth: '',
 };
 
 /**
- * Campos del contacto: nombre, apellido, WhatsApp, email y cumpleaños.
+ * Campos del contacto: nombre real, alias, nombre de la agenda, WhatsApp, email
+ * y cumpleaños.
  *
  * Estaban copiados en las tres pantallas que editan un cliente (alta desde el
  * listado, ficha y cliente de la cita), así que agregar un campo significaba
@@ -47,6 +52,26 @@ export function CustomerFields({
           label="Apellido"
           value={draft.lastName}
           onChange={(e) => set('lastName', e.target.value)}
+        />
+      </div>
+      {/*
+        Nombre y alias son dos cosas distintas y las dos hacen falta: arriba va
+        el nombre real (identificar, facturar), acá cómo se le dice y con qué
+        nombre está guardado en el teléfono. Ese último se completa solo en los
+        contactos importados; se deja editable porque la agenda también cambia.
+      */}
+      <div className="grid grid-cols-2 gap-3">
+        <Input
+          label="Alias"
+          placeholder="Como se le dice"
+          value={draft.nickname}
+          onChange={(e) => set('nickname', e.target.value)}
+        />
+        <Input
+          label="Nombre en la agenda"
+          placeholder="Como está en el teléfono"
+          value={draft.importedName}
+          onChange={(e) => set('importedName', e.target.value)}
         />
       </div>
       <PhoneInput

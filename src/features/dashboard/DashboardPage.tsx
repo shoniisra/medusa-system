@@ -34,6 +34,7 @@ import { AppointmentActionsModal } from '@/features/calendar/AppointmentActions'
 import type { NextAppointment } from './useDashboardMetrics';
 import type { AppointmentStatus } from '@/types';
 import { startAttention } from '@/features/calendar/appointmentBoard';
+import { customerNameSql } from '@/features/clients/customerNameSql';
 
 const SECTION_KEYS = [
   'stats',
@@ -607,7 +608,7 @@ function BirthdaysCard() {
     queryFn: () =>
       query<BirthdayRow>(
         `SELECT id,
-                first_name || CASE WHEN last_name IS NOT NULL THEN ' ' || last_name ELSE '' END AS name,
+                ${customerNameSql('customer')} AS name,
                 phone,
                 CAST(substr(birth_date,9,2) AS INTEGER) AS day
            FROM customer

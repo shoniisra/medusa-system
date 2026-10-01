@@ -1,5 +1,6 @@
 import { batch, query, type Stmt } from '@/lib/db';
 import { phoneDedupKey } from '@/lib/phone';
+import { fullName } from '@/lib/format';
 import { normalizeText } from '@/lib/text';
 import type { Customer, ID } from '@/types';
 
@@ -233,6 +234,7 @@ export function completeness(c: Customer): number {
   const fields = [
     c.phone,
     c.email,
+    c.nickname,
     c.birth_date,
     c.notes,
     c.allergies,
@@ -258,6 +260,8 @@ export function completeness(c: Customer): number {
 export interface CustomerPatch {
   first_name?: string;
   last_name?: string | null;
+  nickname?: string | null;
+  imported_name?: string | null;
   phone?: string | null;
   email?: string | null;
   birth_date?: string | null;
@@ -293,6 +297,14 @@ function joinText(a: string | null, b: string | null): string | null {
   return `${x}\n${y}`;
 }
 
+/**
+ * Igual que `joinText` pero en una sola línea: el nombre en la agenda se edita
+ * en un <input>, no en un textarea, así que los dos van separados por " / ".
+ */
+function joinOneLine(a: string | null, b: string | null): string | null {
+  return joinText(a, b)?.replace(/\n+/g, ' / ') ?? null;
+}
+
 const firstOf = <T,>(a: T | null, b: T | null): T | null =>
   a !== null && a !== undefined && String(a).trim() !== '' ? a : (b ?? null);
 
@@ -306,6 +318,10 @@ export function mergedFields(keep: Customer, dup: Customer) {
   return {
     first_name: keep.first_name?.trim() || dup.first_name,
     last_name: firstOf(keep.last_name, dup.last_name),
+    nickname: firstOf(keep.nickname, dup.nickname),
+    // El nombre de la agenda del duplicado sirve igual que el del principal
+    // para encontrar el contacto en el teléfono, así que se conservan los dos.
+    imported_name: joinOneLine(keep.imported_name, dup.imported_name),
     phone: firstOf(keep.phone, dup.phone),
     email: firstOf(keep.email, dup.email),
     birth_date: firstOf(keep.birth_date, dup.birth_date),
@@ -374,7 +390,8 @@ export async function mergeCustomers(
     { sql: 'DELETE FROM customer WHERE id = ?', args: [dup.id] },
     {
       sql: `UPDATE customer SET
-              first_name = ?, last_name = ?, phone = ?, email = ?,
+              first_name = ?, last_name = ?, nickname = ?, imported_name = ?,
+              phone = ?, email = ?,
               birth_date = ?, preferred_staff_id = ?, notes = ?,
               allergies = ?, hair_notes = ?, first_visit_at = ?,
               last_visit_at = ?, active = 1, updated_at = ?
@@ -382,6 +399,8 @@ export async function mergeCustomers(
       args: [
         f.first_name,
         f.last_name,
+        f.nickname,
+        f.imported_name,
         f.phone,
         f.email,
         f.birth_date,
@@ -404,6 +423,8 @@ export async function mergeCustomers(
 const FIELD_LABELS: Record<keyof CustomerPatch, string> = {
   first_name: 'nombre',
   last_name: 'apellido',
+  nickname: 'alias',
+  imported_name: 'nombre en la agenda',
   phone: 'WhatsApp',
   email: 'email',
   birth_date: 'cumpleaños',
@@ -417,18 +438,48 @@ export interface GapFill {
   stmt: Stmt;
   /** Campos que se completaron, en español, para avisar qué se agregó. */
   fields: string[];
+  /** Nombre que tenía la ficha antes de renombrarla, o null si no se renombró. */
+  renamedFrom: string | null;
+}
+
+const blank = (v: string | null | undefined) => !v || v.trim() === '';
+
+/**
+ * Nombre con el que quedaría la ficha existente si se la usa con lo escrito en
+ * el formulario, o `null` si no hay que renombrar (no se escribió nombre, o es
+ * el mismo que ya tiene).
+ *
+ * Lo necesita el aviso de duplicado para poder decir a qué se renombra antes de
+ * que se toque el botón: el nombre es el único dato que el renombrado pisa.
+ */
+export function renamedName(
+  target: Customer,
+  patch: CustomerPatch,
+): string | null {
+  const first = patch.first_name?.trim() ?? '';
+  if (!first) return null;
+  const next = fullName(first, patch.last_name?.trim() || null);
+  const current = fullName(target.first_name, target.last_name);
+  return normalizeText(next) === normalizeText(current) ? null : next;
 }
 
 /**
- * Completa los huecos de una ficha existente con lo que se escribió en el
- * formulario, sin pisar nada de lo que ya tenía.
+ * Usar una ficha que ya existe con lo que se acaba de escribir: le pone el
+ * nombre tipeado y le completa los campos que tenía vacíos.
  *
- * Es la otra salida del duplicado: cuando no hay dos fichas que combinar (se
- * estaba creando una nueva, o la cita todavía no tenía cliente) lo correcto es
- * usar la que ya existe y aprovechar los datos que se acababan de pedir —el
- * email, el cumpleaños— en vez de descartarlos.
+ * Es la otra salida del duplicado por teléfono: cuando no hay dos fichas que
+ * combinar (se estaba creando una nueva, o la cita todavía no tenía cliente) lo
+ * correcto es usar la que ya existe sin tirar lo que se acababa de pedir.
  *
- * Devuelve `null` si no hay nada que agregar; el statement se puede combinar en
+ * El nombre es el único dato que se pisa, y a propósito: el que está en la
+ * ficha vino de la agenda del teléfono o del título de un evento, y el que se
+ * acaba de escribir es el real —se pregunta justamente para normalizar e ir a
+ * facturación—. El viejo no se pierde: baja a `nickname` si no había alias, que
+ * es como se la conoce. NO se copia a `imported_name`: en los contactos del
+ * .vcf ese campo ya tiene ese mismo nombre, y en los que creó el sync de Google
+ * Calendar sería mentira (nunca estuvieron en la agenda del teléfono).
+ *
+ * Devuelve `null` si no hay nada que cambiar; el statement se puede combinar en
  * un batch con, por ejemplo, el UPDATE que ata la cita al contacto.
  */
 export function fillCustomerGaps(
@@ -438,15 +489,36 @@ export function fillCustomerGaps(
   const sets: string[] = [];
   const args: (string | null)[] = [];
   const fields: string[] = [];
-  const empty = (v: string | null | undefined) => !v || v.trim() === '';
+  /** Campos ya resueltos por el renombrado: el bucle de huecos no los toca. */
+  const done = new Set<keyof CustomerPatch>();
+
+  const put = (col: keyof CustomerPatch, value: string | null) => {
+    sets.push(`${col} = ?`);
+    args.push(value);
+    done.add(col);
+  };
+
+  const renamedFrom = renamedName(target, patch)
+    ? fullName(target.first_name, target.last_name)
+    : null;
+
+  if (renamedFrom) {
+    put('first_name', patch.first_name!.trim());
+    put('last_name', patch.last_name?.trim() || null);
+    if (blank(target.nickname)) {
+      put('nickname', renamedFrom);
+      fields.push(`alias "${renamedFrom}"`);
+    }
+  }
 
   for (const [key, label] of Object.entries(FIELD_LABELS) as [
     keyof CustomerPatch,
     string,
   ][]) {
+    if (done.has(key)) continue;
     const value = patch[key];
-    if (empty(value)) continue;
-    if (!empty(target[key])) continue;
+    if (blank(value)) continue;
+    if (!blank(target[key])) continue;
     sets.push(`${key} = ?`);
     args.push(value ?? null);
     fields.push(label);
@@ -459,5 +531,19 @@ export function fillCustomerGaps(
       args: [...args, new Date().toISOString(), target.id],
     },
     fields,
+    renamedFrom,
   };
+}
+
+/**
+ * Qué decirle a la usuaria después de usar una ficha existente. Se arma acá
+ * porque las tres pantallas que ofrecen "usar ese contacto" (Clientes, Reservar
+ * y Nueva venta) mostraban el mismo aviso con palabras distintas.
+ */
+export function gapFillSummary(gap: GapFill | null): string {
+  if (!gap) return 'Ya tenía todos esos datos.';
+  const parts: string[] = [];
+  if (gap.renamedFrom) parts.push(`Antes era "${gap.renamedFrom}".`);
+  if (gap.fields.length > 0) parts.push(`Se le completó: ${gap.fields.join(', ')}.`);
+  return parts.join(' ') || 'Ya tenía todos esos datos.';
 }

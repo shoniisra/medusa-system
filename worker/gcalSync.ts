@@ -222,11 +222,21 @@ async function findOrCreateCustomer(
   orgId: string,
   name: string,
 ): Promise<string> {
+  // El título del evento trae el nombre con el que se la conoce, que no siempre
+  // es el nombre real de la ficha: al normalizar los nombres para facturar, el
+  // alias y el nombre de la agenda pasan a ser lo único que coincide. Si no se
+  // busca también por ahí, cada sync crea una ficha duplicada.
   const existing = await db.execute({
-    sql: `SELECT id FROM customer
-           WHERE organization_id = ? AND lower(first_name) = lower(?)
+    sql: `SELECT id, lower(first_name) = lower(?) AS exact
+            FROM customer
+           WHERE organization_id = ?
+             AND (lower(first_name) = lower(?)
+                  OR lower(TRIM(first_name || ' ' || COALESCE(last_name, ''))) = lower(?)
+                  OR lower(nickname) = lower(?)
+                  OR lower(imported_name) = lower(?))
+           ORDER BY exact DESC
            LIMIT 1`,
-    args: [orgId, name],
+    args: [name, orgId, name, name, name, name],
   });
   const row = asRow<{ id: string }>(existing.rows[0]);
   if (row) return row.id;
