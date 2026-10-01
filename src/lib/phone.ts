@@ -159,3 +159,14 @@ export function validatePhone(canonical: string | null | undefined): string | nu
   const country = COUNTRIES.find((c) => c.dial === dial);
   return `El número de ${country?.name ?? 'ese país'} debe tener ${rule.hint}. Escribiste ${local.length}.`;
 }
+
+/**
+ * Clave para comparar dos teléfonos aunque estén guardados distinto: los
+ * últimos 9 dígitos del canónico. Así `0991234567`, `+593991234567` y
+ * `593 99 123 4567` (registros viejos sin normalizar) son el mismo número.
+ * Devuelve `''` si no hay número usable.
+ */
+export function phoneDedupKey(phone: string | null | undefined): string {
+  const d = phoneToWaDigits(phone);
+  return d.length >= 7 ? d.slice(-9) : '';
+}

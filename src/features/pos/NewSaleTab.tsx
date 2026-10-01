@@ -27,7 +27,11 @@ import {
   loadCommissionRules,
   commissionForItem,
 } from './createSale';
-import { findCustomerByPhone } from '@/features/clients/customerLookup';
+import {
+  findCustomerByPhone,
+  phoneOwner,
+} from '@/features/clients/customerLookup';
+import { DuplicatePhoneNotice } from '@/features/clients/DuplicatePhoneNotice';
 import { validatePhone } from '@/lib/phone';
 import { CONSUMIDOR_FINAL_LABEL } from '@/config/constants';
 import { invalidateCustomers, invalidateSales } from '@/lib/queryClient';
@@ -82,6 +86,13 @@ export function NewSaleTab() {
   const clientMatches = useMemo(
     () => searchCustomers(customers.data ?? [], clientSearch),
     [customers.data, clientSearch],
+  );
+
+  // Dueño del número tipeado para el cliente nuevo: el teléfono es único, así
+  // que conviene avisarlo acá y ofrecer esa ficha, y no fallar al cobrar.
+  const phoneTaken = useMemo(
+    () => (newClient ? phoneOwner(customers.data ?? [], phone) : null),
+    [newClient, customers.data, phone],
   );
 
   function pickExisting(c: { id: string }) {
@@ -158,7 +169,7 @@ export function NewSaleTab() {
     .reduce((a, i) => a + i.final_unit_price * i.quantity, 0);
 
   // Vendibles reales (todo el borrador lo es: no hay filas de sola categoría).
-  const canConfirm = draft.items.length > 0;
+  const canConfirm = draft.items.length > 0 && !phoneTaken;
 
   function onAddService({ sid, stid }: { sid: string; stid: string | null }) {
     const s = services.data?.find((x) => x.id === sid);
@@ -308,12 +319,17 @@ export function NewSaleTab() {
           )}
 
           {newClient && (
-            <div className="mt-3">
+            <div className="mt-3 space-y-2">
               <PhoneInput
                 ref={phoneRef}
                 label="WhatsApp"
                 value={phone}
                 onChange={setPhone}
+              />
+              <DuplicatePhoneNotice
+                owner={phoneTaken}
+                onUse={() => phoneTaken && pickExisting(phoneTaken)}
+                useHint="Usá esa ficha para esta venta en vez de crear un contacto nuevo."
               />
             </div>
           )}
@@ -519,7 +535,7 @@ function ConfirmSalePosModal({
           const hit = await findCustomerByPhone(orgId, newClient.phone);
           if (hit)
             throw new Error(
-              `Ese número ya es de ${fullName(hit.first_name, hit.last_name)}. Buscalo en la lista en vez de crear uno nuevo.`,
+              `Ese número ya es de ${fullName(hit.first_name, hit.last_name)}. Usá ese contacto en vez de crear uno nuevo.`,
             );
         }
         custId = genId();

@@ -81,8 +81,18 @@ import {
   PageHeader,
   DetailRow,
 } from '@/components/ui';
-import { findCustomerByPhone } from '@/features/clients/customerLookup';
+import {
+  findCustomerByPhone,
+  phoneOwner,
+} from '@/features/clients/customerLookup';
+import { DuplicatePhoneNotice } from '@/features/clients/DuplicatePhoneNotice';
+import { MergeClientsModal } from '@/features/clients/MergeClientsModal';
+import {
+  fillCustomerGaps,
+  type CustomerPatch,
+} from '@/features/clients/mergeCustomers';
 import { validatePhone } from '@/lib/phone';
+import { normalizeEmail, validateEmail } from '@/lib/email';
 import {
   createSale,
   loadCommissionRules,
@@ -287,6 +297,15 @@ function NewAppointment() {
     [customers.data, clientSearch],
   );
 
+  // Dueño del número que se está escribiendo para el cliente nuevo. Se busca
+  // entre los contactos ya cargados, así el aviso aparece mientras se tipea y no
+  // recién al guardar: el teléfono es único y casi siempre lo que corresponde es
+  // usar la ficha que ya existe.
+  const phoneTaken = useMemo(
+    () => (newClient ? phoneOwner(customers.data ?? [], phone) : null),
+    [newClient, customers.data, phone],
+  );
+
   function pickExisting(c: { id: string }) {
     setCustomerId(c.id);
     setNewClient(false);
@@ -317,7 +336,7 @@ function NewAppointment() {
         const hit = await findCustomerByPhone(orgId, ph);
         if (hit) {
           throw new Error(
-            `Ese número ya es de ${fullName(hit.first_name, hit.last_name)}. Buscalo en la lista en vez de crear uno nuevo.`,
+            `Ese número ya es de ${fullName(hit.first_name, hit.last_name)}. Usá ese contacto en vez de crear uno nuevo.`,
           );
         }
       }
@@ -563,7 +582,7 @@ function NewAppointment() {
         const hit = await findCustomerByPhone(orgId, newPhone);
         if (hit) {
           throw new Error(
-            `Ese número ya es de ${fullName(hit.first_name, hit.last_name)}. Buscalo en la lista en vez de crear uno nuevo.`,
+            `Ese número ya es de ${fullName(hit.first_name, hit.last_name)}. Usá ese contacto en vez de crear uno nuevo.`,
           );
         }
       }
@@ -1201,11 +1220,18 @@ function NewAppointment() {
                   value={phone}
                   onChange={setPhone}
                 />
+                <DuplicatePhoneNotice
+                  owner={phoneTaken}
+                  onUse={() => phoneTaken && pickExisting(phoneTaken)}
+                  useHint="Usá esa ficha para esta cita en vez de crear un contacto nuevo."
+                />
                 <Button
                   variant="outline"
                   className="w-full"
                   loading={createClient.isPending}
-                  disabled={!firstName.trim() || !!validatePhone(phone)}
+                  disabled={
+                    !firstName.trim() || !!validatePhone(phone) || !!phoneTaken
+                  }
                   onClick={() => createClient.mutate()}
                 >
                   Guardar cliente
@@ -2442,14 +2468,39 @@ function ApptCustomerModal({
     birth: initialBirth ?? '',
   });
   const [error, setError] = useState('');
+  /** Ficha que ya tiene el número que se acaba de escribir. */
+  const [owner, setOwner] = useState<Customer | null>(null);
+  const [mergeOpen, setMergeOpen] = useState(false);
+
+  // Ficha completa del cliente de la cita: hace falta para combinar (el
+  // encabezado solo trae nombre y contacto). Se pide al abrir el modal para que
+  // "Combinar fichas" no quede esperando una consulta.
+  const current = useQuery({
+    queryKey: ['customer-row', customerId],
+    enabled: !!customerId,
+    queryFn: () =>
+      queryOne<Customer>('SELECT * FROM customer WHERE id = ?', [customerId]),
+  });
 
   const set = <K extends keyof CustomerDraft>(
     key: K,
     value: CustomerDraft[K],
   ) => {
-    // Editar el teléfono descarta el error del número anterior.
-    if (key === 'phone') setError('');
+    // Editar el teléfono descarta el aviso del número anterior.
+    if (key === 'phone') {
+      setError('');
+      setOwner(null);
+    }
     setDraft((d) => ({ ...d, [key]: value }));
+  };
+
+  /** Lo escrito en el formulario, listo para guardar o para combinar. */
+  const patch: CustomerPatch = {
+    first_name: draft.firstName.trim(),
+    last_name: draft.lastName.trim() || null,
+    phone: draft.phone.trim() || null,
+    email: normalizeEmail(draft.email) || null,
+    birth_date: draft.birth || null,
   };
 
   const save = useMutation({
@@ -2459,12 +2510,20 @@ function ApptCustomerModal({
       const canonical = draft.phone.trim() || null;
       const phoneError = validatePhone(canonical);
       if (phoneError) throw new Error(phoneError);
+      const email = normalizeEmail(draft.email);
+      const emailError = validateEmail(email);
+      if (emailError) throw new Error(emailError);
       if (canonical) {
         const hit = await findCustomerByPhone(orgId, canonical);
-        if (hit && hit.id !== customerId)
-          throw new Error(
-            `Ese número ya es de ${fullName(hit.first_name, hit.last_name)}. Buscalo en la lista en vez de crear uno nuevo.`,
-          );
+        if (hit && hit.id !== customerId) {
+          // No es un callejón sin salida: el modal ofrece combinar las dos
+          // fichas (o usar la que existe), sin borrar lo que se escribió.
+          const err = new Error(
+            `Ese número ya es de ${fullName(hit.first_name, hit.last_name)}.`,
+          ) as Error & { hit?: Customer };
+          err.hit = hit;
+          throw err;
+        }
       }
       const now = new Date().toISOString();
       if (customerId) {
@@ -2477,7 +2536,7 @@ function ApptCustomerModal({
             name,
             draft.lastName.trim() || null,
             canonical,
-            draft.email.trim() || null,
+            email || null,
             draft.birth || null,
             now,
             customerId,
@@ -2498,7 +2557,7 @@ function ApptCustomerModal({
             name,
             draft.lastName.trim() || null,
             canonical,
-            draft.email.trim() || null,
+            email || null,
             draft.birth || null,
           ],
         },
@@ -2512,36 +2571,112 @@ function ApptCustomerModal({
       toast.success('Cliente de la cita actualizado');
       onDone();
     },
-    onError: (e) => {
-      const msg =
-        e instanceof Error ? e.message : 'No se pudo guardar el cliente.';
+    onError: (e: Error & { hit?: Customer }) => {
+      if (e.hit) {
+        setOwner(e.hit);
+        setError('');
+        toast.error('Ese WhatsApp ya está en otra ficha', e.message);
+        return;
+      }
+      const msg = e.message || 'No se pudo guardar el cliente.';
       setError(msg);
       toast.error('No se pudo guardar el cliente', msg);
     },
   });
 
+  /**
+   * La cita no tenía cliente y el número resultó ser de una ficha que ya existe:
+   * se ata la cita a esa ficha y se le completan los huecos con lo que se
+   * acababa de pedir (email, cumpleaños, apellido). Nada se sobrescribe.
+   */
+  const useExisting = useMutation({
+    mutationFn: async () => {
+      if (!owner) return [] as string[];
+      const gap = fillCustomerGaps(owner, patch);
+      await batch([
+        ...(gap ? [gap.stmt] : []),
+        {
+          sql: 'UPDATE appointment SET customer_id = ?, updated_at = ? WHERE id = ?',
+          args: [owner.id, new Date().toISOString(), appointmentId],
+        },
+      ]);
+      return gap?.fields ?? [];
+    },
+    onSuccess: (fields) => {
+      toast.success(
+        `Cita vinculada a ${fullName(owner!.first_name, owner!.last_name)}`,
+        fields.length > 0
+          ? `Se le completó: ${fields.join(', ')}.`
+          : 'Su ficha ya estaba completa.',
+      );
+      onDone();
+    },
+    onError: (e: Error) =>
+      toast.error('No se pudo usar ese contacto', e.message),
+  });
+
+  const busy = save.isPending || useExisting.isPending;
+
   return (
-    <Modal
-      open
-      onClose={onClose}
-      title={customerId ? 'Datos del cliente' : 'Agregar cliente'}
-    >
-      <div className="space-y-4">
-        <CustomerFields draft={draft} set={set} />
-        {error && <p className="text-xs text-danger">{error}</p>}
-        <Button
-          className="w-full"
-          disabled={!draft.firstName.trim()}
-          loading={save.isPending}
-          onClick={() => {
-            setError('');
-            save.mutate();
+    <>
+      <Modal
+        open={!mergeOpen}
+        onClose={onClose}
+        title={customerId ? 'Datos del cliente' : 'Agregar cliente'}
+      >
+        <div className="space-y-4">
+          <CustomerFields
+            draft={draft}
+            set={set}
+            notice={
+              <DuplicatePhoneNotice
+                owner={owner}
+                busy={busy || (!!customerId && current.isLoading)}
+                // Con ficha propia hay dos contactos de la misma persona: se
+                // combinan. Sin ficha (cita importada sin cliente) no hay nada
+                // que combinar, se usa la que existe.
+                onMerge={
+                  customerId && current.data
+                    ? () => setMergeOpen(true)
+                    : undefined
+                }
+                onUse={
+                  customerId ? undefined : () => useExisting.mutate()
+                }
+              />
+            }
+          />
+          {error && <p className="text-xs text-danger">{error}</p>}
+          <Button
+            className="w-full"
+            disabled={!draft.firstName.trim()}
+            loading={save.isPending}
+            onClick={() => {
+              setError('');
+              save.mutate();
+            }}
+          >
+            <Check className="h-4 w-4" /> Guardar
+          </Button>
+        </div>
+      </Modal>
+
+      {mergeOpen && owner && current.data && (
+        <MergeClientsModal
+          open
+          a={current.data}
+          b={owner}
+          patches={{ [current.data.id]: patch }}
+          hint="Los datos que acabás de escribir se guardan en la ficha que quede, y la cita se mueve con ella."
+          onClose={() => setMergeOpen(false)}
+          onMerged={() => {
+            setMergeOpen(false);
+            setOwner(null);
+            onDone();
           }}
-        >
-          <Check className="h-4 w-4" /> Guardar
-        </Button>
-      </div>
-    </Modal>
+        />
+      )}
+    </>
   );
 }
 

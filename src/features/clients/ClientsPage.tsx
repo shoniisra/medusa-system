@@ -21,7 +21,7 @@ import {
   Merge,
   CopyCheck,
 } from 'lucide-react';
-import { query, queryOne, execute } from '@/lib/db';
+import { batch, query, queryOne, execute } from '@/lib/db';
 import { invalidateCustomers } from '@/lib/queryClient';
 import {
   CustomerFields,
@@ -53,37 +53,21 @@ import {
   PageHeader,
 } from '@/components/ui';
 import { ROUTES } from '@/config/constants';
-import { phoneToWaDigits } from '@/lib/phone';
+import { phoneToWaDigits, validatePhone } from '@/lib/phone';
+import { normalizeEmail, validateEmail } from '@/lib/email';
 import { findCustomerByPhone } from './customerLookup';
-import { validatePhone } from '@/lib/phone';
+import { DuplicatePhoneNotice } from './DuplicatePhoneNotice';
 import type { Customer, CustomerColorRecord } from '@/types';
-import { duplicateGroups } from './mergeCustomers';
-import { DuplicatesModal, MergePickerModal } from './MergeClientsModal';
-
-/** Ese WhatsApp ya es de otra ficha: el aviso con atajo para abrirla. */
-function DuplicatePhoneNotice({
-  dup,
-  onOpen,
-}: {
-  dup: { id: string; name: string } | null;
-  onOpen: (id: string) => void;
-}) {
-  if (!dup) return null;
-  return (
-    <div className="flex items-center justify-between gap-2 rounded-xl border border-danger/30 bg-danger/10 p-3 text-sm">
-      <span className="text-danger">
-        Ese número ya es de <b>{dup.name}</b>.
-      </span>
-      <button
-        type="button"
-        onClick={() => onOpen(dup.id)}
-        className="shrink-0 rounded-lg bg-danger/20 px-2.5 py-1 text-xs font-medium text-danger hover:bg-danger/30"
-      >
-        Abrir ficha
-      </button>
-    </div>
-  );
-}
+import {
+  duplicateGroups,
+  fillCustomerGaps,
+  type CustomerPatch,
+} from './mergeCustomers';
+import {
+  DuplicatesModal,
+  MergeClientsModal,
+  MergePickerModal,
+} from './MergeClientsModal';
 
 /* ═══════════════════════════ Lista de clientes ═══════════════════════════ */
 
@@ -524,7 +508,8 @@ function CreateClientModal({
   const toast = useToast();
 
   const [draft, setDraft] = useState<CustomerDraft>(EMPTY_CUSTOMER_DRAFT);
-  const [dup, setDup] = useState<{ id: string; name: string } | null>(null);
+  /** Ficha que ya tiene ese número (si aparece, no hay que crear otra). */
+  const [owner, setOwner] = useState<Customer | null>(null);
 
   const set = <K extends keyof CustomerDraft>(
     key: K,
@@ -532,8 +517,23 @@ function CreateClientModal({
   ) => {
     // Tocar el teléfono descarta el aviso de duplicado: ya no aplica al número
     // que se está escribiendo.
-    if (key === 'phone') setDup(null);
+    if (key === 'phone') setOwner(null);
     setDraft((d) => ({ ...d, [key]: value }));
+  };
+
+  /** Lo escrito en el formulario, en la forma en que se guarda. */
+  const patch: CustomerPatch = {
+    first_name: draft.firstName.trim(),
+    last_name: draft.lastName.trim() || null,
+    phone: draft.phone.trim() || null,
+    email: normalizeEmail(draft.email) || null,
+    birth_date: draft.birth || null,
+  };
+
+  const close = () => {
+    setDraft(EMPTY_CUSTOMER_DRAFT);
+    setOwner(null);
+    onClose();
   };
 
   const save = useMutation({
@@ -541,13 +541,16 @@ function CreateClientModal({
       const canonical = draft.phone.trim() || null;
       const phoneError = validatePhone(canonical);
       if (phoneError) throw new Error(phoneError);
+      const email = normalizeEmail(draft.email);
+      const emailError = validateEmail(email);
+      if (emailError) throw new Error(emailError);
       if (canonical) {
         const hit = await findCustomerByPhone(orgId, canonical);
         if (hit) {
-          const err = new Error('DUP') as Error & {
-            hit: { id: string; name: string };
-          };
-          err.hit = { id: hit.id, name: fullName(hit.first_name, hit.last_name) };
+          const err = new Error(
+            `Ese número ya es de ${fullName(hit.first_name, hit.last_name)}.`,
+          ) as Error & { hit?: Customer };
+          err.hit = hit;
           throw err;
         }
       }
@@ -562,16 +565,16 @@ function CreateClientModal({
           draft.firstName.trim(),
           draft.lastName.trim() || null,
           canonical,
-          draft.email.trim() || null,
+          email || null,
           draft.birth || null,
         ],
       );
       return id;
     },
-    onError: (e: Error & { hit?: { id: string; name: string } }) => {
+    onError: (e: Error & { hit?: Customer }) => {
       if (e.hit) {
-        setDup(e.hit);
-        toast.error('Cliente duplicado', `Ese número ya es de ${e.hit.name}.`);
+        setOwner(e.hit);
+        toast.error('Ese WhatsApp ya está en otra ficha', e.message);
       } else {
         toast.error('No se pudo crear el cliente', e.message);
       }
@@ -582,11 +585,38 @@ function CreateClientModal({
         'Cliente creado',
         fullName(draft.firstName.trim(), draft.lastName.trim() || null),
       );
-      setDraft(EMPTY_CUSTOMER_DRAFT);
-      setDup(null);
-      onClose();
+      close();
       navigate(`${ROUTES.client}/${id}`);
     },
+  });
+
+  /**
+   * El número ya tiene ficha: en vez de hacerle borrar todo y buscar a mano, se
+   * abre esa ficha y se le completan los campos que estaban vacíos con lo que se
+   * acababa de escribir (email, cumpleaños, apellido). No se pisa nada.
+   */
+  const useExisting = useMutation({
+    mutationFn: async () => {
+      if (!owner) return [] as string[];
+      const gap = fillCustomerGaps(owner, patch);
+      if (gap) await batch([gap.stmt]);
+      return gap?.fields ?? [];
+    },
+    onSuccess: (fields) => {
+      const id = owner!.id;
+      invalidateCustomers(qc, orgId);
+      void qc.invalidateQueries({ queryKey: ['client', id] });
+      toast.success(
+        `Ficha de ${fullName(owner!.first_name, owner!.last_name)}`,
+        fields.length > 0
+          ? `Se le completó: ${fields.join(', ')}.`
+          : 'Ya tenía todos esos datos.',
+      );
+      close();
+      navigate(`${ROUTES.client}/${id}`);
+    },
+    onError: (e: Error) =>
+      toast.error('No se pudo usar ese contacto', e.message),
   });
 
   return (
@@ -597,9 +627,11 @@ function CreateClientModal({
           set={set}
           notice={
             <DuplicatePhoneNotice
-              dup={dup}
+              owner={owner}
+              busy={useExisting.isPending}
+              onUse={() => useExisting.mutate()}
               onOpen={(id) => {
-                onClose();
+                close();
                 navigate(`${ROUTES.client}/${id}`);
               }}
             />
@@ -747,6 +779,20 @@ function ClientDetail({ customer }: { customer: Customer }) {
 
   const handleBack = () => (form.dirty ? setConfirmLeave(true) : goBack());
 
+  /**
+   * Después de combinar: si la ficha que sobrevivió es otra, se abre esa; si es
+   * esta, se espera el refetch y se relee el borrador (la fila cambió: quedaron
+   * las notas de las dos fichas).
+   */
+  const afterMerge = async (keptId: string) => {
+    if (keptId !== id) {
+      navigate(`${ROUTES.client}/${keptId}`, { replace: true });
+      return;
+    }
+    await qc.refetchQueries({ queryKey: ['client', id] });
+    form.resync();
+  };
+
   const c = customer;
   const m = metrics.data;
   const visits = m?.visits ?? 0;
@@ -786,10 +832,27 @@ function ClientDetail({ customer }: { customer: Customer }) {
         open={mergeOpen}
         customer={c}
         onClose={() => setMergeOpen(false)}
-        onMerged={(keptId) => {
-          if (keptId !== id) navigate(`${ROUTES.client}/${keptId}`, { replace: true });
-        }}
+        onMerged={(keptId) => void afterMerge(keptId)}
       />
+
+      {/* Combinar con la ficha que ya tiene el WhatsApp que se intentó guardar:
+          se abre desde el aviso del formulario, con los cambios sin guardar
+          incluidos (`patch`). */}
+      {form.combineOpen && form.owner && (
+        <MergeClientsModal
+          open
+          a={c}
+          b={form.owner}
+          patches={{ [c.id]: form.patch }}
+          hint="Lo que escribiste en la ficha (incluido el WhatsApp) se guarda en el contacto que quede."
+          onClose={() => form.setCombineOpen(false)}
+          onMerged={(keptId) => {
+            form.setCombineOpen(false);
+            form.setOwner(null);
+            void afterMerge(keptId);
+          }}
+        />
+      )}
 
       {/* Métricas */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -965,19 +1028,38 @@ function useClientDraft(
 ) {
   const stored = draftFromCustomer(customer);
   const [draft, setDraft] = useState(stored);
-  const [loadedId, setLoadedId] = useState(customer.id);
-  const [dup, setDup] = useState<{ id: string; name: string } | null>(null);
+  /** Ficha que ya tiene el WhatsApp que se escribió. */
+  const [owner, setOwner] = useState<Customer | null>(null);
+  const [combineOpen, setCombineOpen] = useState(false);
+  // Sube de a uno cuando hay que releer el borrador del mismo cliente (después
+  // de combinar, la fila quedó con las notas de las dos fichas).
+  const [syncToken, setSyncToken] = useState(0);
+  const [loaded, setLoaded] = useState(`${customer.id}:0`);
 
   // Cambiar de cliente sin desmontar la pantalla (p. ej. abrir la ficha del
   // duplicado) tiene que traer el borrador del nuevo, no arrastrar el anterior.
-  if (loadedId !== customer.id) {
-    setLoadedId(customer.id);
+  const token = `${customer.id}:${syncToken}`;
+  if (loaded !== token) {
+    setLoaded(token);
     setDraft(stored);
-    setDup(null);
+    setOwner(null);
   }
 
   const set = <K extends keyof ClientDraft>(key: K, value: ClientDraft[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
+
+  /** Lo escrito en el formulario, en la forma en que se guarda en la fila. */
+  const patch: CustomerPatch = {
+    first_name: draft.firstName.trim(),
+    last_name: draft.lastName.trim() || null,
+    phone: draft.phone.trim() || null,
+    email: normalizeEmail(draft.email) || null,
+    birth_date: draft.birth || null,
+    preferred_staff_id: draft.preferred || null,
+    notes: draft.notes.trim() || null,
+    allergies: draft.allergies.trim() || null,
+    hair_notes: draft.hairNotes.trim() || null,
+  };
 
   const dirty = (Object.keys(stored) as (keyof ClientDraft)[]).some(
     (k) => draft[k] !== stored[k],
@@ -988,16 +1070,19 @@ function useClientDraft(
       const canonical = draft.phone.trim() || null;
       const phoneError = validatePhone(canonical);
       if (phoneError) throw new Error(phoneError);
+      const email = normalizeEmail(draft.email);
+      const emailError = validateEmail(email);
+      if (emailError) throw new Error(emailError);
       if (canonical) {
         const hit = await findCustomerByPhone(
           customer.organization_id,
           canonical,
         );
         if (hit && hit.id !== customer.id) {
-          const err = new Error('DUP') as Error & {
-            hit: { id: string; name: string };
-          };
-          err.hit = { id: hit.id, name: fullName(hit.first_name, hit.last_name) };
+          const err = new Error(
+            `Ese número ya es de ${fullName(hit.first_name, hit.last_name)}.`,
+          ) as Error & { hit?: Customer };
+          err.hit = hit;
           throw err;
         }
       }
@@ -1011,7 +1096,7 @@ function useClientDraft(
           draft.firstName.trim(),
           draft.lastName.trim() || null,
           canonical,
-          draft.email.trim() || null,
+          email || null,
           draft.birth || null,
           draft.preferred || null,
           draft.notes.trim() || null,
@@ -1022,18 +1107,26 @@ function useClientDraft(
         ],
       );
     },
-    onError: (e: Error & { hit?: { id: string; name: string } }) => {
-      if (e.hit) {
-        setDup(e.hit);
-        onFail(`Ese número ya es de ${e.hit.name}.`);
-      } else {
-        onFail(e.message);
-      }
+    onError: (e: Error & { hit?: Customer }) => {
+      if (e.hit) setOwner(e.hit);
+      onFail(e.message);
     },
     onSuccess: onSaved,
   });
 
-  return { draft, set, dirty, dup, setDup, save };
+  return {
+    draft,
+    set,
+    dirty,
+    patch,
+    owner,
+    setOwner,
+    combineOpen,
+    setCombineOpen,
+    /** Relee el borrador desde la fila (después de combinar). */
+    resync: () => setSyncToken((t) => t + 1),
+    save,
+  };
 }
 
 function ClientForm({
@@ -1047,7 +1140,7 @@ function ClientForm({
 }) {
   const staff = useStaff();
   const navigate = useNavigate();
-  const { draft, set, dirty, dup, setDup, save } = form;
+  const { draft, set, dirty, owner, setOwner, setCombineOpen, save } = form;
 
   return (
     <Card className="sticky top-4">
@@ -1056,12 +1149,15 @@ function ClientForm({
         <CustomerFields
           draft={draft}
           set={(key, value) => {
-            if (key === 'phone') setDup(null);
+            if (key === 'phone') setOwner(null);
             set(key, value);
           }}
           notice={
             <DuplicatePhoneNotice
-              dup={dup}
+              owner={owner}
+              // Hay dos fichas de la misma persona: combinarlas conserva el
+              // historial de las dos y los datos recién escritos.
+              onMerge={() => setCombineOpen(true)}
               onOpen={(id) => navigate(`${ROUTES.client}/${id}`)}
             />
           }

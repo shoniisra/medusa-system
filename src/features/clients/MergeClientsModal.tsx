@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Merge, Search, TriangleAlert, ArrowRight, Users } from 'lucide-react';
 import { dateShort, fullName } from '@/lib/format';
@@ -13,7 +13,9 @@ import {
   mergeablePairs,
   mergeCustomers,
   mergedFields,
+  patchedCustomer,
   tableLabel,
+  type CustomerPatches,
 } from './mergeCustomers';
 
 /* ═════════════════════════ Combinar dos contactos ═════════════════════════ */
@@ -25,17 +27,37 @@ interface MergeProps {
   onClose: () => void;
   /** Se llama con el id del contacto que quedó. */
   onMerged?: (keptId: string) => void;
+  /**
+   * Cambios sin guardar del formulario desde el que se abrió (por id de
+   * contacto). Se aplican antes de fusionar, así combinar en medio de una
+   * corrección de datos no pierde lo que se acababa de escribir.
+   */
+  patches?: CustomerPatches;
+  /** Aclaración extra arriba, según desde dónde se llegó. */
+  hint?: ReactNode;
 }
 
-function MergeClientsModal({ open, a, b, onClose, onMerged }: MergeProps) {
+export function MergeClientsModal({
+  open,
+  a,
+  b,
+  onClose,
+  onMerged,
+  patches,
+  hint,
+}: MergeProps) {
   const qc = useQueryClient();
   const toast = useToast();
+  // Las fichas se muestran y se fusionan con los cambios del formulario ya
+  // aplicados: es lo que la usuaria tiene delante y lo que se va a guardar.
+  const pa = useMemo(() => patchedCustomer(a, patches?.[a.id]), [a, patches]);
+  const pb = useMemo(() => patchedCustomer(b, patches?.[b.id]), [b, patches]);
   // Principal sugerido: la ficha más completa.
   const [keepId, setKeepId] = useState(
-    completeness(a) >= completeness(b) ? a.id : b.id,
+    completeness(pa) >= completeness(pb) ? a.id : b.id,
   );
-  const keep = keepId === a.id ? a : b;
-  const dup = keepId === a.id ? b : a;
+  const keep = keepId === a.id ? pa : pb;
+  const dup = keepId === a.id ? pb : pa;
 
   const refs = useQuery({
     queryKey: ['customer-refs', dup.id],
@@ -49,7 +71,7 @@ function MergeClientsModal({ open, a, b, onClose, onMerged }: MergeProps) {
   const discarded = useMemo(() => discardedContact(keep, dup), [keep, dup]);
 
   const merge = useMutation({
-    mutationFn: () => mergeCustomers(keep, dup),
+    mutationFn: () => mergeCustomers(keep, dup, patches),
     onSuccess: () => {
       void qc.invalidateQueries();
       toast.success(
@@ -77,9 +99,14 @@ function MergeClientsModal({ open, a, b, onClose, onMerged }: MergeProps) {
           (citas, ventas, fichas de color) se mueve a la principal y la ficha
           duplicada se elimina.
         </p>
+        {hint && (
+          <p className="rounded-xl border border-gold/20 bg-gold/[0.06] p-3 text-sm text-gold-200/80">
+            {hint}
+          </p>
+        )}
 
         <div className="grid gap-3 sm:grid-cols-2">
-          {[a, b].map((c) => (
+          {[pa, pb].map((c) => (
             <CandidateCard
               key={c.id}
               customer={c}

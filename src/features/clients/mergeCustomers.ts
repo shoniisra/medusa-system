@@ -1,5 +1,5 @@
-import { batch, query } from '@/lib/db';
-import { phoneToWaDigits } from '@/lib/phone';
+import { batch, query, type Stmt } from '@/lib/db';
+import { phoneDedupKey } from '@/lib/phone';
 import { normalizeText } from '@/lib/text';
 import type { Customer, ID } from '@/types';
 
@@ -80,16 +80,6 @@ function nameKey(first: string, last: string | null): string {
   return normalizeText(`${first} ${last ?? ''}`);
 }
 
-/**
- * Clave por teléfono: se normaliza al canónico y se toman los últimos 9
- * dígitos, así 0991234567, +593991234567 y 593 99 123 4567 (registros viejos
- * sin normalizar) caen en el mismo grupo.
- */
-function phoneKey(phone: string | null): string {
-  const d = phoneToWaDigits(phone);
-  return d.length >= 7 ? d.slice(-9) : '';
-}
-
 /** Email normalizado, o '' si no hay. */
 function emailKey(email: string | null): string {
   return email ? normalizeText(email) : '';
@@ -104,8 +94,8 @@ export type ContactField = 'phone' | 'email';
  */
 export function discardedContact(keep: Customer, dup: Customer): ContactField[] {
   const out: ContactField[] = [];
-  const kp = phoneKey(keep.phone);
-  const dp = phoneKey(dup.phone);
+  const kp = phoneDedupKey(keep.phone);
+  const dp = phoneDedupKey(dup.phone);
   if (kp && dp && kp !== dp) out.push('phone');
   const ke = emailKey(keep.email);
   const de = emailKey(dup.email);
@@ -197,7 +187,7 @@ export function duplicateGroups<T extends Customer>(list: T[]): T[][] {
     else buckets.set(k, [i]);
   };
   list.forEach((c, i) => {
-    const p = phoneKey(c.phone);
+    const p = phoneDedupKey(c.phone);
     if (p) push(`p:${p}`, i);
     const e = emailKey(c.email);
     if (e) push(`e:${e}`, i);
@@ -255,6 +245,45 @@ export function completeness(c: Customer): number {
 
 /* ──────────────────────────── Combinación ──────────────────────────── */
 
+/**
+ * Campos editables de una ficha, tal como salen de un formulario abierto.
+ *
+ * Hace falta porque el caso más común de combinación aparece justo mientras se
+ * corrigen los datos: se escribe el WhatsApp en la ficha incompleta de una cita
+ * y resulta que ese número ya es de otra ficha. Lo que se acaba de escribir no
+ * está en la DB todavía, así que viaja aparte y se aplica sobre la fila a la que
+ * pertenece (`patches` va indexado por id de cliente). Después se combina con
+ * las reglas de siempre: el principal gana, el otro rellena los huecos.
+ */
+export interface CustomerPatch {
+  first_name?: string;
+  last_name?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  birth_date?: string | null;
+  preferred_staff_id?: string | null;
+  notes?: string | null;
+  allergies?: string | null;
+  hair_notes?: string | null;
+}
+
+/** Cambios sin guardar por id de contacto. */
+export type CustomerPatches = Record<string, CustomerPatch | undefined>;
+
+/** La ficha como quedaría con los cambios del formulario aplicados. */
+export function patchedCustomer<T extends Customer>(
+  c: T,
+  patch?: CustomerPatch,
+): T {
+  if (!patch) return c;
+  const out = { ...c };
+  for (const [k, v] of Object.entries(patch)) {
+    if (v !== undefined) (out as Record<string, unknown>)[k] = v;
+  }
+  return out;
+}
+
+
 /** Texto del principal; si el duplicado aporta algo distinto, se conserva abajo. */
 function joinText(a: string | null, b: string | null): string | null {
   const x = (a ?? '').trim();
@@ -298,10 +327,14 @@ export function mergedFields(keep: Customer, dup: Customer) {
  * editó en otra pestaña, y no reparentar citas y ventas hacia una ficha que
  * mientras tanto dejó de existir (el UPDATE final no afectaría ninguna fila y
  * quedarían huérfanas sin que nadie se enterara).
+ *
+ * `patches` son los cambios sin guardar del formulario desde el que se combina
+ * (ver `CustomerPatch`): se aplican sobre la fila releída de su propio contacto.
  */
 export async function mergeCustomers(
   keep: Customer,
   dup: Customer,
+  patches?: CustomerPatches,
 ): Promise<void> {
   if (keep.id === dup.id) {
     throw new Error('No se puede combinar un contacto con él mismo.');
@@ -322,7 +355,12 @@ export async function mergeCustomers(
     throw new Error('Los contactos son de organizaciones distintas.');
   }
 
-  const f = mergedFields(keepNow, dupNow);
+  // Los cambios sin guardar del formulario entran antes de fusionar, para que
+  // el teléfono recién escrito sea el que gana y no el que está en la fila.
+  const f = mergedFields(
+    patchedCustomer(keepNow, patches?.[keepNow.id]),
+    patchedCustomer(dupNow, patches?.[dupNow.id]),
+  );
 
   // Orden importante: primero se mueven las referencias, después se borra el
   // duplicado y SOLO entonces se escriben los campos fusionados. Si el
@@ -358,4 +396,68 @@ export async function mergeCustomers(
       ],
     },
   ]);
+}
+
+/* ─────────────── Usar un contacto existente (sin combinar) ─────────────── */
+
+/** Cómo se nombra cada campo en el aviso de "se completó con…". */
+const FIELD_LABELS: Record<keyof CustomerPatch, string> = {
+  first_name: 'nombre',
+  last_name: 'apellido',
+  phone: 'WhatsApp',
+  email: 'email',
+  birth_date: 'cumpleaños',
+  preferred_staff_id: 'estilista preferido',
+  notes: 'notas',
+  allergies: 'alergias',
+  hair_notes: 'notas capilares',
+};
+
+export interface GapFill {
+  stmt: Stmt;
+  /** Campos que se completaron, en español, para avisar qué se agregó. */
+  fields: string[];
+}
+
+/**
+ * Completa los huecos de una ficha existente con lo que se escribió en el
+ * formulario, sin pisar nada de lo que ya tenía.
+ *
+ * Es la otra salida del duplicado: cuando no hay dos fichas que combinar (se
+ * estaba creando una nueva, o la cita todavía no tenía cliente) lo correcto es
+ * usar la que ya existe y aprovechar los datos que se acababan de pedir —el
+ * email, el cumpleaños— en vez de descartarlos.
+ *
+ * Devuelve `null` si no hay nada que agregar; el statement se puede combinar en
+ * un batch con, por ejemplo, el UPDATE que ata la cita al contacto.
+ */
+export function fillCustomerGaps(
+  target: Customer,
+  patch: CustomerPatch,
+): GapFill | null {
+  const sets: string[] = [];
+  const args: (string | null)[] = [];
+  const fields: string[] = [];
+  const empty = (v: string | null | undefined) => !v || v.trim() === '';
+
+  for (const [key, label] of Object.entries(FIELD_LABELS) as [
+    keyof CustomerPatch,
+    string,
+  ][]) {
+    const value = patch[key];
+    if (empty(value)) continue;
+    if (!empty(target[key])) continue;
+    sets.push(`${key} = ?`);
+    args.push(value ?? null);
+    fields.push(label);
+  }
+  if (sets.length === 0) return null;
+
+  return {
+    stmt: {
+      sql: `UPDATE customer SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`,
+      args: [...args, new Date().toISOString(), target.id],
+    },
+    fields,
+  };
 }
