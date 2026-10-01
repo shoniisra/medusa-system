@@ -8,7 +8,6 @@ import {
   SlidersHorizontal,
   X,
 } from 'lucide-react';
-import { execute } from '@/lib/db';
 import { fullName } from '@/lib/format';
 import { ROUTES } from '@/config/constants';
 import { Card, Button, EmptyState, Select, Modal } from '@/components/ui';
@@ -21,6 +20,7 @@ import {
   ToggleBtn,
   ListView,
   useAppointments,
+  startAttention,
 } from './appointmentBoard';
 import { AppointmentActionsModal } from './AppointmentActions';
 
@@ -71,18 +71,10 @@ export function CalendarPage() {
 
   // "Empezar a Atender": la cita pasa a "Atendiendo" y la persona sigue en la
   // agenda (el detalle se carga después, al finalizar y cobrar).
-  const startAttention = (a: AppointmentRow) => {
-    execute(
-      "UPDATE appointment SET status = 'confirmed', updated_at = ? WHERE id = ?",
-      [new Date().toISOString(), a.id],
-    )
-      .then(() => {
-        qc.invalidateQueries({ queryKey: ['appointments'] });
-        qc.invalidateQueries({ queryKey: ['dashboard-metrics'] });
-      })
-      .catch(() => {
-        /* si falla, el estado sigue como estaba */
-      });
+  const beginAttention = (a: { id: string }) => {
+    void startAttention(qc, a.id).catch(() => {
+      /* si falla, el estado sigue como estaba */
+    });
   };
 
   // "Finalizar y Cobrar": abre la ficha en modo atención para cerrar la venta.
@@ -239,7 +231,7 @@ export function CalendarPage() {
         <ListView
           rows={filteredRows}
           showDate={range !== 'today'}
-          onStart={startAttention}
+          onStart={beginAttention}
           onFinish={finishAttention}
           onOpen={setSelected}
         />

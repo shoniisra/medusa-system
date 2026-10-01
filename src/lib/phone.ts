@@ -95,7 +95,7 @@ export function phoneToWaDigits(stored: string | null | undefined): string {
  * Normaliza un teléfono ya guardado (posible legacy) al formato canónico.
  * Útil para comparar/deduplicar registros viejos.
  */
-export function normalizeStored(stored: string | null | undefined): string {
+function normalizeStored(stored: string | null | undefined): string {
   if (!stored) return '';
   const { dial, local } = parsePhone(stored);
   return normalizePhone(local, dial);

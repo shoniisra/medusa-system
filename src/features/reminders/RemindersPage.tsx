@@ -103,7 +103,8 @@ export function RemindersPage() {
       ),
   });
 
-  const rows = q.data ?? [];
+  // Referencia estable: sin esto el useMemo de abajo se recalcula siempre.
+  const rows = useMemo(() => q.data ?? [], [q.data]);
   const pending = useMemo(
     () => rows.filter((r) => !reminded.has(r.id)).length,
     [rows, reminded],

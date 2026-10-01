@@ -79,6 +79,15 @@ export async function execute(
   return rowsAffected;
 }
 
+/** Valor que una sentencia puede llevar como parámetro. */
+export type SqlArg = string | number | null;
+
+/**
+ * Sentencia parametrizada para `batch`. El tipo estaba escrito a mano en catorce
+ * lugares, así que vive acá, junto a la función que lo consume.
+ */
+export type Stmt = { sql: string; args: SqlArg[] };
+
 /** Transacción con varias sentencias (batch atómico). */
 export async function batch(
   stmts: { sql: string; args?: InValue[] }[],

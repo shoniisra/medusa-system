@@ -54,10 +54,25 @@ export interface Field {
   colSpan?: 1 | 2;
 }
 
+/**
+ * Valor tal como lo devuelve SQLite. Tiparlo así (y no `unknown`) es lo que
+ * permite mostrarlo y ordenarlo sin terminar imprimiendo "[object Object]".
+ */
+export type SqlValue = string | number | null;
+
+/** Fila cruda de la tabla que administra el motor CRUD. */
+export type Row = Record<string, SqlValue>;
+
 export interface Column {
   header: string;
-  render: (row: Record<string, unknown>) => ReactNode;
+  render: (row: Row) => ReactNode;
   align?: 'left' | 'right';
+  /**
+   * Con qué ordenar cuando `render` devuelve un elemento y no texto. Sin esto la
+   * columna se ordenaba por el nodo de React convertido a string, es decir por
+   * "[object Object]": el clic en la cabecera no hacía nada.
+   */
+  sortValue?: (row: Row) => string | number;
 }
 
 export interface ResourceConfig {
@@ -96,9 +111,8 @@ const METHOD_TYPE_OPTIONS = (
   Object.keys(PAYMENT_METHOD_LABELS) as (keyof typeof PAYMENT_METHOD_LABELS)[]
 ).map((k) => ({ value: k, label: PAYMENT_METHOD_LABELS[k] }));
 
-const s = (v: unknown) => (v == null ? '—' : String(v));
+const s = (v: SqlValue) => (v == null ? '—' : String(v));
 
-/** Muestra un círculo con el color del colaborador. */
 /** Punto de color + nombre del color de Google Calendar al que corresponde. */
 const colorDot = (hex: string | null): ReactNode =>
   hex
@@ -213,6 +227,7 @@ export const RESOURCES: ResourceConfig[] = [
       {
         header: 'Color',
         render: (r) => colorDot(r.color as string | null),
+        sortValue: (r) => calendarColorName(r.color as string | null),
       },
       { header: 'Código', render: (r) => s(r.employee_code) },
       { header: 'Teléfono', render: (r) => s(r.phone) },

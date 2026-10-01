@@ -29,11 +29,15 @@ export function LoginPage() {
       ),
   });
 
+  // Preselección de organización en cuanto llega el listado. Es sincronizar el
+  // formulario con datos async, no estado derivado: el usuario puede cambiarla.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     const def = import.meta.env.VITE_DEFAULT_ORG_ID;
     if (!orgId && def) setOrgId(def);
     else if (!orgId && orgs.data?.length) setOrgId(orgs.data[0].id);
   }, [orgs.data, orgId]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const users = useQuery({
     queryKey: ['login-users', orgId],
@@ -133,7 +137,7 @@ export function LoginPage() {
           <Button
             className="w-full"
             size="lg"
-            onClick={handleEnter}
+            onClick={() => void handleEnter()}
             disabled={!orgId || !userId || !branchId}
           >
             Ingresar

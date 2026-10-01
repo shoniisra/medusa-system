@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Plus,
   Minus,
@@ -45,8 +45,24 @@ export interface LineCommission {
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+/**
+ * Cambiar el precio a cobrar recalcula el descuento contra el precio de lista:
+ * el descuento no se edita a mano, se deduce. Lo usan la vista de tarjetas y la
+ * de tabla, que lo tenían duplicado.
+ */
+function finalPricePatch(
+  i: EditorItem,
+  value: string,
+): Record<string, number> {
+  const fin = round2(Number(value) || 0);
+  return {
+    final_unit_price: fin,
+    discount_amount: Math.max(0, round2(i.list_unit_price - fin)),
+  };
+}
+
 /** Comisión de una línea (solo servicios con estilista y reglas cargadas). */
-export function lineCommission(
+function lineCommission(
   i: EditorItem,
   rules: Map<string, CommissionRule> | undefined,
 ): LineCommission | null {
@@ -228,16 +244,7 @@ export function SaleItemsEditor({
                       type="number"
                       align="left"
                       display={money(i.final_unit_price)}
-                      onCommit={(v) => {
-                        const fin = round2(Number(v) || 0);
-                        onUpdateItem(i.id, {
-                          final_unit_price: fin,
-                          discount_amount: Math.max(
-                            0,
-                            round2(i.list_unit_price - fin),
-                          ),
-                        });
-                      }}
+                      onCommit={(v) => onUpdateItem(i.id, finalPricePatch(i, v))}
                     />
                   </span>
                 </div>
@@ -376,16 +383,7 @@ export function SaleItemsEditor({
                       value={i.final_unit_price}
                       type="number"
                       display={money(i.final_unit_price)}
-                      onCommit={(v) => {
-                        const fin = round2(Number(v) || 0);
-                        onUpdateItem(i.id, {
-                          final_unit_price: fin,
-                          discount_amount: Math.max(
-                            0,
-                            round2(i.list_unit_price - fin),
-                          ),
-                        });
-                      }}
+                      onCommit={(v) => onUpdateItem(i.id, finalPricePatch(i, v))}
                     />
                   </td>
                   <td className="py-1 pl-1 text-right">
@@ -438,31 +436,35 @@ export function SaleItemsEditor({
         </Button>
       </div>
 
-      <AddServiceSheet
-        open={adding === 'service'}
-        onClose={() => setAdding(null)}
-        services={services}
-        staff={staff}
-        onAdd={(sid, stid) => {
-          onAddService({ sid, stid });
-          setAdding(null);
-        }}
-      />
-      <AddProductSheet
-        open={adding === 'product'}
-        onClose={() => setAdding(null)}
-        products={products}
-        onAdd={(pid, qty, product) => {
-          onAddProduct({ pid, qty, product });
-          setAdding(null);
-        }}
-      />
+      {adding === 'service' && (
+        <AddServiceSheet
+          open
+          onClose={() => setAdding(null)}
+          services={services}
+          staff={staff}
+          onAdd={(sid, stid) => {
+            onAddService({ sid, stid });
+            setAdding(null);
+          }}
+        />
+      )}
+      {adding === 'product' && (
+        <AddProductSheet
+          open
+          onClose={() => setAdding(null)}
+          products={products}
+          onAdd={(pid, qty, product) => {
+            onAddProduct({ pid, qty, product });
+            setAdding(null);
+          }}
+        />
+      )}
     </Card>
   );
 }
 
 /** Celda con edición en línea: muestra un valor y, al hacer clic, un input. */
-export function InlineEdit({
+function InlineEdit({
   value,
   display,
   type = 'text',
@@ -606,14 +608,6 @@ function AddServiceSheet({
   const [category, setCategory] = useState('');
   const [service, setService] = useState<Service | null>(null);
   const [q, setQ] = useState('');
-
-  // Cada apertura arranca limpia.
-  useEffect(() => {
-    if (!open) return;
-    setCategory('');
-    setService(null);
-    setQ('');
-  }, [open]);
 
   const OTHERS = 'Otros';
   // Solo las categorías que tienen servicios cargados.
@@ -764,12 +758,6 @@ function AddProductSheet({
   const [creating, setCreating] = useState(false);
   const createProduct = useCreateProduct();
 
-  useEffect(() => {
-    if (!open) return;
-    setQ('');
-    setCreating(false);
-  }, [open]);
-
   const list = useMemo(() => {
     const term = normalizeText(q);
     if (!term) return products;
@@ -795,11 +783,15 @@ function AddProductSheet({
               : ''
           }
           onCancel={() => setCreating(false)}
-          onSubmit={async (draft) => {
-            const p = await createProduct.mutateAsync(draft);
-            // Se pasa la fila entera: el contenedor todavía tiene en memoria el
-            // catálogo anterior y no encontraría el id recién creado.
-            onAdd(p.id, 1, p);
+          onSubmit={(draft) => {
+            void createProduct
+              .mutateAsync(draft)
+              // Se pasa la fila entera: el contenedor todavía tiene en memoria el
+              // catálogo anterior y no encontraría el id recién creado.
+              .then((p) => onAdd(p.id, 1, p))
+              .catch(() => {
+                /* el aviso ya lo da createProduct.isError en el formulario */
+              });
           }}
         />
       ) : (

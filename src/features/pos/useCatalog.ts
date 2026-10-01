@@ -113,10 +113,12 @@ export function useCreateProduct() {
       return row;
     },
     onSuccess: (p) => {
+      // Se inserta en la caché y se marca stale: el producto nuevo aparece al
+      // instante en el selector y el refetch en segundo plano confirma la fila.
       qc.setQueryData<Product[]>(['products', orgId], (old) =>
         [...(old ?? []), p].sort((a, b) => a.name.localeCompare(b.name)),
       );
-      qc.invalidateQueries({ queryKey: ['products', orgId] });
+      void qc.invalidateQueries({ queryKey: ['products', orgId] });
     },
   });
 }

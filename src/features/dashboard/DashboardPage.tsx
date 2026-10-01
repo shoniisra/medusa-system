@@ -19,7 +19,7 @@ import {
   Play,
   GripVertical,
 } from 'lucide-react';
-import { query, execute } from '@/lib/db';
+import { query } from '@/lib/db';
 import { cn } from '@/lib/cn';
 import { useDashboard } from './useDashboard';
 import { useDashboardMetrics } from './useDashboardMetrics';
@@ -33,6 +33,7 @@ import { ROUTES, APPOINTMENT_STATUS } from '@/config/constants';
 import { AppointmentActionsModal } from '@/features/calendar/AppointmentActions';
 import type { NextAppointment } from './useDashboardMetrics';
 import type { AppointmentStatus } from '@/types';
+import { startAttention } from '@/features/calendar/appointmentBoard';
 
 const SECTION_KEYS = [
   'stats',
@@ -97,18 +98,10 @@ export function DashboardPage() {
   const [selectedAppt, setSelectedAppt] = useState<NextAppointment | null>(null);
 
   // "Empezar a Atender": la cita pasa a "Atendiendo" sin salir del inicio.
-  const startAttention = (a: { id: string }) => {
-    execute(
-      "UPDATE appointment SET status = 'confirmed', updated_at = ? WHERE id = ?",
-      [new Date().toISOString(), a.id],
-    )
-      .then(() => {
-        qc.invalidateQueries({ queryKey: ['dashboard-metrics'] });
-        qc.invalidateQueries({ queryKey: ['appointments'] });
-      })
-      .catch(() => {
-        /* si falla, el estado sigue como estaba */
-      });
+  const beginAttention = (a: { id: string }) => {
+    void startAttention(qc, a.id).catch(() => {
+      /* si falla, el estado sigue como estaba */
+    });
   };
 
   // "Finalizar y Cobrar": abre la ficha para confirmar el detalle y cobrar.
@@ -318,7 +311,7 @@ export function DashboardPage() {
                           variant={started ? 'gold' : 'outline'}
                           className="h-9 min-w-0 flex-1 whitespace-nowrap"
                           onClick={() =>
-                            started ? finishAttention(a) : startAttention(a)
+                            started ? finishAttention(a) : beginAttention(a)
                           }
                         >
                           {started ? (

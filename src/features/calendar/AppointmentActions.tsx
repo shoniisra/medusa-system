@@ -24,6 +24,8 @@ import { Button, Input, Modal, Select, useToast } from '@/components/ui';
 import { useStaff } from '@/features/pos/useCatalog';
 import type { AppointmentStatus } from '@/types';
 import { isNoCharge, isOverdue, ymd } from './appointmentBoard';
+import { invalidateAppointments } from '@/lib/queryClient';
+import { invalidateFinance } from '@/lib/queryClient';
 
 /**
  * Cita sobre la que opera el menú de acciones. Es el mínimo que todas las
@@ -107,18 +109,12 @@ export function AppointmentActionsModal({
   // La nueva fecha y hora siempre van hacia adelante: reprogramar al pasado
   // dejaría una cita "vencida" de entrada.
   const newStart = date && time ? new Date(`${date}T${time}`) : null;
+  // Solo para el aviso y el botón deshabilitado; la validación que manda está en
+  // la mutación `reschedule`, que vuelve a comparar contra el reloj al guardar.
+  // eslint-disable-next-line react-hooks/purity
   const inThePast = !!newStart && newStart.getTime() < Date.now();
 
-  const invalidate = () => {
-    qc.invalidateQueries({ queryKey: ['appointments'] });
-    qc.invalidateQueries({ queryKey: ['appointment-head', appt.id] });
-    qc.invalidateQueries({ queryKey: ['appointment-items', appt.id] });
-    qc.invalidateQueries({ queryKey: ['dashboard-metrics'] });
-    qc.invalidateQueries({ queryKey: ['week-availability'] });
-    // Contadores de vencidas (menú lateral y cierre masivo en Tareas).
-    qc.invalidateQueries({ queryKey: ['overdue-pending'] });
-    qc.invalidateQueries({ queryKey: ['overdue-count'] });
-  };
+  const invalidate = () => invalidateAppointments(qc, appt.id);
 
   const fail = (e: unknown, fallback: string) => {
     const msg = e instanceof Error ? e.message : fallback;
@@ -243,16 +239,8 @@ export function AppointmentActionsModal({
     },
     onSuccess: () => {
       invalidate();
-      // Refrescar finanzas: el abono borrado ya no debe contar en caja/ingresos.
-      for (const key of [
-        ['fin-accounts'],
-        ['fin-summary'],
-        ['fin-exp7'],
-        ['transactions'],
-        ['cash-expected'],
-      ]) {
-        qc.invalidateQueries({ queryKey: key });
-      }
+      // El abono borrado ya no debe contar en caja ni en ingresos.
+      invalidateFinance(qc);
       onClose();
       toast.info('Cita eliminada', apptLabel(appt));
     },

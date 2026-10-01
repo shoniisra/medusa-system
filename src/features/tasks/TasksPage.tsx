@@ -23,6 +23,7 @@ import {
 } from './TaskToolbar';
 import { CloseOverdueModal, useOverduePending } from './CloseOverdueModal';
 import type { AppointmentStatus } from '@/types';
+import { invalidateAppointments } from '@/lib/queryClient';
 
 /** Aviso al mover una tarjeta de columna en el tablero. */
 const MOVE_TOAST: Partial<Record<AppointmentStatus, string>> = {
@@ -60,11 +61,7 @@ export function TasksPage() {
   // Pila total de vencidas (independiente del rango): habilita el cierre masivo.
   const overduePending = useOverduePending();
 
-  const invalidate = () => {
-    qc.invalidateQueries({ queryKey: ['appointments'] });
-    qc.invalidateQueries({ queryKey: ['overdue-pending'] });
-    qc.invalidateQueries({ queryKey: ['overdue-count'] });
-  };
+  const invalidate = () => invalidateAppointments(qc);
 
   const filteredRows = useMemo(() => {
     let rows = appts.data ?? [];

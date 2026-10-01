@@ -1,4 +1,4 @@
-import { batch, query } from '@/lib/db';
+import { batch, query, type Stmt } from '@/lib/db';
 import { genId } from '@/lib/format';
 import { DEFAULT_COMMISSION_RATE } from '@/config/constants';
 import type { CommissionType, DraftSaleItem } from '@/types';
@@ -35,7 +35,7 @@ export async function createSale(input: CreateSaleInput): Promise<string> {
   const soldAt = input.soldAt ?? now;
   const saleNumber = `V-${Date.now()}`;
 
-  const stmts: { sql: string; args: (string | number | null)[] }[] = [
+  const stmts: Stmt[] = [
     {
       sql: `INSERT INTO sale
               (id, organization_id, branch_id, customer_id, appointment_id, sale_number, sold_at,

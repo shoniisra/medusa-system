@@ -27,7 +27,7 @@ export async function devExecute(
   args: InValue[],
 ): Promise<{ rows: unknown[]; rowsAffected: number }> {
   const rs = await getDb().execute({ sql, args });
-  return { rows: rs.rows as unknown[], rowsAffected: rs.rowsAffected };
+  return { rows: rs.rows, rowsAffected: rs.rowsAffected };
 }
 
 export async function devBatch(

@@ -8,6 +8,7 @@ import { Button, Input, Modal, useToast } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { NO_CHARGE_MARK, ymd } from '@/features/calendar/appointmentBoard';
 import type { AppointmentStatus } from '@/types';
+import { invalidateAppointments } from '@/lib/queryClient';
 
 /** Cita vencida pendiente de cerrar (reservada o atendiendo de un día pasado). */
 export interface OverdueRow {
@@ -132,15 +133,7 @@ export function CloseOverdueModal({ onClose }: { onClose: () => void }) {
       return ids.length;
     },
     onSuccess: (n) => {
-      for (const key of [
-        ['appointments'],
-        ['overdue-pending'],
-        ['overdue-count'],
-        ['dashboard-metrics'],
-        ['week-availability'],
-      ]) {
-        qc.invalidateQueries({ queryKey: key });
-      }
+      invalidateAppointments(qc);
       setDone(n);
       onClose();
       toast.success(

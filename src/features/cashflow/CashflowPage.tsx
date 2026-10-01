@@ -18,8 +18,8 @@ import {
   SlidersHorizontal,
   Scale,
 } from 'lucide-react';
-import { query, queryOne, execute, batch } from '@/lib/db';
-import { qk } from '@/lib/queryClient';
+import { query, queryOne, execute, batch, type Stmt } from '@/lib/db';
+import { invalidateFinance, qk } from '@/lib/queryClient';
 import { genId, money, timeShort, dateShort, todayISO } from '@/lib/format';
 import { useSession, useBranchId, useOrgId } from '@/store/session';
 import { cn } from '@/lib/cn';
@@ -35,6 +35,13 @@ import {
   useToast,
 } from '@/components/ui';
 import { CollectSection } from './CollectSection';
+import {
+  AccountSelect,
+  paymentMethodFor,
+  usePaymentMethods,
+  useBankAccounts,
+} from './accounts';
+import { expenseStatements } from './expense';
 import type {
   AccountKind,
   BankAccount,
@@ -68,21 +75,7 @@ const NOT_ADJUST_EXPENSE = `AND COALESCE(description,'') NOT LIKE '${ADJUST_MARK
 function useInvalidateFinance() {
   const qc = useQueryClient();
   const branchId = useBranchId();
-  return () => {
-    for (const key of [
-      ['fin-accounts'],
-      ['fin-summary'],
-      ['fin-exp7'],
-      ['fin-debts'],
-      ['transactions'],
-      ['cash-expected'],
-      ['cash-carryover'],
-    ]) {
-      qc.invalidateQueries({ queryKey: key });
-    }
-    qc.invalidateQueries({ queryKey: qk.cashSession(branchId) });
-    qc.invalidateQueries({ queryKey: qk.sales(branchId) });
-  };
+  return () => invalidateFinance(qc, branchId);
 }
 
 type TabKey = 'general' | 'resumen' | 'transacciones' | 'cuentas' | 'deudas';
@@ -564,30 +557,6 @@ function useAccounts(ctx: Ctx) {
 
 /* ─────────────────── métodos de pago (cash / transfer) ─────────────────── */
 
-function usePaymentMethods(orgId: string, enabled: boolean) {
-  return useQuery({
-    queryKey: ['payment-methods', orgId],
-    enabled: enabled && !!orgId,
-    queryFn: () =>
-      query<PaymentMethod>(
-        'SELECT * FROM payment_method WHERE organization_id = ? AND active = 1 ORDER BY name',
-        [orgId],
-      ),
-  });
-}
-
-function useBankAccounts(orgId: string, enabled: boolean) {
-  return useQuery({
-    queryKey: ['bank-accounts', orgId],
-    enabled: enabled && !!orgId,
-    queryFn: () =>
-      query<BankAccount>(
-        'SELECT * FROM bank_account WHERE organization_id = ? AND active = 1 ORDER BY name',
-        [orgId],
-      ),
-  });
-}
-
 /* ───────────────────────────── Modal: Ingreso ───────────────────────────── */
 
 /**
@@ -615,8 +584,6 @@ function IncomeModal({ ctx, onClose }: { ctx: Ctx; onClose: () => void }) {
   const methods = usePaymentMethods(ctx.orgId, true);
   const banks = useBankAccounts(ctx.orgId, true);
 
-  const cashMethod = methods.data?.find((m) => m.method_type === 'cash');
-  const transferMethod = methods.data?.find((m) => m.method_type === 'transfer');
   const isCash = dest === 'cash';
   const needsSession = isCash && !ctx.sessionId;
 
@@ -628,11 +595,11 @@ function IncomeModal({ ctx, onClose }: { ctx: Ctx; onClose: () => void }) {
     mutationFn: async () => {
       const now = new Date().toISOString();
       const paymentId = genId();
-      const method = isCash ? cashMethod : transferMethod;
+      const method = paymentMethodFor(methods.data, isCash);
       if (!method) throw new Error('No hay un método de pago configurado.');
       const bankId = isCash ? null : dest;
 
-      const stmts: { sql: string; args: (string | number | null)[] }[] = [
+      const stmts: Stmt[] = [
         {
           sql: `INSERT INTO payment
                   (id, organization_id, branch_id, sale_id, payment_method_id,
@@ -708,19 +675,12 @@ function IncomeModal({ ctx, onClose }: { ctx: Ctx; onClose: () => void }) {
             </option>
           ))}
         </Select>
-        <Select
+        <AccountSelect
           label="Cuenta destino"
           value={dest}
-          onChange={(e) => setDest(e.target.value)}
-        >
-          <option value="">Seleccionar…</option>
-          <option value="cash">Caja (efectivo)</option>
-          {banks.data?.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name}
-            </option>
-          ))}
-        </Select>
+          onChange={setDest}
+          accounts={banks.data}
+        />
         <Input
           label="Detalle"
           value={description}
@@ -773,60 +733,28 @@ function ExpenseModal({ ctx, onClose }: { ctx: Ctx; onClose: () => void }) {
   const methods = usePaymentMethods(ctx.orgId, true);
   const banks = useBankAccounts(ctx.orgId, true);
 
-  const cashMethod = methods.data?.find((m) => m.method_type === 'cash');
-  const transferMethod = methods.data?.find((m) => m.method_type === 'transfer');
   const isCash = source === 'cash';
   const needsSession = isCash && !ctx.sessionId;
 
   const save = useMutation({
     mutationFn: async () => {
-      const method = isCash ? cashMethod : transferMethod;
+      const method = paymentMethodFor(methods.data, isCash);
       if (!method) throw new Error('No hay un método de pago configurado.');
       const bankId = isCash ? null : source;
-      const expenseId = genId();
-      const now = new Date().toISOString();
 
-      const stmts: { sql: string; args: (string | number | null)[] }[] = [
-        {
-          sql: `INSERT INTO expense
-                  (id, organization_id, branch_id, expense_category_id, payment_method_id,
-                   bank_account_id, expense_date, description, amount, status, created_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)`,
-          args: [
-            expenseId,
-            ctx.orgId,
-            ctx.branchId,
-            categoryId,
-            method.id,
-            bankId,
-            todayISO(),
-            description,
-            Number(amount),
-            ctx.userId,
-          ],
-        },
-      ];
-
-      if (isCash) {
-        stmts.push({
-          sql: `INSERT INTO cash_movement
-                  (id, cash_session_id, branch_id, movement_type, direction, amount,
-                   movement_at, expense_id, description, created_by)
-                VALUES (?, ?, ?, 'expense', 'out', ?, ?, ?, ?, ?)`,
-          args: [
-            genId(),
-            ctx.sessionId,
-            ctx.branchId,
-            Number(amount),
-            now,
-            expenseId,
-            description,
-            ctx.userId,
-          ],
-        });
-      }
-
-      await batch(stmts);
+      await batch(
+        expenseStatements({
+          orgId: ctx.orgId,
+          branchId: ctx.branchId,
+          expenseCategoryId: categoryId,
+          paymentMethodId: method.id,
+          bankAccountId: bankId,
+          cashSessionId: ctx.sessionId,
+          description,
+          amount: Number(amount),
+          userId: ctx.userId,
+        }),
+      );
     },
     onSuccess: () => {
       invalidate();
@@ -865,19 +793,12 @@ function ExpenseModal({ ctx, onClose }: { ctx: Ctx; onClose: () => void }) {
             </option>
           ))}
         </Select>
-        <Select
+        <AccountSelect
           label="Pagar desde"
           value={source}
-          onChange={(e) => setSource(e.target.value)}
-        >
-          <option value="">Seleccionar…</option>
-          <option value="cash">Caja (efectivo)</option>
-          {banks.data?.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name}
-            </option>
-          ))}
-        </Select>
+          onChange={setSource}
+          accounts={banks.data}
+        />
         {needsSession && (
           <p className="text-xs text-danger">
             Para un gasto en efectivo necesitás abrir la caja primero.
@@ -925,7 +846,7 @@ function TransferModal({ ctx, onClose }: { ctx: Ctx; onClose: () => void }) {
       const fromKind: AccountKind = from === 'cash' ? 'cash' : 'bank';
       const toKind: AccountKind = to === 'cash' ? 'cash' : 'bank';
 
-      const stmts: { sql: string; args: (string | number | null)[] }[] = [
+      const stmts: Stmt[] = [
         {
           sql: `INSERT INTO account_transfer
                   (id, organization_id, branch_id, transfer_date, amount,
@@ -996,27 +917,11 @@ function TransferModal({ ctx, onClose }: { ctx: Ctx; onClose: () => void }) {
     onError: (e: Error) => toast.error('No se pudo transferir', e.message),
   });
 
-  const options = (
-    <>
-      <option value="">Seleccionar…</option>
-      <option value="cash">Caja (efectivo)</option>
-      {banks.data?.map((b) => (
-        <option key={b.id} value={b.id}>
-          {b.name}
-        </option>
-      ))}
-    </>
-  );
-
   return (
     <Modal open onClose={onClose} title="Transferir dinero">
       <div className="space-y-4">
-        <Select label="Desde" value={from} onChange={(e) => setFrom(e.target.value)}>
-          {options}
-        </Select>
-        <Select label="Hacia" value={to} onChange={(e) => setTo(e.target.value)}>
-          {options}
-        </Select>
+        <AccountSelect label="Desde" value={from} onChange={setFrom} accounts={banks.data} />
+        <AccountSelect label="Hacia" value={to} onChange={setTo} accounts={banks.data} />
         <Input
           label="Monto"
           type="number"
@@ -1095,7 +1000,7 @@ function AccountsTab({
         <OpenForm
           ctx={ctx}
           onOpened={() =>
-            qc.invalidateQueries({ queryKey: qk.cashSession(ctx.branchId) })
+            void qc.invalidateQueries({ queryKey: qk.cashSession(ctx.branchId) })
           }
         />
       ) : (
@@ -1493,7 +1398,7 @@ function OpenSessionCard({
       if (cnt == null) return;
       const now = new Date().toISOString();
       const difference = cnt - exp;
-      const stmts: { sql: string; args: (string | number | null)[] }[] = [];
+      const stmts: Stmt[] = [];
 
       // El descuadre entra como ajuste: así el saldo de la caja es el contado.
       if (difference !== 0) {
@@ -2375,7 +2280,8 @@ function TransactionsTab({ ctx }: { ctx: Ctx }) {
       ),
   });
 
-  const allRows = txs.data ?? [];
+  // Referencia estable: sin esto los useMemo de abajo se recalculan siempre.
+  const allRows = useMemo(() => txs.data ?? [], [txs.data]);
 
   const categories = useMemo(
     () => Array.from(new Set(allRows.map((r) => r.category))).sort(),
@@ -2613,19 +2519,14 @@ function SearchModal({
             </option>
           ))}
         </Select>
-        <Select
+        <AccountSelect
           label="Cuenta"
           value={f.account}
-          onChange={(e) => set('account', e.target.value)}
-        >
-          <option value="all">Todas</option>
-          <option value="cash">Caja (efectivo)</option>
-          {banks.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name}
-            </option>
-          ))}
-        </Select>
+          onChange={(v) => set('account', v)}
+          accounts={banks}
+          placeholder="Todas"
+          placeholderValue="all"
+        />
         <div className="grid grid-cols-2 gap-3">
           <Input
             label="Desde"

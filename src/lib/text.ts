@@ -9,7 +9,7 @@
  */
 
 /** Quita las marcas diacríticas combinantes (acentos, diéresis, tildes). */
-export const deburr = (s: string): string =>
+const deburr = (s: string): string =>
   s.normalize('NFD').replace(/[̀-ͯ]/g, '');
 
 /** Clave de comparación: sin acentos, minúsculas, espacios colapsados. */

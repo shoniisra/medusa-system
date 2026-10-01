@@ -24,7 +24,7 @@ function gcalDevApi(env: GcalEnv): Plugin {
           try {
             payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
           } catch {
-            payload = null;
+            // Cuerpo inválido: handleGcal responde el error que corresponda.
           }
           handleGcal(payload, env)
             .then(({ status, body }) => {

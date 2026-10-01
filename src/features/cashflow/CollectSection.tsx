@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Wallet, HandCoins } from 'lucide-react';
-import { query, batch } from '@/lib/db';
-import { qk } from '@/lib/queryClient';
+import { query, batch, type Stmt } from '@/lib/db';
+import { invalidateSales, qk } from '@/lib/queryClient';
 import { genId, money, dateShort } from '@/lib/format';
 import {
   Button,
@@ -150,7 +150,7 @@ function PaymentModal({
       const paymentId = genId();
       const now = new Date().toISOString();
 
-      const stmts: { sql: string; args: (string | number | null)[] }[] = [
+      const stmts: Stmt[] = [
         {
           sql: `INSERT INTO payment
                   (id, organization_id, branch_id, sale_id, payment_method_id,
@@ -194,12 +194,7 @@ function PaymentModal({
       await batch(stmts);
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: qk.sales(ctx.branchId) });
-      qc.invalidateQueries({ queryKey: ['fin-accounts'] });
-      qc.invalidateQueries({ queryKey: ['transactions'] });
-      if (ctx.sessionId) {
-        qc.invalidateQueries({ queryKey: ['cash-expected', ctx.sessionId] });
-      }
+      invalidateSales(qc, ctx.branchId);
       onClose();
       toast.success('Cobro registrado', `${sale.sale_number} · ${money(Number(amount) || 0)}`);
     },

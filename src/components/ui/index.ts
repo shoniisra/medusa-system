@@ -8,3 +8,5 @@ export { Modal } from './Modal';
 export { ToastProvider, useToast } from './Toast';
 export type { ToastOptions, ToastTone } from './Toast';
 export { EmptyState } from './EmptyState';
+export { PageHeader } from './PageHeader';
+export { DetailRow } from './DetailRow';

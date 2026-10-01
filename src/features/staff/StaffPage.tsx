@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, type CSSProperties } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Users,
@@ -9,7 +9,7 @@ import {
   ChevronRight,
   Scale,
 } from 'lucide-react';
-import { query, queryOne, batch, execute } from '@/lib/db';
+import { query, queryOne, batch, execute, type Stmt } from '@/lib/db';
 import { genId, money, dateShort, fullName, todayISO } from '@/lib/format';
 import { useOrgId, useBranchId, useSession } from '@/store/session';
 import {
@@ -23,10 +23,17 @@ import {
   EmptyState,
   useToast,
 } from '@/components/ui';
+import { invalidateFinance } from '@/lib/queryClient';
+import {
+  AccountSelect,
+  paymentMethodFor,
+  usePaymentMethods,
+  useBankAccounts,
+} from '@/features/cashflow/accounts';
+import { expenseStatements } from '@/features/cashflow/expense';
+import { staffExpenseCategoryId } from './staffExpense';
 import type {
-  BankAccount,
   CashSession,
-  PaymentMethod,
   StaffMember,
 } from '@/types';
 
@@ -60,6 +67,35 @@ function StaffDot({ color }: { color: string | null }) {
       className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
       style={{ backgroundColor: c, boxShadow: `0 0 0 3px ${tint(c, 0.25)}` }}
     />
+  );
+}
+
+/**
+ * Fondo de una fila de colaborador: un degradado con su color, que se apaga
+ * hacia la mitad para no pelearse con los números. Lo usan las tablas de
+ * liquidación y de saldos, que antes lo repetían tal cual.
+ */
+function staffRowStyle(color: string | null): CSSProperties {
+  return {
+    background: `linear-gradient(90deg, ${tint(color || NO_COLOR, 0.16)}, transparent 45%)`,
+  };
+}
+
+/** Primera celda de esas tablas: punto de color + nombre. */
+function StaffNameCell({
+  color,
+  name,
+}: {
+  color: string | null;
+  name: string;
+}) {
+  return (
+    <td className="py-2 text-white">
+      <span className="flex items-center gap-2">
+        <StaffDot color={color} />
+        <span className="truncate">{name}</span>
+      </span>
+    </td>
   );
 }
 
@@ -441,21 +477,8 @@ function LiquidationSection({ orgId }: { orgId: string }) {
             </thead>
             <tbody className="divide-y divide-white/5">
               {rows.map((r) => (
-                <tr
-                  key={r.staff_member_id}
-                  style={{
-                    background: `linear-gradient(90deg, ${tint(
-                      r.color || NO_COLOR,
-                      0.16,
-                    )}, transparent 45%)`,
-                  }}
-                >
-                  <td className="py-2 text-white">
-                    <span className="flex items-center gap-2">
-                      <StaffDot color={r.color} />
-                      <span className="truncate">{r.staff_name}</span>
-                    </span>
-                  </td>
+                <tr key={r.staff_member_id} style={staffRowStyle(r.color)}>
+                  <StaffNameCell color={r.color} name={r.staff_name} />
                   <td className="py-2 text-right text-white/70">
                     {money(r.commission_total)}
                   </td>
@@ -602,21 +625,8 @@ function CommissionBalanceSection({ orgId }: { orgId: string }) {
             </thead>
             <tbody className="divide-y divide-white/5">
               {rows.map((r) => (
-                <tr
-                  key={r.staff_member_id}
-                  style={{
-                    background: `linear-gradient(90deg, ${tint(
-                      r.color || NO_COLOR,
-                      0.16,
-                    )}, transparent 45%)`,
-                  }}
-                >
-                  <td className="py-2 text-white">
-                    <span className="flex items-center gap-2">
-                      <StaffDot color={r.color} />
-                      <span className="truncate">{r.staff_name}</span>
-                    </span>
-                  </td>
+                <tr key={r.staff_member_id} style={staffRowStyle(r.color)}>
+                  <StaffNameCell color={r.color} name={r.staff_name} />
                   <td className="py-2 text-right text-white/70">
                     {money(r.accrued)}
                   </td>
@@ -714,15 +724,7 @@ function AdjustCommissionModal({
   const toast = useToast();
   const [real, setReal] = useState(String(row.pending.toFixed(2)));
 
-  const methods = useQuery({
-    queryKey: ['payment-methods', orgId],
-    enabled: !!orgId,
-    queryFn: () =>
-      query<PaymentMethod>(
-        'SELECT * FROM payment_method WHERE organization_id = ? AND active = 1 ORDER BY name',
-        [orgId],
-      ),
-  });
+  const methods = usePaymentMethods(orgId, true);
 
   const diff = Math.round((row.pending - Number(real)) * 100) / 100;
 
@@ -756,7 +758,7 @@ function AdjustCommissionModal({
       );
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['commission-balance'] });
+      void qc.invalidateQueries({ queryKey: ['commission-balance'] });
       onClose();
       toast.success('Comisiones cuadradas', `${row.staff_name} · ${money(Number(real) || 0)}`);
     },
@@ -828,24 +830,8 @@ function PayCommissionModal({
   const [amount, setAmount] = useState(String(row.pending.toFixed(2)));
   const [account, setAccount] = useState(''); // 'cash' | bank id
 
-  const methods = useQuery({
-    queryKey: ['payment-methods', orgId],
-    enabled: !!orgId,
-    queryFn: () =>
-      query<PaymentMethod>(
-        'SELECT * FROM payment_method WHERE organization_id = ? AND active = 1 ORDER BY name',
-        [orgId],
-      ),
-  });
-  const banks = useQuery({
-    queryKey: ['bank-accounts', orgId],
-    enabled: !!orgId,
-    queryFn: () =>
-      query<BankAccount>(
-        'SELECT * FROM bank_account WHERE organization_id = ? AND active = 1 ORDER BY name',
-        [orgId],
-      ),
-  });
+  const methods = usePaymentMethods(orgId, true);
+  const banks = useBankAccounts(orgId, true);
   const session = useQuery({
     queryKey: ['cash-session', branchId],
     enabled: !!branchId,
@@ -867,38 +853,17 @@ function PayCommissionModal({
 
   const save = useMutation({
     mutationFn: async () => {
-      const cashMethod = methods.data?.find((m) => m.method_type === 'cash');
-      const transferMethod = methods.data?.find(
-        (m) => m.method_type === 'transfer',
-      );
-      const method = isCash ? cashMethod : transferMethod;
+      const method = paymentMethodFor(methods.data, isCash);
       if (!method) throw new Error('No hay un método de pago configurado.');
       const bankId = isCash ? null : account;
 
-      // Categoría de egreso para pagos a personal (fallback: primera activa).
-      const cat = await queryOne<{ id: string }>(
-        `SELECT id FROM expense_category
-          WHERE organization_id = ? AND active = 1
-            AND (name LIKE '%personal%' OR name LIKE '%sueldo%' OR name LIKE '%comisi%' OR name LIKE '%nómina%')
-          ORDER BY name LIMIT 1`,
-        [orgId],
-      );
-      const fallbackCat = cat
-        ? null
-        : await queryOne<{ id: string }>(
-            'SELECT id FROM expense_category WHERE organization_id = ? AND active = 1 ORDER BY name LIMIT 1',
-            [orgId],
-          );
-      const categoryId = cat?.id ?? fallbackCat?.id;
-      if (!categoryId)
-        throw new Error('No hay una categoría de egreso configurada.');
+      const categoryId = await staffExpenseCategoryId(orgId, 'commission');
 
       const label = `Pago de comisiones · ${row.staff_name}`;
       const paymentId = genId();
-      const expenseId = genId();
       const now = new Date().toISOString();
 
-      const stmts: { sql: string; args: (string | number | null)[] }[] = [
+      const stmts: Stmt[] = [
         {
           sql: `INSERT INTO staff_payment
                   (id, organization_id, branch_id, staff_member_id, pay_period_id,
@@ -921,55 +886,27 @@ function PayCommissionModal({
             userId,
           ],
         },
-        // Egreso real (afecta cuenta/caja y P&L).
-        {
-          sql: `INSERT INTO expense
-                  (id, organization_id, branch_id, expense_category_id, payment_method_id,
-                   bank_account_id, expense_date, description, amount, status, created_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)`,
-          args: [
-            expenseId,
-            orgId,
-            branchId,
-            categoryId,
-            method.id,
-            bankId,
-            todayISO(),
-            label,
-            value,
-            userId,
-          ],
-        },
       ];
 
-      if (isCash) {
-        stmts.push({
-          sql: `INSERT INTO cash_movement
-                  (id, cash_session_id, branch_id, movement_type, direction, amount,
-                   movement_at, expense_id, description, created_by)
-                VALUES (?, ?, ?, 'expense', 'out', ?, ?, ?, ?, ?)`,
-          args: [
-            genId(),
-            sessionId,
-            branchId,
-            value,
-            now,
-            expenseId,
-            label,
-            userId,
-          ],
-        });
-      }
+      // Egreso real (afecta cuenta/caja y P&L).
+      stmts.push(
+        ...expenseStatements({
+          orgId,
+          branchId,
+          expenseCategoryId: categoryId,
+          paymentMethodId: method.id,
+          bankAccountId: bankId,
+          cashSessionId: sessionId,
+          description: label,
+          amount: value,
+          userId,
+        }),
+      );
 
       await batch(stmts);
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['commission-balance'] });
-      qc.invalidateQueries({ queryKey: ['fin-accounts'] });
-      qc.invalidateQueries({ queryKey: ['fin-summary'] });
-      qc.invalidateQueries({ queryKey: ['fin-exp7'] });
-      qc.invalidateQueries({ queryKey: ['transactions'] });
-      qc.invalidateQueries({ queryKey: ['cash-expected'] });
+      invalidateFinance(qc, branchId);
       onClose();
       toast.success('Comisiones pagadas', `${row.staff_name} · ${money(Number(amount) || 0)}`);
     },
@@ -994,19 +931,12 @@ function PayCommissionModal({
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
         />
-        <Select
+        <AccountSelect
           label="Pagar desde"
           value={account}
-          onChange={(e) => setAccount(e.target.value)}
-        >
-          <option value="">Seleccionar…</option>
-          <option value="cash">Caja (efectivo)</option>
-          {banks.data?.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name}
-            </option>
-          ))}
-        </Select>
+          onChange={setAccount}
+          accounts={banks.data}
+        />
         {overflow && (
           <p className="text-xs text-danger">
             El monto supera el pendiente ({money(row.pending)}).
@@ -1066,25 +996,9 @@ function AdvanceModal({
       ),
   });
 
-  const methods = useQuery({
-    queryKey: ['payment-methods', orgId],
-    enabled: open && !!orgId,
-    queryFn: () =>
-      query<PaymentMethod>(
-        'SELECT * FROM payment_method WHERE organization_id = ? AND active = 1 ORDER BY name',
-        [orgId],
-      ),
-  });
+  const methods = usePaymentMethods(orgId, open);
 
-  const banks = useQuery({
-    queryKey: ['bank-accounts', orgId],
-    enabled: open && !!orgId,
-    queryFn: () =>
-      query<BankAccount>(
-        'SELECT * FROM bank_account WHERE organization_id = ? AND active = 1 ORDER BY name',
-        [orgId],
-      ),
-  });
+  const banks = useBankAccounts(orgId, open);
 
   // Sesión de caja abierta: necesaria para descontar un adelanto en efectivo.
   const session = useQuery({
@@ -1107,41 +1021,19 @@ function AdvanceModal({
 
   const save = useMutation({
     mutationFn: async () => {
-      const cashMethod = methods.data?.find((m) => m.method_type === 'cash');
-      const transferMethod = methods.data?.find(
-        (m) => m.method_type === 'transfer',
-      );
-      const method = isCash ? cashMethod : transferMethod;
+      const method = paymentMethodFor(methods.data, isCash);
       if (!method) throw new Error('No hay un método de pago configurado.');
       const bankId = isCash ? null : account;
 
-      // Categoría de egreso para pagos a personal (fallback: primera activa).
-      const cat = await queryOne<{ id: string }>(
-        `SELECT id FROM expense_category
-          WHERE organization_id = ? AND active = 1
-            AND (name LIKE '%personal%' OR name LIKE '%sueldo%' OR name LIKE '%nómina%')
-          ORDER BY name LIMIT 1`,
-        [orgId],
-      );
-      const fallbackCat = cat
-        ? null
-        : await queryOne<{ id: string }>(
-            'SELECT id FROM expense_category WHERE organization_id = ? AND active = 1 ORDER BY name LIMIT 1',
-            [orgId],
-          );
-      const categoryId = cat?.id ?? fallbackCat?.id;
-      if (!categoryId)
-        throw new Error('No hay una categoría de egreso configurada.');
+      const categoryId = await staffExpenseCategoryId(orgId, 'advance');
 
       const person = staff.data?.find((s) => s.id === staffId);
       const label = `Adelanto de sueldo · ${
         person ? fullName(person.first_name, person.last_name) : ''
       }`.trim();
       const advanceId = genId();
-      const expenseId = genId();
-      const now = new Date().toISOString();
 
-      const stmts: { sql: string; args: (string | number | null)[] }[] = [
+      const stmts: Stmt[] = [
         {
           sql: `INSERT INTO staff_advance
                   (id, organization_id, branch_id, staff_member_id, advance_date, amount,
@@ -1160,46 +1052,22 @@ function AdvanceModal({
             userId,
           ],
         },
-        // Se registra también como egreso automáticamente.
-        {
-          sql: `INSERT INTO expense
-                  (id, organization_id, branch_id, expense_category_id, payment_method_id,
-                   bank_account_id, expense_date, description, amount, status, created_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)`,
-          args: [
-            expenseId,
-            orgId,
-            branchId,
-            categoryId,
-            method.id,
-            bankId,
-            todayISO(),
-            label,
-            Number(amount),
-            userId,
-          ],
-        },
       ];
 
-      // En efectivo, además descuenta de la caja física.
-      if (isCash) {
-        stmts.push({
-          sql: `INSERT INTO cash_movement
-                  (id, cash_session_id, branch_id, movement_type, direction, amount,
-                   movement_at, expense_id, description, created_by)
-                VALUES (?, ?, ?, 'expense', 'out', ?, ?, ?, ?, ?)`,
-          args: [
-            genId(),
-            sessionId,
-            branchId,
-            Number(amount),
-            now,
-            expenseId,
-            label,
-            userId,
-          ],
-        });
-      }
+      // Se registra también como egreso (y descuenta la caja si es efectivo).
+      stmts.push(
+        ...expenseStatements({
+          orgId,
+          branchId,
+          expenseCategoryId: categoryId,
+          paymentMethodId: method.id,
+          bankAccountId: bankId,
+          cashSessionId: sessionId,
+          description: label,
+          amount: Number(amount),
+          userId,
+        }),
+      );
 
       await batch(stmts);
     },
@@ -1211,12 +1079,7 @@ function AdvanceModal({
       setStaffId('');
       setAmount('');
       setAccount('');
-      qc.invalidateQueries({ queryKey: ['payable-summary'] });
-      qc.invalidateQueries({ queryKey: ['fin-accounts'] });
-      qc.invalidateQueries({ queryKey: ['fin-summary'] });
-      qc.invalidateQueries({ queryKey: ['fin-exp7'] });
-      qc.invalidateQueries({ queryKey: ['transactions'] });
-      qc.invalidateQueries({ queryKey: ['cash-expected'] });
+      invalidateFinance(qc, branchId);
       onClose();
     },
     onError: (e: Error) => toast.error('No se pudo registrar el adelanto', e.message),
@@ -1266,19 +1129,12 @@ function AdvanceModal({
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
         />
-        <Select
+        <AccountSelect
           label="Cuenta"
           value={account}
-          onChange={(e) => setAccount(e.target.value)}
-        >
-          <option value="">Seleccionar…</option>
-          <option value="cash">Caja (efectivo)</option>
-          {banks.data?.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name}
-            </option>
-          ))}
-        </Select>
+          onChange={setAccount}
+          accounts={banks.data}
+        />
         {needsSession && (
           <p className="text-xs text-danger">
             Para un adelanto en efectivo necesitás abrir la caja primero.

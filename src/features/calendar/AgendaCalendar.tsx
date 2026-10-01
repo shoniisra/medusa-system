@@ -50,7 +50,7 @@ function ThreeDayView(props: { date: Date }) {
   const range = ThreeDayView.range(props.date);
   return (
     <TimeGrid
-      {...(props as unknown as Record<string, unknown>)}
+      {...props}
       range={range}
       eventOffset={12}
     />
@@ -209,8 +209,8 @@ export function AgendaCalendar({
       // `three` es una vista propia: el tipo público de rbc solo conoce las suyas.
       view={view as View}
       onNavigate={onNavigate}
-      onView={(v) => onView(v as AgendaView)}
-      views={views as unknown as View[]}
+      onView={(v) => onView(v)}
+      views={views}
       components={components}
       toolbar={toolbar}
       step={30}

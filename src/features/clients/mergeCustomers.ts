@@ -37,7 +37,7 @@ export function tableLabel(table: string, count: number): string {
  * DDL de la propia DB para que el combinado no se quede corto si mañana se
  * agrega otra tabla que apunte al cliente.
  */
-export async function customerRefTables(): Promise<string[]> {
+async function customerRefTables(): Promise<string[]> {
   const rows = await query<{ name: string; sql: string | null }>(
     `SELECT name, sql FROM sqlite_master
       WHERE type = 'table' AND name <> 'customer'
@@ -76,7 +76,7 @@ export async function customerRefCounts(customerId: ID): Promise<RefCount[]> {
 /* ───────────────────────── Detección de duplicados ───────────────────────── */
 
 /** Clave por nombre completo: "Ana Pau" == "ana  pau" == first=Ana last=Pau. */
-export function nameKey(first: string, last: string | null): string {
+function nameKey(first: string, last: string | null): string {
   return normalizeText(`${first} ${last ?? ''}`);
 }
 
@@ -85,7 +85,7 @@ export function nameKey(first: string, last: string | null): string {
  * dígitos, así 0991234567, +593991234567 y 593 99 123 4567 (registros viejos
  * sin normalizar) caen en el mismo grupo.
  */
-export function phoneKey(phone: string | null): string {
+function phoneKey(phone: string | null): string {
   const d = phoneToWaDigits(phone);
   return d.length >= 7 ? d.slice(-9) : '';
 }
@@ -119,7 +119,7 @@ export function discardedContact(keep: Customer, dup: Customer): ContactField[] 
  * salón, dos "Karen" con números distintos son dos personas) y cuando lo elige
  * la usuaria se le avisa qué se descarta.
  */
-export function contactConflict(a: Customer, b: Customer): ContactField | null {
+function contactConflict(a: Customer, b: Customer): ContactField | null {
   return discardedContact(a, b)[0] ?? null;
 }
 

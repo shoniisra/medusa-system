@@ -87,7 +87,7 @@ function serviceAccountEmail(env: GcalEnv): string | null {
   return email ? email : null;
 }
 
-export function isGcalConfigured(env: GcalEnv): boolean {
+function isGcalConfigured(env: GcalEnv): boolean {
   return !!serviceAccountEmail(env) && !!env.GCAL_SA_PRIVATE_KEY?.trim();
 }
 

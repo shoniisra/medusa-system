@@ -6,9 +6,13 @@ import {
   UserPlus,
   UserRound,
   X,
-  AlertTriangle,
 } from 'lucide-react';
-import { batch, execute, query, queryOne } from '@/lib/db';
+import { batch, execute, type Stmt } from '@/lib/db';
+import {
+  PaymentTargetFields,
+  usePaymentTarget,
+} from '@/features/cashflow/accounts';
+import { searchCustomers } from '@/features/clients/customerSearch';
 import { genId, money, fullName } from '@/lib/format';
 import { useSession, useBranchId, useOrgId } from '@/store/session';
 import { usePosDraft } from '@/store/posDraft';
@@ -26,24 +30,20 @@ import {
 import { findCustomerByPhone } from '@/features/clients/customerLookup';
 import { validatePhone } from '@/lib/phone';
 import { CONSUMIDOR_FINAL_LABEL } from '@/config/constants';
-import { qk } from '@/lib/queryClient';
+import { invalidateCustomers, invalidateSales } from '@/lib/queryClient';
 import {
   Button,
   Card,
   CardHeader,
-  Input,
-  Select,
   Modal,
   Badge,
   PhoneInput,
   useToast,
+  DetailRow,
 } from '@/components/ui';
 import type {
-  BankAccount,
-  CashSession,
   DraftCommission,
   DraftSaleItem,
-  PaymentMethod,
   Product,
 } from '@/types';
 
@@ -79,18 +79,10 @@ export function NewSaleTab() {
   const selectedCustomer = customers.data?.find((c) => c.id === customerId);
   const hasClient = !!customerId || newClient;
 
-  const clientMatches = useMemo(() => {
-    const q = clientSearch.trim().toLowerCase();
-    const list = customers.data ?? [];
-    if (!q) return [];
-    return list
-      .filter(
-        (c) =>
-          fullName(c.first_name, c.last_name).toLowerCase().includes(q) ||
-          (c.phone ?? '').toLowerCase().includes(q),
-      )
-      .slice(0, 8);
-  }, [customers.data, clientSearch]);
+  const clientMatches = useMemo(
+    () => searchCustomers(customers.data ?? [], clientSearch),
+    [customers.data, clientSearch],
+  );
 
   function pickExisting(c: { id: string }) {
     setCustomerId(c.id);
@@ -335,7 +327,7 @@ export function NewSaleTab() {
           products={products.data ?? []}
           rules={rules}
           onUpdateItem={(id, patch) =>
-            draft.updateItem(id, patch as Partial<DraftSaleItem>)
+            draft.updateItem(id, patch)
           }
           onReassign={(id, staffId) =>
             draft.updateItem(id, { assigned_staff_id: staffId })
@@ -364,10 +356,10 @@ export function NewSaleTab() {
 
             {/* Totales */}
             <div className="space-y-2 border-t border-white/10 pt-4 text-sm">
-              <Row label="Subtotal" value={money(subtotal)} />
-              <Row label="Total servicios" value={money(totalServicios)} />
-              <Row label="Total productos" value={money(totalProductos)} />
-              <Row label="Descuentos" value={`−${money(discountTotal)}`} />
+              <DetailRow label="Subtotal" value={money(subtotal)} />
+              <DetailRow label="Total servicios" value={money(totalServicios)} />
+              <DetailRow label="Total productos" value={money(totalProductos)} />
+              <DetailRow label="Descuentos" value={`−${money(discountTotal)}`} />
               <div className="flex items-center justify-between border-t border-white/10 pt-2">
                 <span className="font-medium text-white/70">Total</span>
                 <span className="kpi-gold text-2xl font-semibold">
@@ -463,9 +455,8 @@ export function NewSaleTab() {
             setConfirmOpen(false);
             draft.reset();
             clearClient();
-            qc.invalidateQueries({ queryKey: qk.sales(branchId) });
-            qc.invalidateQueries({ queryKey: qk.invoiceKanban(branchId) });
-            qc.invalidateQueries({ queryKey: ['customers', orgId] });
+            invalidateSales(qc, branchId);
+            invalidateCustomers(qc, orgId);
           }}
         />
       )}
@@ -512,48 +503,8 @@ function ConfirmSalePosModal({
   const [reference, setReference] = useState('');
   const [error, setError] = useState('');
 
-  const banks = useQuery({
-    queryKey: ['bank-accounts', orgId],
-    enabled: !!orgId,
-    queryFn: () =>
-      query<BankAccount>(
-        'SELECT * FROM bank_account WHERE organization_id = ? AND active = 1 ORDER BY name',
-        [orgId],
-      ),
-  });
-  const payMethods = useQuery({
-    queryKey: ['payment-methods', orgId],
-    enabled: !!orgId,
-    queryFn: () =>
-      query<PaymentMethod>(
-        'SELECT * FROM payment_method WHERE organization_id = ? AND active = 1 ORDER BY name',
-        [orgId],
-      ),
-  });
-
-  const cash = useQuery({
-    queryKey: ['open-cash', branchId],
-    enabled: !!branchId,
-    queryFn: () =>
-      queryOne<CashSession>(
-        `SELECT cs.* FROM cash_session cs
-           JOIN cash_register cr ON cr.id = cs.cash_register_id
-          WHERE cr.branch_id = ? AND cs.status = 'open'
-          ORDER BY cs.opened_at DESC LIMIT 1`,
-        [branchId],
-      ),
-  });
-  const sessionId = cash.data?.id ?? null;
-
-  const cashMethod = payMethods.data?.find((m) => m.method_type === 'cash');
-  const transferMethod = payMethods.data?.find(
-    (m) => m.method_type === 'transfer',
-  );
-  const firstBankId = banks.data?.[0]?.id ?? '';
-  // Por defecto: primera cuenta bancaria; si no hay, efectivo.
-  const effectiveDest = dest || firstBankId || 'cash';
-  const isCash = effectiveDest === 'cash';
-  const method = isCash ? cashMethod : transferMethod;
+  const target = usePaymentTarget(orgId, branchId, dest);
+  const { sessionId, effectiveDest, isCash, method } = target;
 
   const confirm = useMutation({
     mutationFn: async () => {
@@ -629,7 +580,7 @@ function ConfirmSalePosModal({
 
       const now = new Date().toISOString();
       const bankId = isCash ? null : effectiveDest;
-      const stmts: { sql: string; args: (string | number | null)[] }[] = [];
+      const stmts: Stmt[] = [];
       const paymentId = genId();
       stmts.push({
         sql: `INSERT INTO payment
@@ -703,34 +654,12 @@ function ConfirmSalePosModal({
           </div>
         </div>
 
-        <Select
-          label="Cobrar en"
-          value={effectiveDest}
-          onChange={(e) => setDest(e.target.value)}
-        >
-          {banks.data?.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name} (transferencia)
-            </option>
-          ))}
-          <option value="cash">Efectivo (caja)</option>
-        </Select>
-
-        {!isCash && (
-          <Input
-            label="Referencia (opcional)"
-            value={reference}
-            onChange={(e) => setReference(e.target.value)}
-            placeholder="Nº transferencia, voucher…"
-          />
-        )}
-
-        {isCash && !sessionId && (
-          <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
-            <AlertTriangle className="h-3.5 w-3.5" /> No hay caja abierta: el pago
-            se registra pero no entra al efectivo de caja.
-          </p>
-        )}
+        <PaymentTargetFields
+          target={target}
+          onDest={setDest}
+          reference={reference}
+          onReference={setReference}
+        />
         {error && <p className="text-xs text-danger">{error}</p>}
 
         <Button
@@ -749,11 +678,3 @@ function ConfirmSalePosModal({
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-white/50">{label}</span>
-      <span className="text-white">{value}</span>
-    </div>
-  );
-}

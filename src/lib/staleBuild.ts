@@ -45,7 +45,7 @@ function writeState(state: RecoveryState) {
 }
 
 /** Se llama cuando un chunk carga bien: el build ya está sano. */
-export function clearStaleBuildRecovery() {
+function clearStaleBuildRecovery() {
   try {
     sessionStorage.removeItem(RECOVERY_KEY);
   } catch {
@@ -53,9 +53,33 @@ export function clearStaleBuildRecovery() {
   }
 }
 
+/**
+ * Texto con el que se puede buscar la causa de un rechazo. Vite no siempre
+ * rechaza con un Error: un import dinámico fallido puede llegar como Event o
+ * como objeto plano, y ahí `String(error)` daba "[object Object]" — la detección
+ * de build viejo no saltaba nunca y el usuario quedaba con la pantalla en blanco.
+ */
+function errorText(error: unknown): string {
+  if (error instanceof Error) return `${error.name}: ${error.message}`;
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object') {
+    const o = error as { message?: unknown; type?: unknown };
+    if (typeof o.message === 'string') return o.message;
+    if (typeof o.type === 'string') return o.type;
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return '';
+    }
+  }
+  if (typeof error === 'number' || typeof error === 'boolean') {
+    return String(error);
+  }
+  return '';
+}
+
 export function isStaleBuildError(error: unknown): boolean {
-  const message =
-    error instanceof Error ? `${error.name}: ${error.message}` : String(error ?? '');
+  const message = errorText(error);
   return /dynamically imported module|Importing a module script failed|error loading dynamically imported|ChunkLoadError|Failed to fetch.*\.(js|css|mjs)/i.test(
     message,
   );
@@ -110,6 +134,9 @@ export async function hardReload() {
 }
 
 /** Igual que `lazy`, pero recarga la app si el chunk quedó de un build viejo. */
+// `any` a propósito: es la firma de `React.lazy`, que acepta cualquier
+// componente sin importar sus props.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function lazyPage<T extends ComponentType<any>>(
   loader: () => Promise<{ default: T }>,
 ) {

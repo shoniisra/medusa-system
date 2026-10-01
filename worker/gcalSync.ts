@@ -1,6 +1,16 @@
 import type { Client } from '@libsql/client/web';
 
 /**
+ * libsql devuelve filas como `Row` (un objeto indexable) y TypeScript no lo
+ * considera compatible con la forma concreta que sabemos que tiene cada
+ * consulta. Estos dos helpers concentran ese cast en un solo lugar en vez de
+ * repartir `as unknown as` por el archivo.
+ */
+const asRow = <T,>(row: unknown): T | undefined => row as T | undefined;
+const asRows = <T,>(rows: unknown[]): T[] => rows as T[];
+
+
+/**
  * Sincronización de eventos de Google Calendar → citas del sistema.
  *
  * Lo dispara un Google Apps Script (trigger por edición del calendario) que
@@ -218,7 +228,7 @@ async function findOrCreateCustomer(
            LIMIT 1`,
     args: [orgId, name],
   });
-  const row = existing.rows[0] as { id: string } | undefined;
+  const row = asRow<{ id: string }>(existing.rows[0]);
   if (row) return row.id;
 
   const id = crypto.randomUUID();
@@ -262,9 +272,7 @@ export async function handleGcalSync(
     sql: `SELECT id, organization_id FROM branch WHERE google_calendar_id = ? LIMIT 1`,
     args: [body.calendarId],
   });
-  const branch = branchRs.rows[0] as
-    | { id: string; organization_id: string }
-    | undefined;
+  const branch = asRow<{ id: string; organization_id: string }>(branchRs.rows[0]);
   if (!branch) {
     return Response.json(
       { error: 'Calendario no vinculado a ninguna sucursal' },
@@ -280,7 +288,7 @@ export async function handleGcalSync(
     args: [branchId],
   });
   const colorMap = new Map<string, string>();
-  for (const r of colorRs.rows as { google_color_id: string; staff_id: string }[])
+  for (const r of asRows<{ google_color_id: string; staff_id: string }>(colorRs.rows))
     colorMap.set(r.google_color_id, r.staff_id);
 
   const staffRs = await db.execute({
@@ -375,9 +383,7 @@ export async function handleGcalSync(
              WHERE google_calendar_event_id IN (?, ?) AND branch_id = ? LIMIT 1`,
       args: [ev.id, altId, branchId],
     });
-    const existing = existingRs.rows[0] as
-      | { id: string; status: string }
-      | undefined;
+    const existing = asRow<{ id: string; status: string }>(existingRs.rows[0]);
 
     // Cita ya atendida (facturada): no la pisamos con datos de Google.
     if (existing && existing.status === 'attended') {

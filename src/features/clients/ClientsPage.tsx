@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Users,
   UserPlus,
   Search,
-  ArrowLeft,
   Trash2,
   Plus,
   Palette,
@@ -23,6 +22,12 @@ import {
   CopyCheck,
 } from 'lucide-react';
 import { query, queryOne, execute } from '@/lib/db';
+import { invalidateCustomers } from '@/lib/queryClient';
+import {
+  CustomerFields,
+  EMPTY_CUSTOMER_DRAFT,
+  type CustomerDraft,
+} from './CustomerFields';
 import {
   genId,
   money,
@@ -44,8 +49,8 @@ import {
   Modal,
   Badge,
   EmptyState,
-  PhoneInput,
   useToast,
+  PageHeader,
 } from '@/components/ui';
 import { ROUTES } from '@/config/constants';
 import { phoneToWaDigits } from '@/lib/phone';
@@ -126,7 +131,10 @@ export function ClientsPage() {
       ),
   });
 
-  const all = clients.data ?? [];
+  // Referencia estable: `?? []` daría un array nuevo en cada render mientras
+  // la query carga y recalcularía los useMemo de abajo (incluida la detección de
+  // duplicados, que recorre toda la libreta).
+  const all = useMemo(() => clients.data ?? [], [clients.data]);
 
   const stats = useMemo(() => {
     const withWa = all.filter((c) => !!c.phone).length;
@@ -174,8 +182,15 @@ export function ClientsPage() {
     return list;
   }, [all, search, wa, status, sort]);
 
-  // Reset a la primera página cuando cambian filtros
-  useEffect(() => setPage(1), [search, wa, status, sort, pageSize]);
+  /**
+   * Cambiar un filtro vuelve a la primera página: quedarse en la 3 mostraría un
+   * tramo arbitrario del resultado nuevo. Se hace en el propio setter y no en un
+   * efecto para no encadenar un render extra en cada tecla del buscador.
+   */
+  const onFilterChange = <T,>(set: (v: T) => void) => (v: T) => {
+    set(v);
+    setPage(1);
+  };
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const current = Math.min(page, totalPages);
@@ -241,7 +256,7 @@ export function ClientsPage() {
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
             <input
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => onFilterChange(setSearch)(e.target.value)}
               placeholder="Buscar por nombre, WhatsApp o email…"
               className="input-base w-full pl-9"
             />
@@ -249,7 +264,7 @@ export function ClientsPage() {
           <div className="grid grid-cols-3 gap-2 lg:flex lg:w-auto">
             <Select
               value={wa}
-              onChange={(e) => setWa(e.target.value as WaFilter)}
+              onChange={(e) => onFilterChange(setWa)(e.target.value as WaFilter)}
             >
               <option value="all">WhatsApp: todos</option>
               <option value="with">Con WhatsApp</option>
@@ -257,7 +272,7 @@ export function ClientsPage() {
             </Select>
             <Select
               value={status}
-              onChange={(e) => setStatus(e.target.value as StatusFilter)}
+              onChange={(e) => onFilterChange(setStatus)(e.target.value as StatusFilter)}
             >
               <option value="all">Actividad: todos</option>
               <option value="buyers">Con compras</option>
@@ -265,7 +280,7 @@ export function ClientsPage() {
             </Select>
             <Select
               value={sort}
-              onChange={(e) => setSort(e.target.value as SortKey)}
+              onChange={(e) => onFilterChange(setSort)(e.target.value as SortKey)}
             >
               <option value="name">Orden: nombre</option>
               <option value="spent">Más gastan</option>
@@ -373,7 +388,7 @@ export function ClientsPage() {
                 </span>
                 <select
                   value={pageSize}
-                  onChange={(e) => setPageSize(Number(e.target.value))}
+                  onChange={(e) => onFilterChange(setPageSize)(Number(e.target.value))}
                   className="input-base h-8 py-0 text-xs"
                 >
                   {PAGE_SIZES.map((n) => (
@@ -508,16 +523,22 @@ function CreateClientModal({
   const navigate = useNavigate();
   const toast = useToast();
 
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [phone, setPhone] = useState('');
-  const [email, setEmail] = useState('');
-  const [birth, setBirth] = useState('');
+  const [draft, setDraft] = useState<CustomerDraft>(EMPTY_CUSTOMER_DRAFT);
   const [dup, setDup] = useState<{ id: string; name: string } | null>(null);
+
+  const set = <K extends keyof CustomerDraft>(
+    key: K,
+    value: CustomerDraft[K],
+  ) => {
+    // Tocar el teléfono descarta el aviso de duplicado: ya no aplica al número
+    // que se está escribiendo.
+    if (key === 'phone') setDup(null);
+    setDraft((d) => ({ ...d, [key]: value }));
+  };
 
   const save = useMutation({
     mutationFn: async () => {
-      const canonical = phone.trim() || null;
+      const canonical = draft.phone.trim() || null;
       const phoneError = validatePhone(canonical);
       if (phoneError) throw new Error(phoneError);
       if (canonical) {
@@ -538,11 +559,11 @@ function CreateClientModal({
         [
           id,
           orgId,
-          firstName.trim(),
-          lastName.trim() || null,
+          draft.firstName.trim(),
+          draft.lastName.trim() || null,
           canonical,
-          email.trim() || null,
-          birth || null,
+          draft.email.trim() || null,
+          draft.birth || null,
         ],
       );
       return id;
@@ -556,17 +577,12 @@ function CreateClientModal({
       }
     },
     onSuccess: (id) => {
-      qc.invalidateQueries({ queryKey: ['clients', orgId] });
-      qc.invalidateQueries({ queryKey: ['customers', orgId] });
+      invalidateCustomers(qc, orgId);
       toast.success(
         'Cliente creado',
-        fullName(firstName.trim(), lastName.trim() || null),
+        fullName(draft.firstName.trim(), draft.lastName.trim() || null),
       );
-      setFirstName('');
-      setLastName('');
-      setPhone('');
-      setEmail('');
-      setBirth('');
+      setDraft(EMPTY_CUSTOMER_DRAFT);
       setDup(null);
       onClose();
       navigate(`${ROUTES.client}/${id}`);
@@ -576,48 +592,22 @@ function CreateClientModal({
   return (
     <Modal open={open} onClose={onClose} title="Nuevo cliente">
       <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-3">
-          <Input
-            label="Nombre"
-            value={firstName}
-            onChange={(e) => setFirstName(e.target.value)}
-          />
-          <Input
-            label="Apellido"
-            value={lastName}
-            onChange={(e) => setLastName(e.target.value)}
-          />
-        </div>
-        <PhoneInput
-          label="WhatsApp"
-          value={phone}
-          onChange={(v) => {
-            setPhone(v);
-            setDup(null);
-          }}
-        />
-        <DuplicatePhoneNotice
-          dup={dup}
-          onOpen={(id) => {
-            onClose();
-            navigate(`${ROUTES.client}/${id}`);
-          }}
-        />
-        <Input
-          label="Email"
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-        />
-        <Input
-          label="Cumpleaños"
-          type="date"
-          value={birth}
-          onChange={(e) => setBirth(e.target.value)}
+        <CustomerFields
+          draft={draft}
+          set={set}
+          notice={
+            <DuplicatePhoneNotice
+              dup={dup}
+              onOpen={(id) => {
+                onClose();
+                navigate(`${ROUTES.client}/${id}`);
+              }}
+            />
+          }
         />
         <Button
           className="w-full"
-          disabled={!firstName.trim()}
+          disabled={!draft.firstName.trim()}
           loading={save.isPending}
           onClick={() => save.mutate()}
         >
@@ -654,7 +644,7 @@ export function ClientDetailPage() {
   if (!client.data) {
     return (
       <div className="mx-auto max-w-5xl space-y-6">
-        <Header onBack={() => navigate(ROUTES.clients)} title="Cliente" />
+        <PageHeader onBack={() => navigate(ROUTES.clients)} title="Cliente" />
         <Card>
           <EmptyState icon={Users} title="Cliente no encontrado" />
         </Card>
@@ -674,6 +664,7 @@ export function ClientDetailPage() {
  */
 function ClientDetail({ customer }: { customer: Customer }) {
   const id = customer.id;
+  const orgId = customer.organization_id;
   const navigate = useNavigate();
   const [mergeOpen, setMergeOpen] = useState(false);
   const qc = useQueryClient();
@@ -735,9 +726,8 @@ function ClientDetail({ customer }: { customer: Customer }) {
 
   const form = useClientDraft(customer, {
     onSaved: () => {
-      qc.invalidateQueries({ queryKey: ['client', id] });
-      qc.invalidateQueries({ queryKey: ['clients'] });
-      qc.invalidateQueries({ queryKey: ['customers'] });
+      void qc.invalidateQueries({ queryKey: ['client', id] });
+      invalidateCustomers(qc, orgId);
       toast.success('Cambios guardados', 'La ficha del cliente quedó actualizada.');
     },
     onFail: (msg) => toast.error('No se pudo guardar', msg),
@@ -765,7 +755,7 @@ function ClientDetail({ customer }: { customer: Customer }) {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
-      <Header
+      <PageHeader
         onBack={handleBack}
         title={fullName(c.first_name, c.last_name)}
         right={
@@ -890,7 +880,11 @@ function ClientDetail({ customer }: { customer: Customer }) {
 
         {/* Ficha editable */}
         <div className="lg:col-span-1">
-          <ClientForm form={form} onSave={saveAndExit} onCancel={goBack} />
+          <ClientForm
+            form={form}
+            onSave={() => void saveAndExit()}
+            onCancel={goBack}
+          />
         </div>
       </div>
 
@@ -911,7 +905,7 @@ function ClientDetail({ customer }: { customer: Customer }) {
             <Button
               className="sm:order-2"
               loading={form.save.isPending}
-              onClick={saveAndExit}
+              onClick={() => void saveAndExit()}
             >
               <Save className="h-4 w-4" /> Guardar cambios
             </Button>
@@ -935,12 +929,7 @@ function ClientDetail({ customer }: { customer: Customer }) {
 
 /* ──────────────────────── Borrador de la ficha ──────────────────────── */
 
-interface ClientDraft {
-  firstName: string;
-  lastName: string;
-  phone: string;
-  email: string;
-  birth: string;
+interface ClientDraft extends CustomerDraft {
   preferred: string;
   notes: string;
   allergies: string;
@@ -1064,41 +1053,18 @@ function ClientForm({
     <Card className="sticky top-4">
       <CardHeader title="Ficha" subtitle="Datos y notas del cliente" />
       <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          <Input
-            label="Nombre"
-            value={draft.firstName}
-            onChange={(e) => set('firstName', e.target.value)}
-          />
-          <Input
-            label="Apellido"
-            value={draft.lastName}
-            onChange={(e) => set('lastName', e.target.value)}
-          />
-        </div>
-        <PhoneInput
-          label="WhatsApp"
-          value={draft.phone}
-          onChange={(v) => {
-            set('phone', v);
-            setDup(null);
+        <CustomerFields
+          draft={draft}
+          set={(key, value) => {
+            if (key === 'phone') setDup(null);
+            set(key, value);
           }}
-        />
-        <DuplicatePhoneNotice
-          dup={dup}
-          onOpen={(id) => navigate(`${ROUTES.client}/${id}`)}
-        />
-        <Input
-          label="Email"
-          type="email"
-          value={draft.email}
-          onChange={(e) => set('email', e.target.value)}
-        />
-        <Input
-          label="Cumpleaños"
-          type="date"
-          value={draft.birth}
-          onChange={(e) => set('birth', e.target.value)}
+          notice={
+            <DuplicatePhoneNotice
+              dup={dup}
+              onOpen={(id) => navigate(`${ROUTES.client}/${id}`)}
+            />
+          }
         />
         <Select
           label="Estilista preferido"
@@ -1222,7 +1188,7 @@ function ColorRecordsCard({ customerId }: { customerId: string }) {
       setStaffId('');
       setDate(todayISO());
       setOpen(false);
-      qc.invalidateQueries({ queryKey: ['color-records', customerId] });
+      void qc.invalidateQueries({ queryKey: ['color-records', customerId] });
       toast.success('Proceso de color registrado');
     },
     onError: (e: Error) => toast.error('No se pudo registrar', e.message),
@@ -1232,7 +1198,7 @@ function ColorRecordsCard({ customerId }: { customerId: string }) {
     mutationFn: (recId: string) =>
       execute('DELETE FROM customer_color_record WHERE id = ?', [recId]),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['color-records', customerId] });
+      void qc.invalidateQueries({ queryKey: ['color-records', customerId] });
       toast.info('Proceso de color eliminado');
     },
     onError: (e: Error) => toast.error('No se pudo eliminar', e.message),
@@ -1422,27 +1388,3 @@ function TextArea({
   );
 }
 
-function Header({
-  title,
-  onBack,
-  right,
-}: {
-  title: string;
-  onBack: () => void;
-  right?: ReactNode;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <div className="flex items-center gap-3">
-        <button
-          onClick={onBack}
-          className="rounded-lg p-2 text-white/60 hover:bg-white/10 hover:text-white"
-        >
-          <ArrowLeft className="h-5 w-5" />
-        </button>
-        <h1 className="text-2xl font-semibold text-white">{title}</h1>
-      </div>
-      {right}
-    </div>
-  );
-}

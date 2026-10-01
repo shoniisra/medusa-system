@@ -54,7 +54,7 @@ export function InvoicesPage() {
       );
     },
     onSuccess: (_r, { status }) => {
-      qc.invalidateQueries({ queryKey: qk.invoiceKanban(branchId) });
+      void qc.invalidateQueries({ queryKey: qk.invoiceKanban(branchId) });
       toast.success(
         status === 'done' ? 'Factura emitida' : 'Solicitud actualizada',
       );

@@ -23,7 +23,7 @@ import { format, parse, startOfWeek, getDay } from 'date-fns';
 import { es } from 'date-fns/locale';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
 import './agenda-calendar.css';
-import { query, queryOne, batch, execute } from '@/lib/db';
+import { query, queryOne, batch, execute, type Stmt } from '@/lib/db';
 import {
   genId,
   money,
@@ -32,6 +32,22 @@ import {
   dateShort,
   timeShort,
 } from '@/lib/format';
+import {
+  invalidateAppointments,
+  invalidateCustomers,
+  invalidateFinance,
+  invalidateSales,
+} from '@/lib/queryClient';
+import {
+  CustomerFields,
+  type CustomerDraft,
+} from '@/features/clients/CustomerFields';
+import {
+  PaymentTargetFields,
+  useOpenCashSession,
+  usePaymentTarget,
+} from '@/features/cashflow/accounts';
+import { searchCustomers } from '@/features/clients/customerSearch';
 import { useOrgId, useBranchId, useSession } from '@/store/session';
 import { useCustomers, useServices, useProducts, useStaff } from '@/features/pos/useCatalog';
 import {
@@ -62,6 +78,8 @@ import {
   Modal,
   PhoneInput,
   useToast,
+  PageHeader,
+  DetailRow,
 } from '@/components/ui';
 import { findCustomerByPhone } from '@/features/clients/customerLookup';
 import { validatePhone } from '@/lib/phone';
@@ -70,12 +88,14 @@ import {
   loadCommissionRules,
   commissionForItem,
 } from '@/features/pos/createSale';
-import { SaleItemsEditor } from '@/features/pos/SaleItemsEditor';
+import {
+  SaleItemsEditor,
+  commissionByStaff,
+} from '@/features/pos/SaleItemsEditor';
 import { isNoCharge, stripNoCharge } from './appointmentBoard';
 import type {
   AppointmentStatus,
   BankAccount,
-  CashSession,
   Customer,
   DraftCommission,
   DraftSaleItem,
@@ -231,6 +251,7 @@ function NewAppointment() {
    * volver entre pasos (o cambiar categorías) ya no se la pisa.
    */
   const timePicked = useRef(false);
+  const [conflicts, setConflicts] = useState<string[]>([]);
   const pickTime = useCallback((v: string) => {
     timePicked.current = true;
     setTime(v);
@@ -244,7 +265,6 @@ function NewAppointment() {
   // Categorías elegidas (con estilista opcional por categoría).
   const [cats, setCats] = useState<DraftCat[]>([]);
   const [error, setError] = useState('');
-  const [conflicts, setConflicts] = useState<string[]>([]);
 
   // Vista del calendario: en móvil arranca en "Día"; en escritorio en "Semana".
   const [calView, setCalView] = useState<View>(() =>
@@ -262,18 +282,10 @@ function NewAppointment() {
     if (step === 3 && !hasClient) searchRef.current?.focus();
   }, [step, hasClient]);
 
-  const clientMatches = useMemo(() => {
-    const q = clientSearch.trim().toLowerCase();
-    const list = customers.data ?? [];
-    if (!q) return [];
-    return list
-      .filter(
-        (c) =>
-          fullName(c.first_name, c.last_name).toLowerCase().includes(q) ||
-          (c.phone ?? '').toLowerCase().includes(q),
-      )
-      .slice(0, 8);
-  }, [customers.data, clientSearch]);
+  const clientMatches = useMemo(
+    () => searchCustomers(customers.data ?? [], clientSearch),
+    [customers.data, clientSearch],
+  );
 
   function pickExisting(c: { id: string }) {
     setCustomerId(c.id);
@@ -342,7 +354,7 @@ function NewAppointment() {
       qc.setQueryData<Customer[]>(['customers', orgId], (old) =>
         old ? [...old, row] : old,
       );
-      qc.invalidateQueries({ queryKey: ['customers', orgId] });
+      invalidateCustomers(qc, orgId);
       setNewClient(false);
       setCustomerId(row.id);
       setClientSearch('');
@@ -411,18 +423,7 @@ function NewAppointment() {
         [orgId],
       ),
   });
-  const openCash = useQuery({
-    queryKey: ['open-cash', branchId],
-    enabled: !!branchId,
-    queryFn: () =>
-      queryOne<CashSession>(
-        `SELECT cs.* FROM cash_session cs
-           JOIN cash_register cr ON cr.id = cs.cash_register_id
-          WHERE cr.branch_id = ? AND cs.status = 'open'
-          ORDER BY cs.opened_at DESC LIMIT 1`,
-        [branchId],
-      ),
-  });
+  const openCash = useOpenCashSession(branchId);
   const cashMethod = payMethods.data?.find((m) => m.method_type === 'cash');
   const transferMethod = payMethods.data?.find((m) => m.method_type === 'transfer');
   const firstBankId = banks.data?.[0]?.id ?? '';
@@ -627,7 +628,7 @@ function NewAppointment() {
       }
 
       const apptId = genId();
-      const stmts: { sql: string; args: (string | number | null)[] }[] = [];
+      const stmts: Stmt[] = [];
 
       if (newClient) {
         stmts.push({
@@ -722,8 +723,8 @@ function NewAppointment() {
       await batch(stmts);
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['appointments'] });
-      qc.invalidateQueries({ queryKey: ['customers', orgId] });
+      invalidateAppointments(qc);
+      invalidateCustomers(qc, orgId);
       // El aviso sobrevive al cambio de pantalla: se ve ya en el calendario.
       toast.success(
         'Cita creada',
@@ -838,6 +839,9 @@ function NewAppointment() {
     const current = slots.find((s) => s.label === time);
     if (current && !current.past && !current.taken) return;
     const next = slots.find((s) => !s.past && !s.taken);
+    // Proponer el primer hueco libre es sincronizar el formulario con datos que
+    // llegan async, no estado derivado: apenas la usuaria elige una hora manda.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (next && next.label !== time) setTime(next.label);
     // `time` se omite a propósito: solo recalculamos cuando cambian los huecos,
     // así una hora elegida a mano (aunque esté ocupada) no se pisa sola.
@@ -849,7 +853,7 @@ function NewAppointment() {
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-5 pb-action">
-      <Header
+      <PageHeader
         title="Agendar cita"
         onBack={() =>
           step > 1 ? setStep((step - 1) as 1 | 2) : navigate(ROUTES.calendar)
@@ -1720,28 +1724,21 @@ function EditAppointment({ id }: { id: string }) {
   const [depositOpen, setDepositOpen] = useState(false);
   const [voidDeposit, setVoidDeposit] = useState<DepositRow | null>(null);
 
-  const invalidate = () => {
-    qc.invalidateQueries({ queryKey: ['appointment-items', id] });
-    qc.invalidateQueries({ queryKey: ['appointments'] });
-  };
+  /**
+   * Cualquier cambio de la cita refresca lo mismo: sus ítems, su cabecera, la
+   * agenda, el dashboard, la disponibilidad de la semana y los contadores de
+   * vencidas. Antes había dos helpers casi iguales, uno para los ítems y otro
+   * para la cabecera, y según cuál usara la mutación quedaba media pantalla sin
+   * actualizar.
+   */
+  const refresh = () => invalidateAppointments(qc, id);
 
-  const refreshHead = () => {
-    qc.invalidateQueries({ queryKey: ['appointment-head', id] });
-    qc.invalidateQueries({ queryKey: ['appointments'] });
-  };
-
-  // Tras tocar abonos: cita + saldos de cuentas, caja y ledger de finanzas.
+  // Tras tocar abonos: la cita y TODO el dinero (cuentas, caja, arrastre y
+  // ledger). Antes se refrescaban cuatro claves y el arrastre del cierre de caja
+  // quedaba viejo hasta recargar la página.
   const refreshMoney = () => {
-    qc.invalidateQueries({ queryKey: ['appointment-deposits', id] });
-    refreshHead();
-    for (const key of [
-      ['fin-accounts'],
-      ['fin-summary'],
-      ['transactions'],
-      ['cash-expected'],
-    ]) {
-      qc.invalidateQueries({ queryKey: key });
-    }
+    refresh();
+    invalidateFinance(qc, branchId);
   };
 
   // Observaciones de la cita: se guardan a mano (el botón aparece al cambiarlas).
@@ -1759,7 +1756,7 @@ function EditAppointment({ id }: { id: string }) {
       ]),
     onSuccess: () => {
       setNotesDraft(null);
-      refreshHead();
+      refresh();
       toast.success('Observaciones guardadas');
     },
     onError: (e: Error) => toast.error('No se pudo guardar', e.message),
@@ -1777,7 +1774,7 @@ function EditAppointment({ id }: { id: string }) {
         [genId(), id, s.id, s.name, s.base_price, s.base_price, stid || null],
       );
     },
-    onSuccess: invalidate,
+    onSuccess: refresh,
   });
 
   // Reasignar estilista de un ítem. En atención NO se consulta disponibilidad;
@@ -1821,7 +1818,7 @@ function EditAppointment({ id }: { id: string }) {
         }
       }
     },
-    onSuccess: invalidate,
+    onSuccess: refresh,
   });
 
   const addProduct = useMutation({
@@ -1845,13 +1842,13 @@ function EditAppointment({ id }: { id: string }) {
         [genId(), id, p.id, p.name, q, p.base_price, p.base_price],
       );
     },
-    onSuccess: invalidate,
+    onSuccess: refresh,
   });
 
   const removeItem = useMutation({
     mutationFn: (itemId: string) =>
       execute('DELETE FROM appointment_item WHERE id = ?', [itemId]),
-    onSuccess: invalidate,
+    onSuccess: refresh,
   });
 
   // Edición en línea de una celda del detalle (descripción, precios, cantidad).
@@ -1871,7 +1868,7 @@ function EditAppointment({ id }: { id: string }) {
         args,
       );
     },
-    onSuccess: invalidate,
+    onSuccess: refresh,
   });
 
   // Reglas de comisión vigentes: mismo cálculo que al confirmar la venta, para
@@ -1890,8 +1887,7 @@ function EditAppointment({ id }: { id: string }) {
         id,
       ]),
     onSuccess: (_r, status) => {
-      qc.invalidateQueries({ queryKey: ['appointment-head', id] });
-      qc.invalidateQueries({ queryKey: ['appointments'] });
+      invalidateAppointments(qc, id);
       toast.success(APPT_STATUS_TOAST[status] ?? 'Cita actualizada');
     },
     onError: (e: Error) => toast.error('No se pudo cambiar el estado', e.message),
@@ -1923,7 +1919,7 @@ function EditAppointment({ id }: { id: string }) {
   if (!head.data) {
     return (
       <div className="space-y-6">
-        <Header title="Cita" onBack={goBack} />
+        <PageHeader title="Cita" onBack={goBack} />
         <Card>
           <EmptyState icon={UserRound} title="Cita no encontrada" />
         </Card>
@@ -1958,37 +1954,8 @@ function EditAppointment({ id }: { id: string }) {
     : null;
 
   const rules = commissionRules.data;
-  const itemCommission = (i: ItemRow) =>
-    i.service_id && i.assigned_staff_id && rules
-      ? commissionForItem(
-          i.assigned_staff_id,
-          i.service_id,
-          i.final_unit_price * i.quantity,
-          rules,
-        )
-      : null;
-
-  const commissionByStaff = (() => {
-    const m = new Map<
-      string,
-      { id: string; name: string; color: string | null; amount: number }
-    >();
-    for (const i of serviceItems) {
-      const c = itemCommission(i);
-      if (!c || !i.assigned_staff_id) continue;
-      const prev = m.get(i.assigned_staff_id);
-      if (prev) prev.amount += c.commission_amount;
-      else
-        m.set(i.assigned_staff_id, {
-          id: i.assigned_staff_id,
-          name: i.staff_name ?? 'Sin nombre',
-          color: i.staff_color,
-          amount: c.commission_amount,
-        });
-    }
-    return [...m.values()];
-  })();
-  const totalCommission = commissionByStaff.reduce((a, s) => a + s.amount, 0);
+  const staffCommissions = commissionByStaff(serviceItems, rules);
+  const totalCommission = staffCommissions.reduce((a, s) => a + s.amount, 0);
 
   const totalServicios = serviceItems.reduce(
     (a, i) => a + i.final_unit_price * i.quantity,
@@ -2002,7 +1969,7 @@ function EditAppointment({ id }: { id: string }) {
 
   return (
     <div className="space-y-5 pb-action lg:pb-0">
-      <Header
+      <PageHeader
         title="Atención de cita"
         onBack={goBack}
         right={<Badge tone={meta.tone}>{meta.label}</Badge>}
@@ -2189,10 +2156,10 @@ function EditAppointment({ id }: { id: string }) {
 
               {/* Totales */}
               <div className="space-y-2 border-t border-white/10 pt-4 text-sm">
-                <Row label="Subtotal" value={money(subtotal)} />
-                <Row label="Total servicios" value={money(totalServicios)} />
-                <Row label="Total productos" value={money(totalProductos)} />
-                <Row label="Descuentos" value={`−${money(discountTotal)}`} />
+                <DetailRow label="Subtotal" value={money(subtotal)} />
+                <DetailRow label="Total servicios" value={money(totalServicios)} />
+                <DetailRow label="Total productos" value={money(totalProductos)} />
+                <DetailRow label="Descuentos" value={`−${money(discountTotal)}`} />
                 <div className="flex items-center justify-between border-t border-white/10 pt-2">
                   <span className="font-medium text-white/70">Total</span>
                   <span
@@ -2260,12 +2227,12 @@ function EditAppointment({ id }: { id: string }) {
               </div>
 
               {/* Comisiones estilistas */}
-              {commissionByStaff.length > 0 && (
+              {staffCommissions.length > 0 && (
                 <div className="space-y-2 border-t border-white/10 pt-4 text-sm">
                   <p className="text-xs font-medium uppercase tracking-wide text-white/40">
                     Comisiones estilistas
                   </p>
-                  {commissionByStaff.map((s) => (
+                  {staffCommissions.map((s) => (
                     <div
                       key={s.id}
                       className="flex items-center justify-between"
@@ -2385,9 +2352,8 @@ function EditAppointment({ id }: { id: string }) {
           onClose={() => setCustomerOpen(false)}
           onDone={() => {
             setCustomerOpen(false);
-            refreshHead();
-            qc.invalidateQueries({ queryKey: ['customers', orgId] });
-            qc.invalidateQueries({ queryKey: ['clients', orgId] });
+            refresh();
+            invalidateCustomers(qc, orgId);
           }}
         />
       )}
@@ -2431,8 +2397,7 @@ function EditAppointment({ id }: { id: string }) {
           onClose={() => setVoidOpen(false)}
           onDone={() => {
             setVoidOpen(false);
-            qc.invalidateQueries({ queryKey: ['appointment-head', id] });
-            qc.invalidateQueries({ queryKey: ['appointments'] });
+            refreshMoney();
           }}
         />
       )}
@@ -2469,18 +2434,29 @@ function ApptCustomerModal({
   onDone: () => void;
 }) {
   const toast = useToast();
-  const [firstName, setFirstName] = useState(initialFirst ?? '');
-  const [lastName, setLastName] = useState(initialLast ?? '');
-  const [phone, setPhone] = useState(initialPhone ?? '');
-  const [email, setEmail] = useState(initialEmail ?? '');
-  const [birth, setBirth] = useState(initialBirth ?? '');
+  const [draft, setDraft] = useState<CustomerDraft>({
+    firstName: initialFirst ?? '',
+    lastName: initialLast ?? '',
+    phone: initialPhone ?? '',
+    email: initialEmail ?? '',
+    birth: initialBirth ?? '',
+  });
   const [error, setError] = useState('');
+
+  const set = <K extends keyof CustomerDraft>(
+    key: K,
+    value: CustomerDraft[K],
+  ) => {
+    // Editar el teléfono descarta el error del número anterior.
+    if (key === 'phone') setError('');
+    setDraft((d) => ({ ...d, [key]: value }));
+  };
 
   const save = useMutation({
     mutationFn: async () => {
-      const name = firstName.trim();
+      const name = draft.firstName.trim();
       if (!name) throw new Error('El nombre del cliente es obligatorio.');
-      const canonical = phone.trim() || null;
+      const canonical = draft.phone.trim() || null;
       const phoneError = validatePhone(canonical);
       if (phoneError) throw new Error(phoneError);
       if (canonical) {
@@ -2499,10 +2475,10 @@ function ApptCustomerModal({
             WHERE id = ?`,
           [
             name,
-            lastName.trim() || null,
+            draft.lastName.trim() || null,
             canonical,
-            email.trim() || null,
-            birth || null,
+            draft.email.trim() || null,
+            draft.birth || null,
             now,
             customerId,
           ],
@@ -2520,10 +2496,10 @@ function ApptCustomerModal({
             newId,
             orgId,
             name,
-            lastName.trim() || null,
+            draft.lastName.trim() || null,
             canonical,
-            email.trim() || null,
-            birth || null,
+            draft.email.trim() || null,
+            draft.birth || null,
           ],
         },
         {
@@ -2551,42 +2527,11 @@ function ApptCustomerModal({
       title={customerId ? 'Datos del cliente' : 'Agregar cliente'}
     >
       <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-3">
-          <Input
-            label="Nombre"
-            value={firstName}
-            onChange={(e) => setFirstName(e.target.value)}
-          />
-          <Input
-            label="Apellido"
-            value={lastName}
-            onChange={(e) => setLastName(e.target.value)}
-          />
-        </div>
-        <PhoneInput
-          label="WhatsApp"
-          value={phone}
-          onChange={(v) => {
-            setPhone(v);
-            setError('');
-          }}
-        />
-        <Input
-          label="Email"
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-        />
-        <Input
-          label="Cumpleaños"
-          type="date"
-          value={birth}
-          onChange={(e) => setBirth(e.target.value)}
-        />
+        <CustomerFields draft={draft} set={set} />
         {error && <p className="text-xs text-danger">{error}</p>}
         <Button
           className="w-full"
-          disabled={!firstName.trim()}
+          disabled={!draft.firstName.trim()}
           loading={save.isPending}
           onClick={() => {
             setError('');
@@ -2632,46 +2577,8 @@ function DepositModal({
   const [reference, setReference] = useState('');
   const [error, setError] = useState('');
 
-  const banks = useQuery({
-    queryKey: ['bank-accounts', orgId],
-    enabled: !!orgId,
-    queryFn: () =>
-      query<BankAccount>(
-        'SELECT * FROM bank_account WHERE organization_id = ? AND active = 1 ORDER BY name',
-        [orgId],
-      ),
-  });
-  const payMethods = useQuery({
-    queryKey: ['payment-methods', orgId],
-    enabled: !!orgId,
-    queryFn: () =>
-      query<PaymentMethod>(
-        'SELECT * FROM payment_method WHERE organization_id = ? AND active = 1 ORDER BY name',
-        [orgId],
-      ),
-  });
-  const cash = useQuery({
-    queryKey: ['open-cash', branchId],
-    enabled: !!branchId,
-    queryFn: () =>
-      queryOne<CashSession>(
-        `SELECT cs.* FROM cash_session cs
-           JOIN cash_register cr ON cr.id = cs.cash_register_id
-          WHERE cr.branch_id = ? AND cs.status = 'open'
-          ORDER BY cs.opened_at DESC LIMIT 1`,
-        [branchId],
-      ),
-  });
-
-  const cashMethod = payMethods.data?.find((m) => m.method_type === 'cash');
-  const transferMethod = payMethods.data?.find(
-    (m) => m.method_type === 'transfer',
-  );
-  const firstBankId = banks.data?.[0]?.id ?? '';
-  const effectiveDest = dest || firstBankId || 'cash';
-  const isCash = effectiveDest === 'cash';
-  const method = isCash ? cashMethod : transferMethod;
-  const sessionId = cash.data?.id ?? null;
+  const target = usePaymentTarget(orgId, branchId, dest);
+  const { sessionId, effectiveDest, isCash, method } = target;
   const value = Number(amount) || 0;
 
   const save = useMutation({
@@ -2686,7 +2593,7 @@ function DepositModal({
       const label = customerName ?? 'cliente';
       const nowIso = new Date().toISOString();
       const paymentId = genId();
-      const stmts: { sql: string; args: (string | number | null)[] }[] = [
+      const stmts: Stmt[] = [
         {
           sql: `INSERT INTO payment
                   (id, organization_id, branch_id, sale_id, appointment_id, payment_method_id,
@@ -2757,34 +2664,13 @@ function DepositModal({
           placeholder="0.00"
         />
 
-        <Select
-          label="Cobrar en"
-          value={effectiveDest}
-          onChange={(e) => setDest(e.target.value)}
-        >
-          {banks.data?.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name} (transferencia)
-            </option>
-          ))}
-          <option value="cash">Efectivo (caja)</option>
-        </Select>
-
-        {!isCash && (
-          <Input
-            label="Referencia (opcional)"
-            value={reference}
-            onChange={(e) => setReference(e.target.value)}
-            placeholder="Nº transferencia, voucher…"
-          />
-        )}
-
-        {isCash && !sessionId && (
-          <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
-            <AlertTriangle className="h-3.5 w-3.5" /> No hay caja abierta: el
-            abono se registra pero no entra al efectivo de caja.
-          </p>
-        )}
+        <PaymentTargetFields
+          target={target}
+          onDest={setDest}
+          reference={reference}
+          onReference={setReference}
+          noun="abono"
+        />
         {error && <p className="text-xs text-danger">{error}</p>}
 
         <Button
@@ -2843,18 +2729,7 @@ function VoidDepositModal({
 }) {
   const [error, setError] = useState('');
 
-  const cash = useQuery({
-    queryKey: ['open-cash', branchId],
-    enabled: !!branchId,
-    queryFn: () =>
-      queryOne<CashSession>(
-        `SELECT cs.* FROM cash_session cs
-           JOIN cash_register cr ON cr.id = cs.cash_register_id
-          WHERE cr.branch_id = ? AND cs.status = 'open'
-          ORDER BY cs.opened_at DESC LIMIT 1`,
-        [branchId],
-      ),
-  });
+  const cash = useOpenCashSession(branchId);
   const sessionId = cash.data?.id ?? null;
 
   const inOpenCash = !!deposit.movement_id && deposit.session_status === 'open';
@@ -2865,7 +2740,7 @@ function VoidDepositModal({
   const voidIt = useMutation({
     mutationFn: async () => {
       const now = new Date().toISOString();
-      const stmts: { sql: string; args: (string | number | null)[] }[] = [
+      const stmts: Stmt[] = [
         {
           sql: `UPDATE payment SET status = 'voided' WHERE id = ?`,
           args: [deposit.id],
@@ -3005,18 +2880,7 @@ function VoidSaleModal({
   });
 
   // Caja abierta (para revertir efectivo).
-  const cash = useQuery({
-    queryKey: ['open-cash', branchId],
-    enabled: !!branchId,
-    queryFn: () =>
-      queryOne<CashSession>(
-        `SELECT cs.* FROM cash_session cs
-           JOIN cash_register cr ON cr.id = cs.cash_register_id
-          WHERE cr.branch_id = ? AND cs.status = 'open'
-          ORDER BY cs.opened_at DESC LIMIT 1`,
-        [branchId],
-      ),
-  });
+  const cash = useOpenCashSession(branchId);
   const sessionId = cash.data?.id ?? null;
 
   const sale = data.data?.sale ?? null;
@@ -3033,7 +2897,7 @@ function VoidSaleModal({
   const voidSale = useMutation({
     mutationFn: async () => {
       const now = new Date().toISOString();
-      const stmts: { sql: string; args: (string | number | null)[] }[] = [];
+      const stmts: Stmt[] = [];
 
       if (sale) {
         stmts.push({
@@ -3215,49 +3079,8 @@ function ConfirmSaleModal({
   const [reference, setReference] = useState('');
   const [error, setError] = useState('');
 
-  const banks = useQuery({
-    queryKey: ['bank-accounts', orgId],
-    enabled: !!orgId,
-    queryFn: () =>
-      query<BankAccount>(
-        'SELECT * FROM bank_account WHERE organization_id = ? AND active = 1 ORDER BY name',
-        [orgId],
-      ),
-  });
-  const payMethods = useQuery({
-    queryKey: ['payment-methods', orgId],
-    enabled: !!orgId,
-    queryFn: () =>
-      query<PaymentMethod>(
-        'SELECT * FROM payment_method WHERE organization_id = ? AND active = 1 ORDER BY name',
-        [orgId],
-      ),
-  });
-
-  // Caja abierta de la sucursal (para movimientos en efectivo).
-  const cash = useQuery({
-    queryKey: ['open-cash', branchId],
-    enabled: !!branchId,
-    queryFn: () =>
-      queryOne<CashSession>(
-        `SELECT cs.* FROM cash_session cs
-           JOIN cash_register cr ON cr.id = cs.cash_register_id
-          WHERE cr.branch_id = ? AND cs.status = 'open'
-          ORDER BY cs.opened_at DESC LIMIT 1`,
-        [branchId],
-      ),
-  });
-  const sessionId = cash.data?.id ?? null;
-
-  const cashMethod = payMethods.data?.find((m) => m.method_type === 'cash');
-  const transferMethod = payMethods.data?.find(
-    (m) => m.method_type === 'transfer',
-  );
-  const firstBankId = banks.data?.[0]?.id ?? '';
-  // Por defecto: primera cuenta bancaria; si no hay, efectivo.
-  const effectiveDest = dest || firstBankId || 'cash';
-  const isCash = effectiveDest === 'cash';
-  const method = isCash ? cashMethod : transferMethod;
+  const target = usePaymentTarget(orgId, branchId, dest);
+  const { sessionId, effectiveDest, isCash, method } = target;
 
   // ¿La cita es de un día anterior? → venta retroactiva.
   const now = new Date();
@@ -3345,7 +3168,7 @@ function ConfirmSaleModal({
 
       const now = new Date().toISOString();
       const pay = balance;
-      const stmts: { sql: string; args: (string | number | null)[] }[] = [];
+      const stmts: Stmt[] = [];
 
       // La seña ya cobrada se atribuye a esta venta (deja de ser "otro ingreso").
       stmts.push({
@@ -3414,11 +3237,8 @@ function ConfirmSaleModal({
       await batch(stmts);
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['appointment-head', appointmentId] });
-      qc.invalidateQueries({ queryKey: ['appointments'] });
-      qc.invalidateQueries({ queryKey: ['sales'] });
-      qc.invalidateQueries({ queryKey: ['overdue-pending'] });
-      qc.invalidateQueries({ queryKey: ['overdue-count'] });
+      invalidateAppointments(qc, appointmentId);
+      invalidateSales(qc, branchId);
       toast.success('Venta confirmada', `${customerName ?? 'Cliente'} · ${money(total)}`);
       onDone();
     },
@@ -3457,41 +3277,21 @@ function ConfirmSaleModal({
           </div>
         </div>
 
-        <Select
-          label="Cobrar en"
-          value={effectiveDest}
-          onChange={(e) => setDest(e.target.value)}
-        >
-          {banks.data?.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name} (transferencia)
-            </option>
-          ))}
-          <option value="cash">Efectivo (caja)</option>
-        </Select>
-
-        {!isCash && (
-          <Input
-            label="Referencia (opcional)"
-            value={reference}
-            onChange={(e) => setReference(e.target.value)}
-            placeholder="Nº transferencia, voucher…"
-          />
-        )}
-
-        {isRetroactive && (
-          <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
-            <AlertTriangle className="h-3.5 w-3.5" /> Venta retroactiva: el
-            servicio se registra con fecha {dateShort(serviceDay)}; el cobro entra
-            a la caja de hoy.
-          </p>
-        )}
-        {isCash && !sessionId && (
-          <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
-            <AlertTriangle className="h-3.5 w-3.5" /> No hay caja abierta: el pago
-            se registra pero no entra al efectivo de caja.
-          </p>
-        )}
+        <PaymentTargetFields
+          target={target}
+          onDest={setDest}
+          reference={reference}
+          onReference={setReference}
+          extra={
+            isRetroactive ? (
+              <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
+                <AlertTriangle className="h-3.5 w-3.5" /> Venta retroactiva: el
+                servicio se registra con fecha {dateShort(serviceDay)}; el cobro
+                entra a la caja de hoy.
+              </p>
+            ) : undefined
+          }
+        />
         {error && <p className="text-xs text-danger">{error}</p>}
 
         <Button
@@ -3512,36 +3312,4 @@ function ConfirmSaleModal({
 
 /* ═══════════════════════════ Compartidos ═══════════════════════════ */
 
-function Header({
-  title,
-  onBack,
-  right,
-}: {
-  title: string;
-  onBack: () => void;
-  right?: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <div className="flex items-center gap-3">
-        <button
-          onClick={onBack}
-          className="rounded-lg p-2 text-white/60 hover:bg-white/10 hover:text-white"
-        >
-          <ArrowLeft className="h-5 w-5" />
-        </button>
-        <h1 className="text-2xl font-semibold text-white">{title}</h1>
-      </div>
-      {right}
-    </div>
-  );
-}
 
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-white/50">{label}</span>
-      <span className="text-white">{value}</span>
-    </div>
-  );
-}

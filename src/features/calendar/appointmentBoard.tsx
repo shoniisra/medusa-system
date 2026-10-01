@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, type QueryClient } from '@tanstack/react-query';
 import { Check, GripVertical, Play } from 'lucide-react';
-import { query } from '@/lib/db';
+import { execute, query } from '@/lib/db';
 import { useBranchId } from '@/store/session';
 import { APPOINTMENT_STATUS } from '@/config/constants';
 import { timeShort, dateShort } from '@/lib/format';
 import { Badge, Button } from '@/components/ui';
 import { cn } from '@/lib/cn';
+import { invalidateAppointments } from '@/lib/queryClient';
 import type { AppointmentStatus } from '@/types';
 
 /** Fila de cita usada por la agenda (lista/calendario) y el tablero de tareas. */
@@ -26,6 +27,22 @@ export interface AppointmentRow {
   google_calendar_event_id: string | null;
   /** Color con que se pintó el evento en Google (hex ya resuelto en el sync). */
   google_color_hex: string | null;
+}
+
+/**
+ * "Iniciar atención": pasa la cita a confirmada. Está acá y no en cada pantalla
+ * porque la agenda, el calendario y el dashboard ofrecen el mismo botón y antes
+ * cada copia invalidaba un juego distinto de consultas.
+ */
+export async function startAttention(
+  qc: QueryClient,
+  appointmentId: string,
+): Promise<void> {
+  await execute(
+    "UPDATE appointment SET status = 'confirmed', updated_at = ? WHERE id = ?",
+    [new Date().toISOString(), appointmentId],
+  );
+  invalidateAppointments(qc, appointmentId);
 }
 
 export const FALLBACK_COLOR = '#64748b';

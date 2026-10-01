@@ -27,7 +27,7 @@ import {
   useToast,
 } from '@/components/ui';
 import type { Branch } from '@/types';
-import type { Field, ResourceConfig } from './resources';
+import type { Column, Field, ResourceConfig, Row as ResourceRow } from './resources';
 import { cn } from '@/lib/cn';
 import {
   DEFAULT_CALENDAR_COLOR,
@@ -35,7 +35,24 @@ import {
   findCalendarColor,
 } from '@/config/colors';
 
-type Row = Record<string, unknown>;
+/** La fila cruda que administra el motor; el tipo vive con la config. */
+type Row = ResourceRow;
+
+/**
+ * Cómo ordenar una columna: lo que declare `sortValue` y, si no, el texto que
+ * devuelve `render` cuando es texto. Si `render` devuelve un elemento y la
+ * columna no declara `sortValue`, la columna no se puede ordenar y se deja como
+ * está en lugar de ordenar por "[object Object]".
+ */
+function sortKeyOf(col: Column): (row: Row) => string {
+  return (row) => {
+    if (col.sortValue) return String(col.sortValue(row));
+    const node = col.render(row);
+    return typeof node === 'string' || typeof node === 'number'
+      ? String(node)
+      : '';
+  };
+}
 type FormState = Record<string, string | boolean>;
 
 /** "servicio" → "Servicio": los avisos arrancan con mayúscula. */
@@ -102,7 +119,7 @@ export function ResourceManager({ resource }: { resource: ResourceConfig }) {
       ),
   });
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: listKey });
+  const invalidate = () => void qc.invalidateQueries({ queryKey: listKey });
 
   const toggleActive = useMutation({
     mutationFn: (row: Row) =>
@@ -145,9 +162,10 @@ export function ResourceManager({ resource }: { resource: ResourceConfig }) {
     }
     if (sort) {
       const col = cols[sort.idx];
+      const key = sortKeyOf(col);
       data = [...data].sort((a, b) => {
-        const av = String(col.render(a) ?? '');
-        const bv = String(col.render(b) ?? '');
+        const av = key(a);
+        const bv = key(b);
         const cmp = av.localeCompare(bv, 'es', {
           numeric: true,
           sensitivity: 'base',
@@ -211,7 +229,7 @@ export function ResourceManager({ resource }: { resource: ResourceConfig }) {
                   const isSorted = sort?.idx === idx;
                   const SortIcon = !isSorted
                     ? ChevronsUpDown
-                    : sort!.dir === 'asc'
+                    : sort.dir === 'asc'
                       ? ChevronUp
                       : ChevronDown;
                   return (
@@ -448,7 +466,7 @@ function ResourceForm({
           sets.push('updated_at = ?');
           args.push(new Date().toISOString());
         }
-        args.push(row!.id as string);
+        args.push(row.id);
         await execute(
           `UPDATE ${resource.table} SET ${sets.join(', ')} WHERE id = ?`,
           args,

@@ -27,7 +27,7 @@ interface MergeProps {
   onMerged?: (keptId: string) => void;
 }
 
-export function MergeClientsModal({ open, a, b, onClose, onMerged }: MergeProps) {
+function MergeClientsModal({ open, a, b, onClose, onMerged }: MergeProps) {
   const qc = useQueryClient();
   const toast = useToast();
   // Principal sugerido: la ficha más completa.
@@ -51,7 +51,7 @@ export function MergeClientsModal({ open, a, b, onClose, onMerged }: MergeProps)
   const merge = useMutation({
     mutationFn: () => mergeCustomers(keep, dup),
     onSuccess: () => {
-      qc.invalidateQueries();
+      void qc.invalidateQueries();
       toast.success(
         'Contactos combinados',
         `Quedó una sola ficha de ${fullName(keep.first_name, keep.last_name)}.`,
@@ -154,7 +154,7 @@ export function MergeClientsModal({ open, a, b, onClose, onMerged }: MergeProps)
         {merge.isError && (
           <p className="flex items-center gap-2 text-sm text-danger">
             <TriangleAlert className="h-4 w-4" />
-            {(merge.error as Error).message}
+            {merge.error.message}
           </p>
         )}
 

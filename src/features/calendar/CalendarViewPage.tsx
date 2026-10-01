@@ -31,6 +31,7 @@ import {
   useAppointments,
 } from './appointmentBoard';
 import { AppointmentActionsModal } from './AppointmentActions';
+import { invalidateAppointments } from '@/lib/queryClient';
 
 const VIEW_LABEL: Record<string, string> = {
   three: '3 días',
@@ -116,8 +117,8 @@ export function CalendarViewPage() {
         }
       }
     },
-    onSuccess: (_r, { start }) => {
-      qc.invalidateQueries({ queryKey: ['appointments'] });
+    onSuccess: (_r, { id, start }) => {
+      invalidateAppointments(qc, id);
       toast.success('Cita reprogramada', `${dateShort(ymd(start))} · ${timeShort(toLocalNaive(start))}`);
     },
     onError: (e: Error) => toast.error('No se pudo reprogramar', e.message),
@@ -143,6 +144,10 @@ export function CalendarViewPage() {
       } else {
         setExportMsg(r.error ?? 'No se pudo conectar con Google Calendar.');
       }
+    } catch (e) {
+      setExportMsg(
+        e instanceof Error ? e.message : 'No se pudo conectar con Google Calendar.',
+      );
     } finally {
       setChecking(false);
     }
@@ -363,7 +368,7 @@ export function CalendarViewPage() {
         {isGoogleCalendarEnabled() && (
           <>
             <button
-              onClick={exportGoogleJson}
+              onClick={() => void exportGoogleJson()}
               disabled={exporting}
               className="mt-1.5 flex w-full items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3.5 py-3 text-sm text-white/75 disabled:opacity-50"
             >
@@ -375,7 +380,7 @@ export function CalendarViewPage() {
               revisarlos fuera de la app.
             </p>
             <button
-              onClick={checkGoogle}
+              onClick={() => void checkGoogle()}
               disabled={checking}
               className="mt-1.5 flex w-full items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3.5 py-3 text-sm text-white/75 disabled:opacity-50"
             >
