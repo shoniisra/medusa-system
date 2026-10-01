@@ -2,8 +2,8 @@ import {
   forwardRef,
   Children,
   isValidElement,
+  useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -15,6 +15,7 @@ import {
 import { createPortal } from 'react-dom';
 import { ChevronsUpDown, Check, Search } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { useAnchoredPanel } from './useAnchoredPanel';
 
 interface FieldProps {
   label?: string;
@@ -94,10 +95,11 @@ export const Select = forwardRef<
   const options = useMemo(() => extractOptions(children), [children]);
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const [rect, setRect] = useState<DOMRect | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  const rect = useAnchoredPanel(open, close, triggerRef, menuRef);
 
   const currentValue = String(value ?? '');
   const current = options.find((o) => o.value === currentValue);
@@ -110,49 +112,11 @@ export const Select = forwardRef<
     return options.filter((o) => o.label.toLowerCase().includes(q));
   }, [options, search]);
 
-  const place = () => {
-    const r = triggerRef.current?.getBoundingClientRect();
-    if (r) setRect(r);
-  };
-
-  useLayoutEffect(() => {
-    if (open) place();
-  }, [open]);
-
   useEffect(() => {
-    if (!open) return;
     // El buscador solo toma el foco con mouse: en un teléfono abre el teclado,
     // el navegador desplaza la página para acomodarlo y el menú se cerraba solo
     // (se veía como un parpadeo al tocar el select).
-    if (!isTouch()) searchRef.current?.focus();
-
-    const onDown = (e: PointerEvent) => {
-      const t = e.target as Node;
-      if (
-        !menuRef.current?.contains(t) &&
-        !triggerRef.current?.contains(t)
-      ) {
-        setOpen(false);
-      }
-    };
-    // Al desplazar, el menú sigue al disparador en lugar de cerrarse.
-    let raf = 0;
-    const onScroll = () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(place);
-    };
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
-    window.addEventListener('pointerdown', onDown, true);
-    window.addEventListener('scroll', onScroll, true);
-    window.addEventListener('resize', onScroll);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener('pointerdown', onDown, true);
-      window.removeEventListener('scroll', onScroll, true);
-      window.removeEventListener('resize', onScroll);
-      window.removeEventListener('keydown', onKey);
-    };
+    if (open && !isTouch()) searchRef.current?.focus();
   }, [open]);
 
   // Abre hacia arriba si abajo no entra (campo al pie de la pantalla, teclado…).
@@ -211,6 +175,7 @@ export const Select = forwardRef<
         createPortal(
           <div
             ref={menuRef}
+            data-floating
             style={{
               position: 'fixed',
               ...(openUp

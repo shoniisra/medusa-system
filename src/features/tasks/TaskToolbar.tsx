@@ -1,10 +1,4 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from 'react';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import {
   CalendarDays,
@@ -21,6 +15,8 @@ import {
 import { APPOINTMENT_STATUS } from '@/config/constants';
 import { fullName } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import { DateInput } from '@/components/ui';
+import { useAnchoredPanel } from '@/components/ui/useAnchoredPanel';
 import {
   STATUS_ORDER,
   shiftAnchor,
@@ -102,45 +98,10 @@ function FilterMenu({
   children: (close: () => void) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  const [rect, setRect] = useState<DOMRect | null>(null);
   const btn = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
-
-  const place = () => {
-    const r = btn.current?.getBoundingClientRect();
-    if (r) setRect(r);
-  };
-
-  useLayoutEffect(() => {
-    if (open) place();
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: PointerEvent) => {
-      const t = e.target as Node;
-      if (!panel.current?.contains(t) && !btn.current?.contains(t)) {
-        setOpen(false);
-      }
-    };
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
-    let raf = 0;
-    const onScroll = () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(place);
-    };
-    window.addEventListener('pointerdown', onDown, true);
-    window.addEventListener('keydown', onKey);
-    window.addEventListener('scroll', onScroll, true);
-    window.addEventListener('resize', onScroll);
-    return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener('pointerdown', onDown, true);
-      window.removeEventListener('keydown', onKey);
-      window.removeEventListener('scroll', onScroll, true);
-      window.removeEventListener('resize', onScroll);
-    };
-  }, [open]);
+  const close = useCallback(() => setOpen(false), []);
+  const rect = useAnchoredPanel(open, close, btn, panel);
 
   const w = Math.min(width, window.innerWidth - 16);
   const left = rect
@@ -166,6 +127,7 @@ function FilterMenu({
         createPortal(
           <div
             ref={panel}
+            data-floating
             style={{
               position: 'fixed',
               top: rect.bottom + 6,
@@ -339,19 +301,13 @@ export function TaskToolbar({
                       className="h-9 w-full rounded-lg border border-white/10 bg-ink-900 px-2 text-sm text-white focus:border-gold/50 focus:outline-none"
                     />
                   </label>
-                  <label className="block">
-                    <span className="mb-1 block text-xs font-medium text-white/60">
-                      Ir a una fecha
-                    </span>
-                    <input
-                      type="date"
-                      value={f.anchor}
-                      onChange={(e) =>
-                        e.target.value && onChange({ anchor: e.target.value })
-                      }
-                      className="h-9 w-full rounded-lg border border-white/10 bg-ink-900 px-2 text-sm text-white focus:border-gold/50 focus:outline-none"
-                    />
-                  </label>
+                  <DateInput
+                    label="Ir a una fecha"
+                    value={f.anchor}
+                    onChange={(v) => v && onChange({ anchor: v })}
+                    clearable={false}
+                    size="sm"
+                  />
                   <button
                     type="button"
                     onClick={() => {

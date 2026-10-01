@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { EmailInput, Input, PhoneInput } from '@/components/ui';
+import { DateInput, EmailInput, Input, PhoneInput } from '@/components/ui';
 
 /** Datos básicos de un contacto, tal como los edita el formulario. */
 export type CustomerDraft = {
@@ -60,11 +60,11 @@ export function CustomerFields({
         value={draft.email}
         onChange={(v) => set('email', v)}
       />
-      <Input
+      <DateInput
         label="Cumpleaños"
-        type="date"
+        mode="birthday"
         value={draft.birth}
-        onChange={(e) => set('birth', e.target.value)}
+        onChange={(v) => set('birth', v)}
       />
     </>
   );

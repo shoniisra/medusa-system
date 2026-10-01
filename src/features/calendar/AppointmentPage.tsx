@@ -71,6 +71,7 @@ import {
   Button,
   Card,
   CardHeader,
+  DateInput,
   Input,
   Select,
   EmptyState,
@@ -102,6 +103,7 @@ import {
   SaleItemsEditor,
   commissionByStaff,
 } from '@/features/pos/SaleItemsEditor';
+import { ymd } from '@/lib/date';
 import { isNoCharge, stripNoCharge } from './appointmentBoard';
 import type {
   AppointmentStatus,
@@ -178,11 +180,6 @@ const rbcMessages = {
   event: 'Cita',
   noEventsInRange: 'Sin citas.',
 };
-
-/** "YYYY-MM-DD" local de un Date. */
-function ymdLocal(d: Date): string {
-  return toLocalNaive(d).slice(0, 10);
-}
 
 /**
  * Hora libre a mano. La rejilla y el calendario avanzan de a bloques; esto
@@ -468,8 +465,8 @@ function NewAppointment() {
     () => startOfWeek(new Date(`${date}T00:00:00`), { weekStartsOn: 1 }),
     [date],
   );
-  const weekFrom = ymdLocal(weekStart);
-  const weekTo = ymdLocal(new Date(weekStart.getTime() + 6 * 86400000));
+  const weekFrom = ymd(weekStart);
+  const weekTo = ymd(new Date(weekStart.getTime() + 6 * 86400000));
 
   const weekAppts = useQuery({
     queryKey: ['week-availability', branchId, weekFrom],
@@ -790,7 +787,7 @@ function NewAppointment() {
     for (let i = 0; i < 28; i++) {
       const d = new Date(base);
       d.setDate(base.getDate() + i);
-      out.push(ymdLocal(d));
+      out.push(ymd(d));
     }
     // Si la fecha elegida cae fuera de la ventana (llegó por ?date=), la sumamos.
     if (!out.includes(date)) out.unshift(date);
@@ -962,19 +959,20 @@ function NewAppointment() {
           <Card className="p-4">
             <div className="mb-3 flex items-center justify-between gap-3">
               <h3 className="text-sm font-medium text-white/70">Día</h3>
-              <label className="flex items-center gap-2 text-xs text-white/50">
+              <div className="flex items-center gap-2 text-xs text-white/50">
                 Otra fecha
-                <input
-                  type="date"
+                <DateInput
                   value={date}
-                  onChange={(e) => {
-                    if (!e.target.value) return;
-                    setDate(e.target.value);
+                  onChange={(v) => {
+                    if (!v) return;
+                    setDate(v);
                     setConflicts([]);
                   }}
-                  className="rounded-lg border border-white/10 bg-ink-800/60 px-2 py-1.5 text-xs text-white"
+                  clearable={false}
+                  size="sm"
+                  className="w-36"
                 />
-              </label>
+              </div>
             </div>
             <div className="edge-row snap-x snap-mandatory pb-1">
               {dayStrip.map((iso) => {
@@ -1076,11 +1074,11 @@ function NewAppointment() {
               view={calView}
               onView={setCalView}
               onNavigate={(d) => {
-                setDate(ymdLocal(d));
+                setDate(ymd(d));
                 setConflicts([]);
               }}
               onSelectSlot={(start) => {
-                setDate(ymdLocal(start));
+                setDate(ymd(start));
                 pickTime(
                   `${String(start.getHours()).padStart(2, '0')}:${String(
                     start.getMinutes(),

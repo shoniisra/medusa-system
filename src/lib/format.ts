@@ -50,8 +50,14 @@ export const timeShort = (iso: string | null | undefined): string => {
   });
 };
 
-/** "YYYY-MM-DD" del día actual en la zona local. */
-export const todayISO = (): string => new Date().toISOString().slice(0, 10);
+/**
+ * "YYYY-MM-DD" del día actual en la zona local.
+ *
+ * Vive en `lib/date` (se calculaba con `toISOString()`, que es UTC: en UTC−5,
+ * pasadas las 19:00 devolvía el día siguiente). Se reexporta porque medio
+ * sistema ya lo importa desde acá.
+ */
+export { todayISO } from './date';
 
 /** Nombre completo a partir de first/last. */
 export const fullName = (

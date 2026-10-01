@@ -27,6 +27,7 @@ import {
   Button,
   Card,
   CardHeader,
+  DateInput,
   Input,
   Select,
   Modal,
@@ -1837,11 +1838,10 @@ function DebtModal({
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
         />
-        <Input
+        <DateInput
           label="Vencimiento (opcional)"
-          type="date"
           value={dueDate}
-          onChange={(e) => setDueDate(e.target.value)}
+          onChange={setDueDate}
         />
         <Input
           label="Descripción (opcional)"
@@ -2528,17 +2528,17 @@ function SearchModal({
           placeholderValue="all"
         />
         <div className="grid grid-cols-2 gap-3">
-          <Input
+          <DateInput
             label="Desde"
-            type="date"
             value={f.from}
-            onChange={(e) => set('from', e.target.value)}
+            onChange={(v) => set('from', v)}
+            max={f.to || undefined}
           />
-          <Input
+          <DateInput
             label="Hasta"
-            type="date"
             value={f.to}
-            onChange={(e) => set('to', e.target.value)}
+            onChange={(v) => set('to', v)}
+            min={f.from || undefined}
           />
         </div>
         <div className="grid grid-cols-2 gap-3">

@@ -20,7 +20,14 @@ import {
   isGoogleCalendarEnabled,
   updateCalendarEvent,
 } from '@/lib/googleCalendar';
-import { Button, Input, Modal, Select, useToast } from '@/components/ui';
+import {
+  Button,
+  DateInput,
+  Input,
+  Modal,
+  Select,
+  useToast,
+} from '@/components/ui';
 import { useStaff } from '@/features/pos/useCatalog';
 import type { AppointmentStatus } from '@/types';
 import { isNoCharge, isOverdue, ymd } from './appointmentBoard';
@@ -390,12 +397,12 @@ export function AppointmentActionsModal({
       {mode === 'reschedule' && (
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            <Input
+            <DateInput
               label="Fecha"
-              type="date"
               min={ymd(new Date())}
               value={date}
-              onChange={(e) => setDate(e.target.value)}
+              onChange={(v) => v && setDate(v)}
+              clearable={false}
             />
             <Input
               label="Hora"

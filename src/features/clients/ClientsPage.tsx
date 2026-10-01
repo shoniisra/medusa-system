@@ -44,6 +44,7 @@ import {
   CardHeader,
   StatCard,
   Button,
+  DateInput,
   Input,
   Select,
   Modal,
@@ -1367,11 +1368,11 @@ function ColorRecordsCard({ customerId }: { customerId: string }) {
       <Modal open={open} onClose={() => setOpen(false)} title="Registrar color">
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
-            <Input
+            <DateInput
               label="Fecha"
-              type="date"
               value={date}
-              onChange={(e) => setDate(e.target.value)}
+              onChange={setDate}
+              clearable={false}
             />
             <Select
               label="Estilista"

@@ -5,6 +5,7 @@ import { execute, query } from '@/lib/db';
 import { useBranchId } from '@/store/session';
 import { APPOINTMENT_STATUS } from '@/config/constants';
 import { timeShort, dateShort } from '@/lib/format';
+import { ymd } from '@/lib/date';
 import { Badge, Button } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { invalidateAppointments } from '@/lib/queryClient';
@@ -67,12 +68,7 @@ export const STATUS_ORDER: AppointmentStatus[] = [
 
 export type RangeMode = 'today' | 'week' | 'month';
 
-export function ymd(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
+export { ymd };
 
 /**
  * Cita "vencida": reservada o atendiendo cuyo día ya pasó. Estado derivado

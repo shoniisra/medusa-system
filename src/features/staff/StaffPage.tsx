@@ -18,11 +18,13 @@ import {
   Badge,
   Button,
   Select,
+  DateInput,
   Input,
   Modal,
   EmptyState,
   useToast,
 } from '@/components/ui';
+import { ymd } from '@/lib/date';
 import { invalidateFinance } from '@/lib/queryClient';
 import {
   AccountSelect,
@@ -228,10 +230,11 @@ function TeamDailySection({ orgId }: { orgId: string }) {
         subtitle="Equipo del salón y sus servicios del día"
         action={
           <div className="w-44">
-            <Input
-              type="date"
+            <DateInput
               value={day}
-              onChange={(e) => setDay(e.target.value)}
+              onChange={(v) => v && setDay(v)}
+              clearable={false}
+              size="sm"
             />
           </div>
         }
@@ -334,11 +337,6 @@ interface LiquidationRow {
   net_payable: number;
 }
 
-const ymdLocal = (d: Date): string =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
-    d.getDate(),
-  ).padStart(2, '0')}`;
-
 /** Límites (lunes–domingo) de la semana que contiene a `ref`. */
 function weekBounds(ref: Date): { from: string; to: string } {
   const diffToMon = (ref.getDay() + 6) % 7; // 0 = lunes
@@ -346,7 +344,7 @@ function weekBounds(ref: Date): { from: string; to: string } {
   mon.setDate(ref.getDate() - diffToMon);
   const sun = new Date(mon);
   sun.setDate(mon.getDate() + 6);
-  return { from: ymdLocal(mon), to: ymdLocal(sun) };
+  return { from: ymd(mon), to: ymd(sun) };
 }
 
 /**
