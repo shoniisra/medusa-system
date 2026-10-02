@@ -38,13 +38,34 @@ const db = createClient({
   authToken: env.VITE_TURSO_AUTH_TOKEN,
 });
 
+/**
+ * Palabras de servicio que el parser viejo dejaba pegadas al principio del
+ * nombre, porque el título del evento empieza por el servicio ("Cortes Milton
+ * Guerrero"). Son las mismas de STOPWORDS en worker/gcalSync.ts.
+ */
+const PREFIJOS = new Set([
+  'cortes', 'corte', 'maquillajes', 'maquillaje', 'tratamientos', 'tratamiento',
+  'cabello', 'peinados', 'peinado', 'alisado', 'color', 'coloracion', 'uñas',
+  'unas', 'manicura', 'pedicura', 'cejas', 'pestañas', 'pestanas', 'retoque',
+  'retiro', 'esmaltado', 'lifting', 'semi', 'semipermanente', 's',
+]);
+
+const sinAcentos = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
 /** Nombre completo sin la basura que dejaba el parser. */
-const clean = (name) =>
-  name
+const clean = (name) => {
+  const base = name
     .replace(/\(\s*abono[^)]*\)/gi, '')
     .replace(/\(\s*\)/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+  // Se van los prefijos de servicio, pero nunca el último token: "Cortes" solo
+  // no se convierte en nombre vacío.
+  const tok = base.split(' ');
+  while (tok.length > 1 && PREFIJOS.has(sinAcentos(tok[0]).toLowerCase()))
+    tok.shift();
+  return tok.join(' ');
+};
 
 /** Tablas reales con columna customer_id (mismo criterio que mergeCustomers). */
 const refTables = async () => {

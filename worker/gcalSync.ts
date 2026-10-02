@@ -154,7 +154,8 @@ function matchBySynonym(nraw: string, services: ServiceRow[]): ServiceRow | null
 const STOPWORDS = new Set([
   'unas', 'una', 'semi', 'semipermanente', 'poligel', 'acrilico', 'pedicura',
   'pedi', 'manicura', 'lifting', 'cejas', 'ceja', 'pestanas', 'pestana',
-  'maquillaje', 'color', 'coloracion', 'corte', 'peinado', 'retiro', 'retoque',
+  'maquillaje', 'maquillajes', 'color', 'coloracion', 'corte', 'peinado',
+  'peinados', 'retiro', 'retoque',
   'esmaltado', 'bano', 'matiz', 'tinte', 'familiar', 'sobrina', 'sobrino',
   'sena', 'senal', 'cortes', 'tratamiento', 'tratamientos', 'alisado',
   'mujeres', 'mujer', 'hombres', 'hombre', 'clienta', 'cliente', 'am', 'pm',
