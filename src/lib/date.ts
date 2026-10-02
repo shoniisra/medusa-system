@@ -181,6 +181,39 @@ export function addMonths(year: number, month: number, delta: number): {
   return { year: Math.floor(total / 12), month: ((total % 12) + 12) % 12 };
 }
 
+/**
+ * Días hasta el próximo cumpleaños, contados desde hoy (0 = hoy, 1 = mañana).
+ * null si la fecha no sirve. El 29 de febrero, en años no bisiestos, lo celebra
+ * el 1 de marzo (lo normaliza el propio `Date`).
+ */
+export function daysUntilBirthday(
+  iso: string | null | undefined,
+  from: Date = new Date(),
+): number | null {
+  const birth = fromISO(iso ?? '');
+  if (!birth) return null;
+  const today = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  let next = new Date(today.getFullYear(), birth.getMonth(), birth.getDate());
+  if (next.getTime() < today.getTime()) {
+    next = new Date(today.getFullYear() + 1, birth.getMonth(), birth.getDate());
+  }
+  return Math.round((next.getTime() - today.getTime()) / 86_400_000);
+}
+
+/** Cuenta regresiva en palabras: "¡Hoy!", "Mañana" o "en N días". */
+export function birthdayCountdown(days: number): string {
+  if (days <= 0) return '¡Hoy!';
+  if (days === 1) return 'Mañana';
+  return `en ${days} días`;
+}
+
+/** "4 oct" a partir del cumpleaños (día y mes, sin año). Vacío si no sirve. */
+export function birthdayDayMonth(iso: string | null | undefined): string {
+  const d = fromISO(iso ?? '');
+  if (!d) return '';
+  return `${d.getDate()} ${MONTHS_ES_SHORT[d.getMonth()]}`;
+}
+
 /** Edad cumplida a partir del cumpleaños (null si la fecha no sirve). */
 export function ageFrom(iso: string | null | undefined): number | null {
   const d = fromISO(iso ?? '');

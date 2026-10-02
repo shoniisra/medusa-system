@@ -86,6 +86,31 @@ function emailKey(email: string | null): string {
   return email ? normalizeText(email) : '';
 }
 
+/**
+ * Todos los nombres por los que se puede reconocer a este contacto: el real,
+ * el alias y cada entrada del nombre de la agenda (puede traer varias unidas
+ * con " / " si ya se combinó antes). Hace falta para encontrarle la pareja a
+ * un contacto sin WhatsApp: ese suele entrar dos veces, una vez con el nombre
+ * real (y WhatsApp) desde la agenda del teléfono, y otra con el alias o un
+ * apodo ("Mica", "Karen uñas") desde una cita reservada a mano.
+ */
+function identityKeys(c: Customer): string[] {
+  const keys = new Set<string>();
+  const full = nameKey(c.first_name, c.last_name);
+  if (full) keys.add(full);
+  if (c.nickname) {
+    const k = normalizeText(c.nickname);
+    if (k) keys.add(k);
+  }
+  if (c.imported_name) {
+    for (const part of c.imported_name.split('/')) {
+      const k = normalizeText(part);
+      if (k) keys.add(k);
+    }
+  }
+  return [...keys];
+}
+
 export type ContactField = 'phone' | 'email';
 
 /**
@@ -135,11 +160,14 @@ function namesRelated(a: Customer, b: Customer): boolean {
 }
 
 /**
- * Agrupa contactos que parecen la misma persona: mismo nombre completo con
- * teléfonos que no se contradicen (al menos uno sin número, o el mismo), o
- * mismo teléfono / email con nombres compatibles. Transitivo (A~B y B~C ⇒ un
- * solo grupo). Devuelve solo los grupos de 2 o más, con la ficha más completa
- * primero (la sugerida como principal).
+ * Agrupa contactos que parecen la misma persona: mismo nombre real, alias o
+ * nombre de agenda (cruzados entre sí) con teléfonos que no se contradicen (al
+ * menos uno sin número, o el mismo), o mismo teléfono / email con nombres
+ * compatibles. Esto es lo que encuentra la pareja de un contacto sin WhatsApp:
+ * su alias o su nombre de agenda suele coincidir con el nombre real de la
+ * ficha que sí tiene número. Transitivo (A~B y B~C ⇒ un solo grupo). Devuelve
+ * solo los grupos de 2 o más, con la ficha más completa primero (la sugerida
+ * como principal).
  *
  * Ojo: al ser transitivo, una ficha sin teléfono puede unir dos que SÍ tienen
  * números distintos. El grupo sirve para revisar, pero los pares combinables
@@ -160,15 +188,16 @@ export function duplicateGroups<T extends Customer>(list: T[]): T[][] {
     if (ra !== rb) parent[rb] = ra;
   };
 
-  // Mismo nombre completo, y teléfonos que no se contradicen. Dos "karen" con
-  // números distintos son personas distintas: nunca se fusiona solo por nombre.
+  // Mismo nombre, alias o nombre de agenda (en cualquier combinación), y
+  // teléfonos que no se contradicen. Dos "karen" con números distintos son
+  // personas distintas: `contactConflict` las separa aunque coincida el nombre.
   const byName = new Map<string, number[]>();
   list.forEach((c, i) => {
-    const k = nameKey(c.first_name, c.last_name);
-    if (!k) return;
-    const b = byName.get(k);
-    if (b) b.push(i);
-    else byName.set(k, [i]);
+    for (const k of identityKeys(c)) {
+      const b = byName.get(k);
+      if (b) b.push(i);
+      else byName.set(k, [i]);
+    }
   });
   for (const idxs of byName.values()) {
     for (let i = 0; i < idxs.length; i++) {
@@ -225,6 +254,125 @@ export function mergeablePairs<T extends Customer>(group: T[]): [T, T][] {
     for (let j = i + 1; j < group.length; j++) {
       if (!contactConflict(group[i], group[j])) out.push([group[i], group[j]]);
     }
+  }
+  return out;
+}
+
+/* ─────────── Candidatos para contactos sin WhatsApp ─────────── */
+
+/**
+ * Primer nombre que en realidad es una relación o una nota de servicio
+ * pegada al nombre al reservar ("Hija Adri", "Magdy uñas", "Limpieza casa").
+ * Adivinar la identidad por esa palabra matchea cualquier nota parecida, no a
+ * la persona: hay que descartarla antes de buscar candidato.
+ */
+const NAME_STOPWORDS = new Set([
+  'de',
+  'la',
+  'el',
+  'los',
+  'las',
+  'y',
+  'x',
+  'a',
+  'ya',
+  'no',
+  'da',
+  'aun',
+  'hija',
+  'hijo',
+  'hermana',
+  'hermano',
+  'mama',
+  'mami',
+  'papa',
+  'papi',
+  'tia',
+  'tio',
+  'prima',
+  'primo',
+  'sobrina',
+  'sobrino',
+  'abuela',
+  'abuelo',
+  'nieta',
+  'nieto',
+  'esposa',
+  'esposo',
+  'novia',
+  'novio',
+  'amiga',
+  'amigo',
+  'vecina',
+  'vecino',
+  'cunada',
+  'cunado',
+  'comadre',
+  'sra',
+  'srta',
+  'sr',
+  'clienta',
+  'cliente',
+  'limpieza',
+  'unas',
+  'cabello',
+  'color',
+  'balayage',
+]);
+
+/**
+ * Primer nombre normalizado, o `''` si no sirve para adivinar con quién
+ * combinar: muy corto, una palabra de la lista de arriba, o el campo es en
+ * realidad una nota larga ("de x 3 familiares Magdy 2 mujeres y hombre") y no
+ * un nombre.
+ */
+function guessableFirstToken(c: Customer): string {
+  const words = nameKey(c.first_name, c.last_name).split(' ').filter(Boolean);
+  if (words.length === 0 || words.length > 4) return '';
+  const first = words[0];
+  if (first.length < 3 || NAME_STOPWORDS.has(first)) return '';
+  return first;
+}
+
+export interface PhonelessCandidate<T extends Customer> {
+  noPhone: T;
+  candidate: T;
+}
+
+/**
+ * Para cada contacto sin WhatsApp, el único contacto CON WhatsApp que
+ * comparte su primer nombre.
+ *
+ * Es la otra mitad de los duplicados: el cliente que reserva una cita a mano
+ * sin pasar por "Nuevo cliente" suele quedar con nota tipo "Magdy uñas" o
+ * "Iraide salazar corrección" en vez del nombre real, y esa ficha nunca
+ * coincide por nombre completo ni comparte teléfono/email con la que sí tiene
+ * WhatsApp — `duplicateGroups` no la encuentra. Esto es un indicio por
+ * nombre de pila nomás, así que es mucho menos seguro: si hay más de un
+ * contacto con ese mismo primer nombre, es ambiguo y no se sugiere nada (dos
+ * "Karen" con WhatsApp distinto siguen siendo dos personas). Vive separado de
+ * `duplicateGroups` para no bajarle la confianza a esos matches.
+ */
+export function phonelessCandidates<T extends Customer>(
+  list: readonly T[],
+): PhonelessCandidate<T>[] {
+  const byToken = new Map<string, T[]>();
+  for (const c of list) {
+    if (!c.phone) continue;
+    const t = guessableFirstToken(c);
+    if (!t) continue;
+    const arr = byToken.get(t);
+    if (arr) arr.push(c);
+    else byToken.set(t, [c]);
+  }
+
+  const out: PhonelessCandidate<T>[] = [];
+  for (const c of list) {
+    if (c.phone) continue;
+    const t = guessableFirstToken(c);
+    if (!t) continue;
+    const matches = byToken.get(t);
+    if (matches?.length === 1) out.push({ noPhone: c, candidate: matches[0] });
   }
   return out;
 }

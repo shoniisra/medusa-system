@@ -1,9 +1,14 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { MessageCircle, Check, BellRing } from 'lucide-react';
+import { MessageCircle, Check, BellRing, Cake } from 'lucide-react';
 import { query } from '@/lib/db';
-import { useBranchId } from '@/store/session';
+import { useBranchId, useOrgId } from '@/store/session';
 import { timeShort, dateShort } from '@/lib/format';
+import {
+  daysUntilBirthday,
+  birthdayCountdown,
+  birthdayDayMonth,
+} from '@/lib/date';
 import { phoneToWaDigits } from '@/lib/phone';
 import { APPOINTMENT_STATUS } from '@/config/constants';
 import { Card, CardHeader, Badge, Button, EmptyState } from '@/components/ui';
@@ -46,6 +51,15 @@ function waReminder(phone: string, name: string | null, startAt: string): string
   const text = `${saludo} 👋 Te recordamos tu cita en Medusa Estudio el ${dateShort(
     startAt,
   )} a las ${timeShort(startAt)}. ¿La confirmás? 💇`;
+  return `https://web.whatsapp.com/send?phone=${normalizePhone(
+    phone,
+  )}&text=${encodeURIComponent(text)}`;
+}
+
+/** Enlace a WhatsApp Web con el saludo de cumpleaños precargado. */
+function waBirthday(phone: string, name: string | null): string {
+  const saludo = name ? `¡Feliz cumpleaños, ${name.split(' ')[0]}!` : '¡Feliz cumpleaños!';
+  const text = `${saludo} 🎉 De parte de todo el equipo de Medusa Estudio. Te esperamos para consentirte 💇✨`;
   return `https://web.whatsapp.com/send?phone=${normalizePhone(
     phone,
   )}&text=${encodeURIComponent(text)}`;
@@ -204,6 +218,128 @@ export function RemindersPage() {
           </ul>
         )}
       </Card>
+
+      <UpcomingBirthdays />
     </div>
+  );
+}
+
+interface UpcomingBirthdayRow {
+  id: string;
+  name: string | null;
+  phone: string | null;
+  birth_date: string;
+  kind: 'staff' | 'client';
+}
+
+/** Días dentro de los que se consideran "próximos" los cumpleaños. */
+const BIRTHDAY_HORIZON = 30;
+
+/** Cumpleañeros próximos: equipo y clientes, ordenados por cercanía. */
+function UpcomingBirthdays() {
+  const orgId = useOrgId();
+  const now = new Date();
+  // Ventana de 30 días: nunca cruza más de dos meses.
+  const m1 = String(now.getMonth() + 1).padStart(2, '0');
+  const m2 = String(((now.getMonth() + 1) % 12) + 1).padStart(2, '0');
+
+  const q = useQuery({
+    queryKey: ['upcoming-birthdays', orgId, m1],
+    enabled: !!orgId,
+    queryFn: () =>
+      query<UpcomingBirthdayRow>(
+        `SELECT id, ${customerNameSql('customer')} AS name, phone, birth_date,
+                'client' AS kind
+           FROM customer
+          WHERE organization_id = ? AND active = 1 AND birth_date IS NOT NULL
+            AND substr(birth_date,6,2) IN (?, ?)
+         UNION ALL
+         SELECT id, trim(first_name || ' ' || COALESCE(last_name, '')) AS name,
+                phone, birth_date, 'staff' AS kind
+           FROM staff_member
+          WHERE organization_id = ? AND active = 1 AND birth_date IS NOT NULL`,
+        [orgId, m1, m2, orgId],
+      ),
+  });
+
+  const upcoming = useMemo(() => {
+    return (q.data ?? [])
+      .map((r) => ({ ...r, days: daysUntilBirthday(r.birth_date) }))
+      .filter(
+        (r): r is UpcomingBirthdayRow & { days: number } =>
+          r.days != null && r.days <= BIRTHDAY_HORIZON,
+      )
+      .sort((a, b) => a.days - b.days || (a.kind === b.kind ? 0 : a.kind === 'staff' ? -1 : 1));
+  }, [q.data]);
+
+  return (
+    <Card>
+      <CardHeader
+        title="Cumpleañeros próximos"
+        subtitle={`Equipo y clientes que cumplen en los próximos ${BIRTHDAY_HORIZON} días`}
+      />
+      {upcoming.length === 0 ? (
+        <EmptyState
+          icon={Cake}
+          title="Sin cumpleaños próximos"
+          description="Nadie cumple años en los próximos días."
+        />
+      ) : (
+        <ul className="space-y-2">
+          {upcoming.map((b) => {
+            const soon = b.days === 0;
+            return (
+              <li
+                key={`${b.kind}-${b.id}`}
+                className={cn(
+                  'flex items-center justify-between gap-3 rounded-xl border p-3',
+                  soon
+                    ? 'border-gold-400/40 bg-gold-400/10'
+                    : 'border-white/10 bg-white/5',
+                )}
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <Cake
+                    className={cn(
+                      'h-4 w-4 shrink-0',
+                      soon ? 'text-gold-300' : 'text-white/30',
+                    )}
+                  />
+                  <div className="min-w-0">
+                    <p className="flex items-center gap-2 truncate text-sm font-medium text-white">
+                      {b.name ?? 'Sin nombre'}
+                      {b.kind === 'staff' && <Badge tone="gold">Equipo</Badge>}
+                    </p>
+                    <p className="truncate text-xs text-white/40">
+                      {birthdayDayMonth(b.birth_date)} · {birthdayCountdown(b.days)}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!isValidPhone(b.phone)}
+                  title={
+                    isValidPhone(b.phone)
+                      ? 'Abrir WhatsApp Web con el saludo'
+                      : 'Número de teléfono no válido'
+                  }
+                  className="shrink-0 text-emerald-300"
+                  onClick={() =>
+                    window.open(
+                      waBirthday(b.phone!, b.name),
+                      '_blank',
+                      'noopener,noreferrer',
+                    )
+                  }
+                >
+                  <MessageCircle className="h-4 w-4" /> Saludar
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Card>
   );
 }

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -27,6 +27,7 @@ import { useMonthlySales } from './useMonthlySales';
 import { FinanceOverview, MiniBarChart, Gauge } from './FinanceOverview';
 import { StatCard, Card, CardHeader, Badge, Button, EmptyState } from '@/components/ui';
 import { money, dateShort, timeShort, todayISO } from '@/lib/format';
+import { daysUntilBirthday, birthdayCountdown, birthdayDayMonth } from '@/lib/date';
 import { phoneToWaDigits } from '@/lib/phone';
 import { useSession, useOrgId } from '@/store/session';
 import { ROUTES, APPOINTMENT_STATUS } from '@/config/constants';
@@ -596,7 +597,14 @@ interface BirthdayRow {
   day: number;
 }
 
-/** Clientes que cumplen años este mes. */
+interface StaffBirthdayRow {
+  id: string;
+  name: string;
+  phone: string | null;
+  birth_date: string;
+}
+
+/** Cumpleaños: próximo del equipo (destacado) + clientes que cumplen este mes. */
 function BirthdaysCard() {
   const orgId = useOrgId();
   const month = String(new Date().getMonth() + 1).padStart(2, '0');
@@ -619,9 +627,69 @@ function BirthdaysCard() {
       ),
   });
 
+  const staff = useQuery({
+    queryKey: ['staff-birthdays', orgId],
+    enabled: !!orgId,
+    queryFn: () =>
+      query<StaffBirthdayRow>(
+        `SELECT id,
+                trim(first_name || ' ' || COALESCE(last_name, '')) AS name,
+                phone, birth_date
+           FROM staff_member
+          WHERE organization_id = ? AND active = 1 AND birth_date IS NOT NULL`,
+        [orgId],
+      ),
+  });
+
+  // El próximo cumpleaños del equipo, contando a partir de hoy.
+  const nextStaff = useMemo(() => {
+    const list = (staff.data ?? [])
+      .map((s) => ({ ...s, days: daysUntilBirthday(s.birth_date) }))
+      .filter((s): s is StaffBirthdayRow & { days: number } => s.days != null)
+      .sort((a, b) => a.days - b.days);
+    return list[0] ?? null;
+  }, [staff.data]);
+
   return (
     <Card>
-      <CardHeader title="Cumpleaños del mes" subtitle="Clientes que cumplen años" />
+      <CardHeader title="Cumpleaños" subtitle="Equipo y clientes del mes" />
+      {nextStaff && (
+        <div
+          className={cn(
+            'mb-3 flex items-center justify-between gap-2 rounded-xl border p-3',
+            nextStaff.days === 0
+              ? 'border-gold-400/50 bg-gold-400/15'
+              : 'border-gold-400/25 bg-gold-400/[0.07]',
+          )}
+        >
+          <div className="flex min-w-0 items-center gap-2.5">
+            <Cake className="h-5 w-5 shrink-0 text-gold-300" />
+            <div className="min-w-0">
+              <p className="text-[10px] uppercase tracking-wide text-gold-200/70">
+                Próximo del equipo
+              </p>
+              <p className="truncate text-sm font-semibold text-white">
+                {nextStaff.name}
+              </p>
+              <p className="truncate text-xs text-white/50">
+                {birthdayDayMonth(nextStaff.birth_date)} ·{' '}
+                {birthdayCountdown(nextStaff.days)}
+              </p>
+            </div>
+          </div>
+          {nextStaff.phone && (
+            <a
+              href={waBirthday(nextStaff.phone, nextStaff.name)}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Saludar por WhatsApp"
+              className="shrink-0 rounded-lg p-1.5 text-emerald-400 hover:bg-emerald-400/10"
+            >
+              <MessageCircle className="h-4 w-4" />
+            </a>
+          )}
+        </div>
+      )}
       {rows.data && rows.data.length > 0 ? (
         <ul className="space-y-2">
           {rows.data.map((b) => (
@@ -652,7 +720,7 @@ function BirthdaysCard() {
           ))}
         </ul>
       ) : (
-        <EmptyState icon={Cake} title="Sin cumpleaños este mes" />
+        !nextStaff && <EmptyState icon={Cake} title="Sin cumpleaños este mes" />
       )}
     </Card>
   );

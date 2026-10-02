@@ -17,6 +17,7 @@ import {
   patchedCustomer,
   tableLabel,
   type CustomerPatches,
+  type PhonelessCandidate,
 } from './mergeCustomers';
 
 /* ═════════════════════════ Combinar dos contactos ═════════════════════════ */
@@ -266,13 +267,17 @@ export function DuplicatesModal({
   open,
   onClose,
   groups,
+  candidates = [],
 }: {
   open: boolean;
   onClose: () => void;
   /** Grupos ya detectados por el llamador (la lista los necesita para el contador). */
   groups: Customer[][];
+  /** Contactos sin WhatsApp con un posible dueño (ver `phonelessCandidates`). */
+  candidates?: PhonelessCandidate<Customer>[];
 }) {
   const [pair, setPair] = useState<[Customer, Customer] | null>(null);
+  const empty = groups.length === 0 && candidates.length === 0;
 
   return (
     <>
@@ -282,39 +287,90 @@ export function DuplicatesModal({
         title="Posibles duplicados"
         className="max-w-2xl"
       >
-        {groups.length > 0 ? (
-          <div className="space-y-3">
-            <p className="text-sm text-white/50">
-              Contactos que parecen la misma persona (mismo nombre, WhatsApp o
-              email). Revisá cada par antes de combinar.
-            </p>
-            {groups.map((g) => (
-              <div
-                key={g[0].id}
-                className="rounded-xl border border-white/10 bg-white/[0.02] p-3"
-              >
-                <ul className="space-y-1.5">
-                  {g.map((c) => (
-                    <li key={c.id} className="flex items-center gap-2 text-sm">
-                      <span className="truncate font-medium text-white">
-                        {customerName(c)}
-                      </span>
-                      <span className="truncate text-xs text-white/40">
-                        {c.phone || c.email || 'sin contacto'}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-                <GroupActions group={g} onPick={setPair} />
-              </div>
-            ))}
-          </div>
-        ) : (
+        {empty ? (
           <EmptyState
             icon={Users}
             title="Sin duplicados"
             description="No encontramos contactos repetidos por nombre, WhatsApp ni email."
           />
+        ) : (
+          <div className="space-y-5">
+            {groups.length > 0 && (
+              <div className="space-y-3">
+                <p className="text-sm text-white/50">
+                  Contactos que parecen la misma persona (mismo nombre, alias,
+                  WhatsApp o email). Revisá cada par antes de combinar.
+                </p>
+                {groups.map((g) => (
+                  <div
+                    key={g[0].id}
+                    className="rounded-xl border border-white/10 bg-white/[0.02] p-3"
+                  >
+                    <ul className="space-y-1.5">
+                      {g.map((c) => (
+                        <li
+                          key={c.id}
+                          className="flex items-center gap-2 text-sm"
+                        >
+                          <span className="truncate font-medium text-white">
+                            {customerName(c)}
+                          </span>
+                          <span className="truncate text-xs text-white/40">
+                            {c.phone || c.email || 'sin contacto'}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <GroupActions group={g} onPick={setPair} />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {candidates.length > 0 && (
+              <div className="space-y-3">
+                <p className="text-sm text-white/50">
+                  Contactos sin WhatsApp que coinciden en el primer nombre con
+                  uno que sí tiene. Es solo un indicio — fijate bien en el
+                  apellido y el teléfono antes de combinar.
+                </p>
+                {candidates.map(({ noPhone, candidate }) => (
+                  <div
+                    key={noPhone.id}
+                    className="rounded-xl border border-white/10 bg-white/[0.02] p-3"
+                  >
+                    <ul className="space-y-1.5">
+                      <li className="flex items-center gap-2 text-sm">
+                        <span className="truncate font-medium text-white">
+                          {customerName(noPhone)}
+                        </span>
+                        <span className="truncate text-xs text-white/40">
+                          Sin WhatsApp
+                        </span>
+                      </li>
+                      <li className="flex items-center gap-2 text-sm">
+                        <span className="truncate font-medium text-white">
+                          {customerName(candidate)}
+                        </span>
+                        <span className="truncate text-xs text-white/40">
+                          {candidate.phone}
+                        </span>
+                      </li>
+                    </ul>
+                    <div className="mt-2">
+                      <Button
+                        variant="ghost"
+                        className="text-xs"
+                        onClick={() => setPair([noPhone, candidate])}
+                      >
+                        <Merge className="h-3.5 w-3.5" /> Revisar
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         )}
       </Modal>
 

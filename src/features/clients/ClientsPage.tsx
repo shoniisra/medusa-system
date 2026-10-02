@@ -65,6 +65,7 @@ import {
   duplicateGroups,
   fillCustomerGaps,
   gapFillSummary,
+  phonelessCandidates,
   renamedName,
   type CustomerPatch,
 } from './mergeCustomers';
@@ -104,18 +105,19 @@ export function ClientsPage() {
     enabled: !!orgId,
     queryFn: () =>
       query<ClientRow>(
+        // Antes eran 3 subconsultas correlacionadas (una por COUNT/SUM/MAX),
+        // o sea 3 búsquedas en `sale` por cada cliente. Un solo LEFT JOIN +
+        // GROUP BY calcula las tres en la misma pasada.
         `SELECT c.*,
-                (SELECT COUNT(*) FROM sale s
-                  WHERE s.customer_id = c.id
-                    AND s.status IN ('completed','partially_refunded')) AS visits,
-                (SELECT COALESCE(SUM(total),0) FROM sale s
-                  WHERE s.customer_id = c.id
-                    AND s.status IN ('completed','partially_refunded')) AS spent,
-                (SELECT MAX(sold_at) FROM sale s
-                  WHERE s.customer_id = c.id
-                    AND s.status IN ('completed','partially_refunded')) AS last_visit
+                COUNT(s.id) AS visits,
+                COALESCE(SUM(s.total), 0) AS spent,
+                MAX(s.sold_at) AS last_visit
            FROM customer c
-          WHERE c.organization_id = ? AND c.active = 1`,
+           LEFT JOIN sale s
+             ON s.customer_id = c.id
+            AND s.status IN ('completed','partially_refunded')
+          WHERE c.organization_id = ? AND c.active = 1
+          GROUP BY c.id`,
         [orgId],
       ),
   });
@@ -139,6 +141,10 @@ export function ClientsPage() {
     () => dupGroups.reduce((n, g) => n + g.length - 1, 0),
     [dupGroups],
   );
+  // Contactos sin WhatsApp con un posible dueño (mismo nombre de pila, sin
+  // ambigüedad). Aparte de `dupGroups`: es un indicio más débil, no una
+  // detección segura, y mezclarlo le bajaría la confianza a los otros.
+  const phonelessMatches = useMemo(() => phonelessCandidates(all), [all]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -192,10 +198,12 @@ export function ClientsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {dupCount > 0 && (
+          {dupCount + phonelessMatches.length > 0 && (
             <Button variant="ghost" onClick={() => setDupsOpen(true)}>
               <CopyCheck className="h-4 w-4" />
-              {dupCount} duplicado{dupCount > 1 ? 's' : ''}
+              {dupCount + phonelessMatches.length} posible
+              {dupCount + phonelessMatches.length > 1 ? 's' : ''} duplicado
+              {dupCount + phonelessMatches.length > 1 ? 's' : ''}
             </Button>
           )}
           <Button onClick={() => setCreateOpen(true)}>
@@ -432,6 +440,7 @@ export function ClientsPage() {
         open={dupsOpen}
         onClose={() => setDupsOpen(false)}
         groups={dupGroups}
+        candidates={phonelessMatches}
       />
     </div>
   );
