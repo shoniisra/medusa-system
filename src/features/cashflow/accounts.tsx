@@ -170,10 +170,10 @@ export function PaymentTargetFields({
 
       {!target.isCash && (
         <Input
-          label="Referencia (opcional)"
+          label="Nº de voucher (opcional)"
           value={reference}
           onChange={(e) => onReference(e.target.value)}
-          placeholder="Nº transferencia, voucher…"
+          placeholder="Nº de transferencia o voucher"
         />
       )}
 

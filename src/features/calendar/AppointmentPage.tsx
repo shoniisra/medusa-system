@@ -273,6 +273,10 @@ function NewAppointment() {
   const [customDeposit, setCustomDeposit] = useState(false);
   // El abono debe elegirse explícitamente (5/10/20/Otro) antes de agendar.
   const [depositChosen, setDepositChosen] = useState(false);
+  /** Nº de voucher / referencia de la transferencia de la seña (opcional). */
+  const [depositRef, setDepositRef] = useState('');
+  /** Observaciones de la cita (opcional): pedido del cliente, avisos. */
+  const [notes, setNotes] = useState('');
 
   // Categorías elegidas (con estilista opcional por categoría).
   const [cats, setCats] = useState<DraftCat[]>([]);
@@ -694,9 +698,9 @@ function NewAppointment() {
       stmts.push({
         sql: `INSERT INTO appointment
                 (id, organization_id, branch_id, customer_id, start_at, end_at,
-                 status, deposit_required, deposit_amount, google_calendar_id,
-                 google_calendar_event_id, created_by)
-              VALUES (?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?)`,
+                 status, deposit_required, deposit_amount, notes,
+                 google_calendar_id, google_calendar_event_id, created_by)
+              VALUES (?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?, ?)`,
         args: [
           apptId,
           orgId,
@@ -706,6 +710,7 @@ function NewAppointment() {
           endLocal,
           dep > 0 ? 1 : 0,
           dep,
+          notes.trim() || null,
           calendarId,
           googleEventId,
           userId,
@@ -750,7 +755,9 @@ function NewAppointment() {
             bankId,
             nowIso,
             dep,
-            `[Seña] ${clientLabel}`,
+            depositRef.trim()
+              ? `[Seña] ${clientLabel} · ${depositRef.trim()}`
+              : `[Seña] ${clientLabel}`,
           ],
         });
         if (depositIsCash && openCash.data?.id) {
@@ -788,6 +795,7 @@ function NewAppointment() {
         );
         descLines.push('');
         descLines.push(`Abono: ${money(dep)}`);
+        if (notes.trim()) descLines.push(`Observaciones: ${notes.trim()}`);
         descLines.push('Detalle y total: se cargan al atender.');
         const catLabel = cats.map((c) => c.category).join(', ');
         try {
@@ -1412,6 +1420,16 @@ function NewAppointment() {
                       efectivo.
                     </p>
                   )}
+                  {!depositIsCash && (
+                    <div className="pt-2">
+                      <Input
+                        label="Nº de voucher (opcional)"
+                        value={depositRef}
+                        onChange={(e) => setDepositRef(e.target.value)}
+                        placeholder="Nº de transferencia o voucher"
+                      />
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1421,6 +1439,20 @@ function NewAppointment() {
           <Card className="lg:col-span-2">
             <CardHeader title="Resumen" />
             <div className="space-y-4">
+              {/* Observaciones de la cita: viaja a la ficha y al evento de Google. */}
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-white/60">
+                  Observaciones (opcional)
+                </span>
+                <textarea
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  rows={2}
+                  placeholder="Pedido del cliente, avisos para el equipo…"
+                  className="input-base w-full resize-y"
+                />
+              </label>
+
               <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
                 <div className="flex items-center justify-between gap-3 text-sm">
                   <span className="shrink-0 text-white/50">Cuándo</span>
@@ -2838,7 +2870,9 @@ function DepositModal({
             isCash ? null : effectiveDest,
             nowIso,
             value,
-            reference.trim() || `[Abono] ${label}`,
+            reference.trim()
+              ? `[Abono] ${label} · ${reference.trim()}`
+              : `[Abono] ${label}`,
           ],
         },
       ];
