@@ -59,6 +59,10 @@ for (const sql of statements) {
   try {
     const rs = await db.execute(sql);
     console.log(`✓ ${label}${rs.rowsAffected ? ` (${rs.rowsAffected} filas)` : ''}`);
+    // Un .sql de migración puede traer SELECTs de diagnóstico (duplicados a
+    // revisar antes de crear un índice único, por ejemplo): sin imprimirlos el
+    // archivo no serviría de nada corrido por acá.
+    if (rs.rows?.length) console.table(rs.rows.map((r) => ({ ...r })));
   } catch (e) {
     const msg = String(e?.message ?? e);
     if (/duplicate column name/i.test(msg)) {

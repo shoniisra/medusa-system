@@ -67,6 +67,7 @@ import {
   isGoogleCalendarEnabled,
   createCalendarEvent,
   updateCalendarEvent,
+  eventIdForAppointment,
 } from '@/lib/googleCalendar';
 import {
   Button,
@@ -286,6 +287,10 @@ function NewAppointment() {
   );
 
   const hasClient = !!customerId || newClient;
+  // Un cliente nuevo sin nombre escrito no alcanza para agendar: se guardaba la
+  // ficha con first_name vacío y el evento de Google quedaba sin nombre en el
+  // título (y el sync lo devolvía como cliente "(abono 00)").
+  const clientReady = !!customerId || (newClient && !!firstName.trim());
   const selectedCustomer = customers.data?.find((c) => c.id === customerId);
 
   // ── Cliente: buscador con foco automático y creación al vuelo ──
@@ -646,49 +651,36 @@ function NewAppointment() {
           ? customerName(selectedCustomer)
           : '';
 
+      const apptId = genId();
+
       // Google Calendar: se sincroniza siempre que esté configurado. La cita se
       // guarda igual si Google falla; el evento es un extra.
-      let googleEventId: string | null = null;
+      //
+      // El evento se crea DESPUÉS de guardar la cita, con un id derivado del id
+      // de la cita (eventIdForAppointment). Antes era al revés y eso duplicaba
+      // citas: el trigger de Apps Script dispara en segundos, así que el sync
+      // podía llegar con el evento cuando la cita todavía no estaba en la base,
+      // no encontraba nada por google_calendar_event_id y creaba una cita
+      // paralela con el cliente adivinado del título.
       let calendarId: string | null = null;
+      let googleEventId: string | null = null;
       if (isGoogleCalendarEnabled()) {
         const branchRow = await queryOne<{ google_calendar_id: string | null }>(
           'SELECT google_calendar_id FROM branch WHERE id = ?',
           [branchId],
         );
         calendarId = branchRow?.google_calendar_id?.trim() || null;
-        const firstAssigned = cats.find((c) => c.staffId)?.staffId ?? null;
-        const firstStaff = staff.data?.find((x) => x.id === firstAssigned);
         if (!calendarId) {
           // Sin calendario en la sucursal no hay dónde crear el evento: la
           // service account no tiene "primary". Se avisa y se sigue.
           console.warn(
             'La sucursal no tiene google_calendar_id: la cita no se replica en Google Calendar.',
           );
-        }
-        try {
-          const descLines = cats.map(
-            (c) => `• ${c.category} — ${staffName(c.staffId)}`,
-          );
-          descLines.push('');
-          descLines.push(`Abono: ${money(dep)}`);
-          descLines.push('Detalle y total: se cargan al atender.');
-          googleEventId = calendarId
-            ? await createCalendarEvent({
-                summary: `${cats.map((c) => c.category).join(', ')} — ${clientLabel} (abono ${money(dep)})`,
-                description: descLines.join('\n'),
-                startLocal,
-                endLocal,
-                calendarId,
-                colorHex: firstStaff?.color,
-              })
-            : null;
-        } catch (e) {
-          console.warn('No se pudo crear el evento en Google Calendar:', e);
-          googleEventId = null;
+        } else {
+          googleEventId = eventIdForAppointment(apptId);
         }
       }
 
-      const apptId = genId();
       const stmts: Stmt[] = [];
 
       if (newClient) {
@@ -782,6 +774,44 @@ function NewAppointment() {
       }
 
       await batch(stmts);
+
+      // Recién ahora el evento en Google, con el id que ya quedó guardado en la
+      // cita. El resumen NO lleva el abono: el monto formateado ("$10,00")
+      // volvía por el sync y el parser del título lo leía como parte del nombre
+      // del cliente ("(abono 00)"). El dato va en la descripción, que el sync
+      // no parsea.
+      if (googleEventId && calendarId) {
+        const firstAssigned = cats.find((c) => c.staffId)?.staffId ?? null;
+        const firstStaff = staff.data?.find((x) => x.id === firstAssigned);
+        const descLines = cats.map(
+          (c) => `• ${c.category} — ${staffName(c.staffId)}`,
+        );
+        descLines.push('');
+        descLines.push(`Abono: ${money(dep)}`);
+        descLines.push('Detalle y total: se cargan al atender.');
+        const catLabel = cats.map((c) => c.category).join(', ');
+        try {
+          await createCalendarEvent({
+            eventId: googleEventId,
+            summary: clientLabel ? `${catLabel} — ${clientLabel}` : catLabel,
+            description: descLines.join('\n'),
+            startLocal,
+            endLocal,
+            calendarId,
+            colorHex: firstStaff?.color,
+          });
+        } catch (e) {
+          // El evento no llegó a existir: hay que soltar el id para que
+          // reprogramar o borrar no intenten tocar un evento inexistente.
+          console.warn('No se pudo crear el evento en Google Calendar:', e);
+          await execute(
+            `UPDATE appointment
+                SET google_calendar_id = NULL, google_calendar_event_id = NULL
+              WHERE id = ?`,
+            [apptId],
+          );
+        }
+      }
     },
     onSuccess: () => {
       invalidateAppointments(qc);
@@ -1526,14 +1556,16 @@ function NewAppointment() {
               <p className="hidden flex-1 text-sm text-white/50 sm:block">
                 {!hasClient
                   ? 'Elegí el cliente'
-                  : !depositChosen
-                    ? 'Elegí el abono'
-                    : 'Todo listo para agendar'}
+                  : !clientReady
+                    ? 'Escribí el nombre del cliente'
+                    : !depositChosen
+                      ? 'Elegí el abono'
+                      : 'Todo listo para agendar'}
               </p>
               <Button
                 className="flex-1 sm:flex-none"
                 size="lg"
-                disabled={cats.length === 0 || !hasClient || !depositChosen}
+                disabled={cats.length === 0 || !clientReady || !depositChosen}
                 loading={save.isPending}
                 onClick={() => attemptSchedule(false)}
               >

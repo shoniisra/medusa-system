@@ -26,6 +26,12 @@ const asRows = <T,>(rows: unknown[]): T[] => rows as T[];
  * Todo lo dudoso entra con la marca [Revisar] en notas para que el salón lo
  * confirme en la app. El abono se guarda como dato de la cita (deposit_amount),
  * NO como pago —eso se confirma al cobrar—.
+ *
+ * Contrato con la app (round-trip app → Google → sync): una cita creada en la
+ * app ya nace con su google_calendar_event_id (lo elige la app, ver
+ * eventIdForAppointment) y SIN la marca de auto-sync. De esas citas acá solo se
+ * actualizan horario y color: el cliente, el abono y las categorías son de la
+ * app. Las nacidas en Google llevan AUTO_MARK y sí se re-parsean enteras.
  */
 
 interface Env {
@@ -56,6 +62,8 @@ const DEFAULT_COLOR_ID = 'default';
 
 const REVIEW_MARK = '[Revisar]';
 const AUTO_MARK = 'Auto-sync Google Calendar';
+/** Cita que puede ser la misma que ya creó la app para ese horario. */
+const DUP_MARK = '[Posible duplicado]';
 
 const norm = (s: string): string =>
   s
@@ -148,6 +156,7 @@ const STOPWORDS = new Set([
   'pedi', 'manicura', 'lifting', 'cejas', 'ceja', 'pestanas', 'pestana',
   'maquillaje', 'color', 'coloracion', 'corte', 'peinado', 'retiro', 'retoque',
   'esmaltado', 'bano', 'matiz', 'tinte', 'familiar', 'sobrina', 'sobrino',
+  'sena', 'senal', 'cortes', 'tratamiento', 'tratamientos', 'alisado',
   'mujeres', 'mujer', 'hombres', 'hombre', 'clienta', 'cliente', 'am', 'pm',
 ]);
 const CONNECTORS = new Set([
@@ -202,12 +211,21 @@ function parseTitle(
           .filter((w) => w.length >= 3),
       )
     : new Set<string>();
-  const kept = raw
-    .split(/[\s\-–—·,|:]+/)
+  // El bloque "(abono $10,00)" lo escribe la propia app al crear el evento, y
+  // hay que sacarlo ENTERO antes de tokenizar: el separador decimal de es-EC
+  // parte el monto en "$10" + "00)", y el paréntesis salvaba a "(abono" y a
+  // "00)" de los filtros de abajo, así que el nombre del cliente terminaba
+  // siendo "(abono 00)" (o "Marcela Vera (abono 00)", que creaba una ficha
+  // duplicada por cada sync).
+  const depFree = raw.replace(/\(\s*(?:abon|sen|señ)\w*[^)]*\)?/gi, ' ');
+  const kept = depFree
+    // Paréntesis, puntos y el símbolo de moneda también separan: un token con
+    // puntuación pegada no matchea ninguno de los filtros.
+    .split(/[\s\-–—·,|:;.()[\]$]+/)
     .filter((tok) => {
       const n = norm(tok);
       if (n.length < 2) return false;
-      if (/^\$?[0-9]+(?:[.,][0-9]+)?$/.test(n)) return false; // números / abono
+      if (/^[0-9]+$/.test(n)) return false; // números / montos
       if (/^abon/.test(n)) return false;
       if (STOPWORDS.has(n) || CONNECTORS.has(n) || svcWords.has(n)) return false;
       return true;
@@ -318,7 +336,14 @@ export async function handleGcalSync(
     services.find((s) => /^servicio \(por definir\)/i.test(s.name)) ??
     services[0];
 
-  const summary = { created: 0, updated: 0, cancelled: 0, skipped: 0, review: 0 };
+  const summary = {
+    created: 0,
+    updated: 0,
+    cancelled: 0,
+    skipped: 0,
+    review: 0,
+    maybeDuplicate: 0,
+  };
 
   for (const ev of body.events) {
     if (!ev.id) {
@@ -369,6 +394,41 @@ export async function handleGcalSync(
       (ev.colorId ? colorMap.get(ev.colorId) ?? null : null) ??
       (ownColor ? staffByColor(colorHex, staffColors) : null);
 
+    // La cita se busca por el id del evento ANTES de tocar nada: así un evento
+    // ya mapeado no crea fichas de cliente ni citas nuevas.
+    const now = new Date().toISOString();
+    const existingRs = await db.execute({
+      sql: `SELECT id, status, notes FROM appointment
+             WHERE google_calendar_event_id IN (?, ?) AND branch_id = ? LIMIT 1`,
+      args: [ev.id, altId, branchId],
+    });
+    const existing = asRow<{ id: string; status: string; notes: string | null }>(
+      existingRs.rows[0],
+    );
+
+    // Cita ya atendida (facturada): no la pisamos con datos de Google.
+    if (existing && existing.status === 'attended') {
+      summary.skipped++;
+      continue;
+    }
+
+    // Cita nacida en la app (sin la marca de auto-sync): la app es la fuente de
+    // verdad de su cliente, su abono y sus categorías. Del evento de Google
+    // solo vale lo que se puede mover ahí —horario y color—; parsear el título
+    // reemplazaría el cliente correcto por lo que diga el resumen del evento y
+    // dejaría una sola línea de servicio en vez de las categorías agendadas.
+    if (existing && !(existing.notes ?? '').includes(AUTO_MARK)) {
+      await db.execute({
+        sql: `UPDATE appointment
+                 SET start_at = ?, end_at = ?, google_color_id = ?,
+                     google_color_hex = ?, updated_at = ?
+               WHERE id = ?`,
+        args: [startAt, endAt, ev.colorId ?? null, colorHex, now, existing.id],
+      });
+      summary.updated++;
+      continue;
+    }
+
     // ¿Necesita revisión manual? Sin estilista, sin servicio o sin nombre.
     const needsReview = !staffId || !service || !customer;
     if (needsReview) summary.review++;
@@ -386,20 +446,6 @@ export async function handleGcalSync(
     if (deposit > 0) noteParts.push(`Abono: ${deposit}`);
     if (needsReview) noteParts.push(REVIEW_MARK);
     const notes = noteParts.join(' · ');
-
-    const now = new Date().toISOString();
-    const existingRs = await db.execute({
-      sql: `SELECT id, status FROM appointment
-             WHERE google_calendar_event_id IN (?, ?) AND branch_id = ? LIMIT 1`,
-      args: [ev.id, altId, branchId],
-    });
-    const existing = asRow<{ id: string; status: string }>(existingRs.rows[0]);
-
-    // Cita ya atendida (facturada): no la pisamos con datos de Google.
-    if (existing && existing.status === 'attended') {
-      summary.skipped++;
-      continue;
-    }
 
     if (existing) {
       // No tocamos el estado (respeta un "Atender" hecho en la app).
@@ -449,6 +495,26 @@ export async function handleGcalSync(
       );
       summary.updated++;
     } else {
+      // Red de seguridad del round-trip app → Google → sync: si ya hay una cita
+      // en ese mismo horario y sucursal SIN evento asociado, lo más probable es
+      // que sea esta misma —creada en la app, con el evento recién hecho y el
+      // id todavía sin guardar—. No se adopta automáticamente (no hay forma de
+      // estar seguro de que sea la misma clienta), pero la nueva entra marcada
+      // para que el salón la una o la borre desde la app.
+      const clashRs = await db.execute({
+        sql: `SELECT id FROM appointment
+               WHERE branch_id = ? AND start_at = ?
+                 AND google_calendar_event_id IS NULL
+                 AND status NOT IN ('cancelled', 'no_show')
+               LIMIT 1`,
+        args: [branchId, startAt],
+      });
+      const clash = asRow<{ id: string }>(clashRs.rows[0]);
+      if (clash) summary.maybeDuplicate++;
+      const insertNotes = clash
+        ? [notes, ...(needsReview ? [] : [REVIEW_MARK]), DUP_MARK].join(' · ')
+        : notes;
+
       const apptId = crypto.randomUUID();
       await db.batch(
         [
@@ -468,7 +534,7 @@ export async function handleGcalSync(
               endAt,
               deposit > 0 ? 1 : 0,
               deposit,
-              notes,
+              insertNotes,
               body.calendarId,
               ev.id,
               ev.colorId ?? null,

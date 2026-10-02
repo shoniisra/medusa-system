@@ -315,12 +315,21 @@ export async function handleGcal(
       if (!start || !end) {
         throw new GcalError('Faltan startLocal / endLocal para crear el evento.');
       }
+      // id propuesto por el cliente: deriva del id de la cita, así crear el
+      // evento es idempotente (un reintento no deja dos eventos) y la cita ya
+      // puede guardarse con su google_calendar_event_id ANTES de llamar acá.
+      // Google exige base32hex (a-v y 0-9) de 5 a 1024 caracteres.
+      const wantedId = asText(p.eventId);
+      if (wantedId && !/^[a-v0-9]{5,1024}$/.test(wantedId)) {
+        throw new GcalError('eventId inválido para Google Calendar.');
+      }
       const res = await calendarFetch(
         env,
         `${encodeURIComponent(calId)}/events?sendUpdates=none`,
         {
           method: 'POST',
           body: {
+            id: wantedId ?? undefined,
             summary: asText(p.summary) ?? 'Cita',
             description: asText(p.description),
             start,
@@ -329,6 +338,11 @@ export async function handleGcal(
           },
         },
       );
+      // 409: ese id ya existe → el evento ya se había creado (reintento, doble
+      // click, respuesta perdida). Es el resultado buscado, no un error.
+      if (res.status === 409 && wantedId) {
+        return { status: 200, body: { id: wantedId, existed: true } };
+      }
       if (!res.ok) throw await googleError(res, env);
       const data = (await res.json()) as { id: string };
       return { status: 200, body: { id: data.id } };

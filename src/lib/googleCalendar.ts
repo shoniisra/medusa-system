@@ -155,7 +155,26 @@ export interface CalendarEventInput {
   calendarId?: string | null;
   /** Color del colaborador (hex). Se mapea al colorId de Google. */
   colorHex?: string | null;
+  /** Id propuesto para el evento (ver `eventIdForAppointment`). */
+  eventId?: string;
 }
+
+/**
+ * Id de evento derivado del id de la cita.
+ *
+ * Que el id lo elija la app —y no Google— es lo que corta el round-trip
+ * duplicado: la cita se guarda con su `google_calendar_event_id` ANTES de
+ * llamar a Google, así que cuando el sync devuelve el evento (el trigger de
+ * Apps Script dispara en segundos) ya encuentra la cita y la actualiza en vez
+ * de crear otra. Además hace idempotente la creación: un reintento choca con
+ * el mismo id y Google responde 409, que el Worker trata como éxito.
+ *
+ * Google exige base32hex (a-v y 0-9), 5–1024 caracteres: el UUID sin guiones ya
+ * entra en ese alfabeto; del id de respaldo (sin crypto.randomUUID) se
+ * descartan solo los caracteres que Google no acepta.
+ */
+export const eventIdForAppointment = (appointmentId: string): string =>
+  `ms${appointmentId.toLowerCase().replace(/[^a-v0-9]/g, '')}`;
 
 /** Crea el evento en el calendario de la sucursal y devuelve su id. */
 export async function createCalendarEvent(
@@ -164,6 +183,7 @@ export async function createCalendarEvent(
   const { id } = await callGcal<{ id: string }>({
     action: 'create',
     calendarId: input.calendarId,
+    eventId: input.eventId,
     summary: input.summary,
     description: input.description,
     startLocal: input.startLocal,
