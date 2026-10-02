@@ -4,7 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { CalendarPlus, ClipboardCheck, ClipboardList } from 'lucide-react';
 import { execute } from '@/lib/db';
 import { ROUTES } from '@/config/constants';
-import { Card, Button, EmptyState, useToast } from '@/components/ui';
+import { Card, Button, Badge, EmptyState, useToast } from '@/components/ui';
 import { useStaff } from '@/features/pos/useCatalog';
 import {
   type AppointmentRow,
@@ -16,11 +16,11 @@ import {
 } from '@/features/calendar/appointmentBoard';
 import { AppointmentActionsModal } from '@/features/calendar/AppointmentActions';
 import {
-  TaskToolbar,
-  defaultTaskFilters,
+  FilterBar,
+  defaultAppointmentFilters,
   activeFilterCount,
-  type TaskFilters,
-} from './TaskToolbar';
+  type AppointmentFilters,
+} from '@/features/calendar/FilterBar';
 import { CloseOverdueModal, useOverduePending } from './CloseOverdueModal';
 import type { AppointmentStatus } from '@/types';
 import { invalidateAppointments } from '@/lib/queryClient';
@@ -42,8 +42,10 @@ export function TasksPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
 
-  const [filters, setFilters] = useState<TaskFilters>(defaultTaskFilters);
-  const patch = (p: Partial<TaskFilters>) =>
+  const [filters, setFilters] = useState<AppointmentFilters>(
+    defaultAppointmentFilters,
+  );
+  const patch = (p: Partial<AppointmentFilters>) =>
     setFilters((f) => ({ ...f, ...p }));
 
   const [selected, setSelected] = useState<AppointmentRow | null>(null);
@@ -158,7 +160,8 @@ export function TasksPage() {
     <div className="mx-auto max-w-[1500px] space-y-3">
       {/* Encabezado compacto: título + pila de vencidas + acciones. */}
       <div className="flex items-center gap-2">
-        <h1 className="text-xl font-semibold text-white sm:text-2xl">Tareas</h1>
+        <h1 className="text-xl font-semibold text-white sm:text-2xl">Agenda</h1>
+        <Badge tone="gold">Tablero</Badge>
         {overdueTotal > 0 && (
           <span className="rounded-full bg-danger/20 px-2 py-0.5 text-xs font-medium text-danger">
             {overdueTotal} vencida{overdueTotal > 1 ? 's' : ''}
@@ -182,13 +185,14 @@ export function TasksPage() {
         </div>
       </div>
 
-      <TaskToolbar
+      <FilterBar
         filters={filters}
         onChange={patch}
         rangeLabel={label}
         staff={staff.data ?? []}
         overdueInView={overdueInView}
         resultCount={filteredRows.length}
+        resultNoun="tareas"
       />
 
       {notice && (

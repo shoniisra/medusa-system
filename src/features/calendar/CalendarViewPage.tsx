@@ -20,7 +20,7 @@ import {
   listCalendarEvents,
   normalizeEvents,
 } from '@/lib/googleCalendar';
-import { Modal, useToast } from '@/components/ui';
+import { Badge, Modal, useToast } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { GoogleCalendarEmbed } from './GoogleCalendarEmbed';
 import { AgendaCalendar, type AgendaEvent, type AgendaView } from './AgendaCalendar';
@@ -221,6 +221,16 @@ export function CalendarViewPage() {
       className="flex h-full flex-col overflow-hidden"
       style={{ paddingBottom: 'var(--nav-h)' }}
     >
+      {/* Título: misma posición que Lista/Tablero. El padding va afuera (como
+          el `p-6` del `main` en esas pantallas) y el centrado adentro, para
+          que quede exactamente en el mismo punto y no "salte" al navegar. */}
+      <div className="hidden shrink-0 pl-6 pr-6 pt-6 lg:block">
+        <div className="mx-auto flex max-w-[1500px] items-center gap-2.5">
+          <span className="text-2xl font-semibold text-white">Agenda</span>
+          <Badge tone="gold">Calendario</Badge>
+        </div>
+      </div>
+
       {/* Encabezado compacto: mes + navegación. Todo lo secundario va al menú. */}
       <div className="flex shrink-0 items-center gap-1 px-3 py-2 lg:px-4">
         <button

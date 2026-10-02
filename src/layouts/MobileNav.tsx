@@ -31,7 +31,7 @@ const TABS = [
 
 const MORE = [
   { to: ROUTES.calendarView, label: 'Calendario', icon: CalendarRange },
-  { to: ROUTES.tasks, label: 'Tareas', icon: ClipboardList },
+  { to: ROUTES.tasks, label: 'Tablero', icon: ClipboardList },
   { to: ROUTES.cashflow, label: 'Finanzas', icon: Wallet },
   { to: ROUTES.clients, label: 'Clientes', icon: Contact },
   { to: ROUTES.reminders, label: 'Recordatorios', icon: BellRing },

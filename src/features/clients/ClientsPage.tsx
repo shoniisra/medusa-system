@@ -183,7 +183,7 @@ export function ClientsPage() {
   const pageRows = filtered.slice(start, start + pageSize);
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <div className="mx-auto max-w-[1500px] space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-white">Clientes</h1>
@@ -689,7 +689,7 @@ export function ClientDetailPage() {
   if (client.isLoading) return null;
   if (!client.data) {
     return (
-      <div className="mx-auto max-w-5xl space-y-6">
+      <div className="mx-auto max-w-[1500px] space-y-6">
         <PageHeader onBack={() => navigate(ROUTES.clients)} title="Cliente" />
         <Card>
           <EmptyState icon={Users} title="Cliente no encontrado" />
@@ -814,7 +814,7 @@ function ClientDetail({ customer }: { customer: Customer }) {
   const avg = visits > 0 ? spent / visits : 0;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="mx-auto max-w-[1500px] space-y-6">
       <PageHeader
         onBack={handleBack}
         title={customerName(c)}

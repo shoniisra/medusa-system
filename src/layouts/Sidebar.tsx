@@ -1,4 +1,4 @@
-import { NavLink } from "react-router-dom";
+import { useLocation, NavLink } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   LayoutDashboard,
@@ -19,21 +19,23 @@ import { useBranchId } from "@/store/session";
 import { cn } from "@/lib/cn";
 import { ymd } from "@/features/calendar/appointmentBoard";
 
+interface NavItem {
+  to: string;
+  label: string;
+  icon: typeof LayoutDashboard;
+  end?: boolean;
+}
+
 /** Navegación por secciones; `title` opcional pinta un encabezado de grupo. */
 const NAV_SECTIONS: {
   title?: string;
-  items: {
-    to: string;
-    label: string;
-    icon: typeof LayoutDashboard;
-    end?: boolean;
-  }[];
+  items: (NavItem & { children?: NavItem[] })[];
 }[] = [
   {
     items: [
       {
         to: ROUTES.dashboard,
-        label: "Dashboard",
+        label: "Tablero Principal",
         icon: LayoutDashboard,
         end: true,
       },
@@ -43,9 +45,16 @@ const NAV_SECTIONS: {
   {
     title: "Citas Agendadas",
     items: [
-      { to: ROUTES.calendar, label: "Agenda", icon: CalendarDays },
-      { to: ROUTES.calendarView, label: "Calendario", icon: CalendarRange },
-      { to: ROUTES.tasks, label: "Tareas", icon: ClipboardList },
+      {
+        to: ROUTES.calendar,
+        label: "Agenda",
+        icon: CalendarDays,
+        children: [
+          { to: ROUTES.calendar, label: "Lista", icon: CalendarDays, end: true },
+          { to: ROUTES.calendarView, label: "Calendario", icon: CalendarRange },
+          { to: ROUTES.tasks, label: "Tablero", icon: ClipboardList },
+        ],
+      },
       { to: ROUTES.reminders, label: "Recordatorios", icon: BellRing },
     ],
   },
@@ -106,6 +115,7 @@ function useTomorrowCount(): number {
 export function Sidebar() {
   const overdue = useOverdueCount();
   const tomorrow = useTomorrowCount();
+  const { pathname } = useLocation();
   return (
     <aside className="hidden w-64 shrink-0 flex-col border-r border-white/5 bg-ink-900/80 backdrop-blur-xl lg:flex">
       <div className="flex items-center gap-2 px-6 py-6">
@@ -125,34 +135,63 @@ export function Sidebar() {
                 {section.title}
               </p>
             )}
-            {section.items.map(({ to, label, icon: Icon, end }) => (
-              <NavLink
-                key={to}
-                to={to}
-                end={end}
-                className={({ isActive }) =>
-                  cn(
-                    "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors",
-                    isActive
-                      ? "bg-gold/10 text-gold-200 shadow-gold-glow"
-                      : "text-white/60 hover:bg-white/5 hover:text-white",
-                  )
-                }
-              >
-                <Icon className="h-5 w-5" />
-                <span className="flex-1">{label}</span>
-                {to === ROUTES.tasks && overdue > 0 && (
-                  <span className="rounded-full bg-danger/20 px-2 py-0.5 text-xs font-medium text-danger">
-                    {overdue}
-                  </span>
-                )}
-                {to === ROUTES.reminders && tomorrow > 0 && (
-                  <span className="rounded-full bg-gold/20 px-2 py-0.5 text-xs font-medium text-gold-200">
-                    {tomorrow}
-                  </span>
-                )}
-              </NavLink>
-            ))}
+            {section.items.map(({ to, label, icon: Icon, end, children }) => {
+              // El padre se resalta si la ruta actual es la suya o la de un hijo.
+              const parentActive = children
+                ? children.some((c) => pathname.startsWith(c.to))
+                : false;
+              return (
+                <div key={to}>
+                  <NavLink
+                    to={to}
+                    end={end}
+                    className={({ isActive }) =>
+                      cn(
+                        "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors",
+                        isActive || parentActive
+                          ? "bg-gold/10 text-gold-200 shadow-gold-glow"
+                          : "text-white/60 hover:bg-white/5 hover:text-white",
+                      )
+                    }
+                  >
+                    <Icon className="h-5 w-5" />
+                    <span className="flex-1">{label}</span>
+                    {to === ROUTES.reminders && tomorrow > 0 && (
+                      <span className="rounded-full bg-gold/20 px-2 py-0.5 text-xs font-medium text-gold-200">
+                        {tomorrow}
+                      </span>
+                    )}
+                  </NavLink>
+
+                  {children && (
+                    <div className="ml-[1.15rem] space-y-0.5 border-l border-white/10 pl-4">
+                      {children.map((c) => (
+                        <NavLink
+                          key={c.to}
+                          to={c.to}
+                          end={c.end}
+                          className={({ isActive }) =>
+                            cn(
+                              "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors",
+                              isActive
+                                ? "bg-gold/10 text-gold-200 shadow-gold-glow"
+                                : "text-white/50 hover:bg-white/5 hover:text-white",
+                            )
+                          }
+                        >
+                          <span className="flex-1">{c.label}</span>
+                          {c.to === ROUTES.tasks && overdue > 0 && (
+                            <span className="rounded-full bg-danger/20 px-2 py-0.5 text-xs font-medium text-danger">
+                              {overdue}
+                            </span>
+                          )}
+                        </NavLink>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         ))}
       </nav>

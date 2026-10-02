@@ -119,11 +119,11 @@ export function DashboardPage() {
   const attendance = met ? Math.max(0, 100 - met.noShowRate) : 0;
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-6">
+    <div className="mx-auto flex max-w-[1500px] flex-col gap-6">
       {/* Encabezado + acciones */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold text-white">Dashboard</h1>
+          <h1 className="text-2xl font-semibold text-white">Tablero Principal</h1>
           <p className="text-sm text-white/40">
             {branchName} · {dateShort(todayISO())}
           </p>

@@ -8,7 +8,7 @@ export function SettingsPage() {
   const resource = RESOURCES.find((r) => r.key === active)!;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <div className="mx-auto max-w-[1500px] space-y-6">
       <div>
         <h1 className="text-2xl font-semibold text-white">Configuración</h1>
         <p className="text-sm text-white/40">
