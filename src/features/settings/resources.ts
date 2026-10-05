@@ -52,6 +52,8 @@ export interface Field {
   /** Carga dinámica de opciones (FK): sucursal, colaborador o servicio. */
   optionsKey?: 'branches' | 'staff' | 'services';
   colSpan?: 1 | 2;
+  /** Valor a guardar cuando el campo queda vacío (la columna es NOT NULL). */
+  defaultValue?: string | number;
 }
 
 /**
@@ -203,7 +205,13 @@ export const RESOURCES: ResourceConfig[] = [
     fields: [
       { name: 'name', label: 'Nombre', type: 'text', required: true, colSpan: 2 },
       { name: 'sku', label: 'SKU', type: 'text' },
-      { name: 'unit', label: 'Unidad', type: 'text', placeholder: 'unit, ml, g…' },
+      {
+        name: 'unit',
+        label: 'Unidad',
+        type: 'text',
+        placeholder: 'unit, ml, g…',
+        defaultValue: 'unit',
+      },
       { name: 'cost_price', label: 'Precio costo', type: 'money' },
       { name: 'base_price', label: 'Precio venta', type: 'money' },
       { name: 'description', label: 'Descripción', type: 'textarea', colSpan: 2 },

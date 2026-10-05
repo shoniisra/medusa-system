@@ -430,7 +430,14 @@ function ResourceForm({
     const raw = form[f.name];
     if (f.type === 'checkbox') return raw ? 1 : 0;
     const str = String(raw ?? '').trim();
-    if (str === '') return f.required ? '' : null;
+    if (str === '') {
+      // Columnas NOT NULL sin valor cargado: usar el default del campo (ej.
+      // precio costo → 0, unidad → "unit") en vez de null, que rompería el
+      // INSERT con SQLITE_CONSTRAINT.
+      if (f.defaultValue !== undefined) return f.defaultValue;
+      if (f.type === 'money') return 0;
+      return f.required ? '' : null;
+    }
     if (f.type === 'number' || f.type === 'money') return Number(str);
     return str;
   };
