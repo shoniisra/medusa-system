@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   CalendarDays,
+  CalendarPlus,
   CalendarRange,
   ShoppingCart,
   MoreHorizontal,
@@ -48,6 +49,10 @@ const MORE = [
 export function MobileNav() {
   const navigate = useNavigate();
   const [moreOpen, setMoreOpen] = useState(false);
+  // Hoja del botón "+" central: dos opciones (cita, venta). El tap sobre el
+  // FAB abre la hoja; el flujo destructivo nunca se dispara con un solo tap
+  // accidental al tomar el teléfono.
+  const [newOpen, setNewOpen] = useState(false);
   const { user, logout } = useSession();
 
   const tabClass = ({ isActive }: { isActive: boolean }) =>
@@ -69,11 +74,12 @@ export function MobileNav() {
           </NavLink>
         ))}
 
-        {/* Acción central: agendar cita */}
+        {/* Acción central: abre una hoja con "Nueva cita" / "Nueva venta". Dos
+            taps intencionales en vez de uno directo al alta. */}
         <div className="relative w-16 shrink-0">
           <button
-            onClick={() => navigate(ROUTES.appointmentNew)}
-            aria-label="Agendar cita"
+            onClick={() => setNewOpen(true)}
+            aria-label="Nuevo"
             className="absolute -top-5 left-1/2 flex h-14 w-14 -translate-x-1/2 items-center justify-center rounded-2xl bg-gradient-to-b from-gold-300 to-gold-500 text-ink-950 shadow-gold-glow transition active:scale-95"
           >
             <Plus className="h-7 w-7" strokeWidth={2.5} />
@@ -95,6 +101,36 @@ export function MobileNav() {
           Más
         </button>
       </nav>
+
+      <Modal
+        open={newOpen}
+        onClose={() => setNewOpen(false)}
+        title="Nuevo"
+        className="sm:max-w-sm"
+      >
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            onClick={() => {
+              setNewOpen(false);
+              navigate(ROUTES.appointmentNew);
+            }}
+            className="flex min-h-[96px] flex-col items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-sm font-medium text-white/85 active:scale-[0.97]"
+          >
+            <CalendarPlus className="h-6 w-6 text-gold-300" />
+            Nueva cita
+          </button>
+          <button
+            onClick={() => {
+              setNewOpen(false);
+              navigate(ROUTES.pos);
+            }}
+            className="flex min-h-[96px] flex-col items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-sm font-medium text-white/85 active:scale-[0.97]"
+          >
+            <ShoppingCart className="h-6 w-6 text-gold-300" />
+            Nueva venta
+          </button>
+        </div>
+      </Modal>
 
       <Modal
         open={moreOpen}
