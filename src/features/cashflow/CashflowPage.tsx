@@ -1404,6 +1404,17 @@ function OpenSessionCard({
       const difference = cnt - exp;
       const stmts: Stmt[] = [];
 
+      // El UPDATE va PRIMERO: el trigger `trg_cash_session_validate_close`
+      // (BEFORE UPDATE) exige que `expected_cash == opening + SUM(in) - SUM(out)`
+      // en ese instante, así que debe correr antes de insertar ajuste y retiro.
+      stmts.push({
+        sql: `UPDATE cash_session
+                 SET status='closed', closed_by=?, closed_at=?,
+                     expected_cash=?, counted_cash=?, difference=?
+               WHERE id = ?`,
+        args: [ctx.userId, now, exp, cnt, difference, session.id],
+      });
+
       // El descuadre entra como ajuste: así el saldo de la caja es el contado.
       if (difference !== 0) {
         stmts.push({
@@ -1461,14 +1472,6 @@ function OpenSessionCard({
           ],
         });
       }
-
-      stmts.push({
-        sql: `UPDATE cash_session
-                 SET status='closed', closed_by=?, closed_at=?,
-                     expected_cash=?, counted_cash=?, difference=?
-               WHERE id = ?`,
-        args: [ctx.userId, now, exp, cnt, difference, session.id],
-      });
 
       await batch(stmts);
     },

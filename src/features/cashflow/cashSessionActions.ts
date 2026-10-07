@@ -168,6 +168,19 @@ export function useCloseCashMutation(
       const difference = counted - expected;
       const stmts: Stmt[] = [];
 
+      // IMPORTANTE: el UPDATE va PRIMERO. El trigger
+      // `trg_cash_session_validate_close` (BEFORE UPDATE) valida que
+      // `expected_cash == opening + SUM(in) - SUM(out)` en el momento del UPDATE,
+      // así que debe correr contra los movimientos originales — antes de insertar
+      // el ajuste y el retiro. Esos inserts posteriores no disparan el trigger.
+      stmts.push({
+        sql: `UPDATE cash_session
+                 SET status='closed', closed_by=?, closed_at=?,
+                     expected_cash=?, counted_cash=?, difference=?
+               WHERE id = ?`,
+        args: [ctx.userId, now, expected, counted, difference, session.id],
+      });
+
       if (difference !== 0) {
         stmts.push({
           sql: `INSERT INTO cash_movement
@@ -223,14 +236,6 @@ export function useCloseCashMutation(
           ],
         });
       }
-
-      stmts.push({
-        sql: `UPDATE cash_session
-                 SET status='closed', closed_by=?, closed_at=?,
-                     expected_cash=?, counted_cash=?, difference=?
-               WHERE id = ?`,
-        args: [ctx.userId, now, expected, counted, difference, session.id],
-      });
 
       await batch(stmts);
       return { closedAt: now, counted, withdraw, difference };
