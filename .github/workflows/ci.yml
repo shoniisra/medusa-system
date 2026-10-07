@@ -27,6 +27,8 @@ jobs:
       # Vite, así que una regresión de tipos o lint hace fallar este job.
       - run: npm run build
 
+      - run: npm test
+
   quality:
     name: Dead code + duplicates
     runs-on: ubuntu-latest

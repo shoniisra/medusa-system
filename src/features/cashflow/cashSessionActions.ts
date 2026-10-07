@@ -152,6 +152,95 @@ export interface CloseCashInput {
   destination: string | null;
 }
 
+/**
+ * Arma el batch de cierre de caja (sin ejecutarlo). Función pura: la lógica de
+ * orden de sentencias es la invariante que valida el trigger
+ * `trg_cash_session_validate_close`, así que la exportamos para poder testearla
+ * sin armar un mock del cliente de DB. El `now` entra como parámetro para que
+ * los tests sean deterministas.
+ *
+ * El UPDATE va PRIMERO: el trigger (BEFORE UPDATE) exige
+ * `expected_cash == opening + SUM(in) - SUM(out)` y debe correr contra los
+ * movimientos originales — antes del ajuste y del retiro. Los INSERT posteriores
+ * no disparan el trigger (incidente del 2026-10-07).
+ */
+export function buildCloseCashStatements(
+  ctx: CashCtx,
+  sessionId: string,
+  expected: number,
+  { counted, withdraw, destination }: CloseCashInput,
+  now: string,
+): { stmts: Stmt[]; difference: number } {
+  const difference = counted - expected;
+  const stmts: Stmt[] = [
+    {
+      sql: `UPDATE cash_session
+               SET status='closed', closed_by=?, closed_at=?,
+                   expected_cash=?, counted_cash=?, difference=?
+             WHERE id = ?`,
+      args: [ctx.userId, now, expected, counted, difference, sessionId],
+    },
+  ];
+
+  if (difference !== 0) {
+    stmts.push({
+      sql: `INSERT INTO cash_movement
+              (id, cash_session_id, branch_id, movement_type, direction, amount,
+               movement_at, description, created_by)
+            VALUES (?, ?, ?, 'adjustment', ?, ?, ?, ?, ?)`,
+      args: [
+        genId(),
+        sessionId,
+        ctx.branchId,
+        difference > 0 ? 'in' : 'out',
+        Math.abs(difference),
+        now,
+        `${ADJUST_MARK} Cierre de caja`,
+        ctx.userId,
+      ],
+    });
+  }
+
+  if (withdraw > 0 && destination) {
+    stmts.push({
+      sql: `INSERT INTO account_transfer
+              (id, organization_id, branch_id, transfer_date, amount,
+               from_kind, from_bank_account_id, to_kind, to_bank_account_id,
+               cash_session_id, description, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, 'cash', NULL, 'bank', ?, ?, ?, ?, ?)`,
+      args: [
+        genId(),
+        ctx.orgId,
+        ctx.branchId,
+        todayISO(),
+        withdraw,
+        destination,
+        sessionId,
+        'Retiro de caja al cierre',
+        ctx.userId,
+        now,
+      ],
+    });
+    stmts.push({
+      sql: `INSERT INTO cash_movement
+              (id, cash_session_id, branch_id, movement_type, direction, amount,
+               movement_at, description, created_by)
+            VALUES (?, ?, ?, 'cash_out', 'out', ?, ?, ?, ?)`,
+      args: [
+        genId(),
+        sessionId,
+        ctx.branchId,
+        withdraw,
+        now,
+        'Retiro de caja al cierre',
+        ctx.userId,
+      ],
+    });
+  }
+
+  return { stmts, difference };
+}
+
 /** Mutación: cerrar caja — ajuste por descuadre + retiro + update de la sesión. */
 export function useCloseCashMutation(
   ctx: CashCtx,
@@ -162,83 +251,23 @@ export function useCloseCashMutation(
   const qc = useQueryClient();
   const setCashSession = useSession((s) => s.setCashSession);
   return useMutation({
-    mutationFn: async ({ counted, withdraw, destination }: CloseCashInput) => {
+    mutationFn: async (input: CloseCashInput) => {
       if (!session) throw new Error('No hay caja abierta.');
       const now = new Date().toISOString();
-      const difference = counted - expected;
-      const stmts: Stmt[] = [];
-
-      // IMPORTANTE: el UPDATE va PRIMERO. El trigger
-      // `trg_cash_session_validate_close` (BEFORE UPDATE) valida que
-      // `expected_cash == opening + SUM(in) - SUM(out)` en el momento del UPDATE,
-      // así que debe correr contra los movimientos originales — antes de insertar
-      // el ajuste y el retiro. Esos inserts posteriores no disparan el trigger.
-      stmts.push({
-        sql: `UPDATE cash_session
-                 SET status='closed', closed_by=?, closed_at=?,
-                     expected_cash=?, counted_cash=?, difference=?
-               WHERE id = ?`,
-        args: [ctx.userId, now, expected, counted, difference, session.id],
-      });
-
-      if (difference !== 0) {
-        stmts.push({
-          sql: `INSERT INTO cash_movement
-                  (id, cash_session_id, branch_id, movement_type, direction, amount,
-                   movement_at, description, created_by)
-                VALUES (?, ?, ?, 'adjustment', ?, ?, ?, ?, ?)`,
-          args: [
-            genId(),
-            session.id,
-            ctx.branchId,
-            difference > 0 ? 'in' : 'out',
-            Math.abs(difference),
-            now,
-            `${ADJUST_MARK} Cierre de caja`,
-            ctx.userId,
-          ],
-        });
-      }
-
-      if (withdraw > 0 && destination) {
-        stmts.push({
-          sql: `INSERT INTO account_transfer
-                  (id, organization_id, branch_id, transfer_date, amount,
-                   from_kind, from_bank_account_id, to_kind, to_bank_account_id,
-                   cash_session_id, description, created_by, created_at)
-                VALUES (?, ?, ?, ?, ?, 'cash', NULL, 'bank', ?, ?, ?, ?, ?)`,
-          args: [
-            genId(),
-            ctx.orgId,
-            ctx.branchId,
-            todayISO(),
-            withdraw,
-            destination,
-            session.id,
-            'Retiro de caja al cierre',
-            ctx.userId,
-            now,
-          ],
-        });
-        stmts.push({
-          sql: `INSERT INTO cash_movement
-                  (id, cash_session_id, branch_id, movement_type, direction, amount,
-                   movement_at, description, created_by)
-                VALUES (?, ?, ?, 'cash_out', 'out', ?, ?, ?, ?)`,
-          args: [
-            genId(),
-            session.id,
-            ctx.branchId,
-            withdraw,
-            now,
-            'Retiro de caja al cierre',
-            ctx.userId,
-          ],
-        });
-      }
-
+      const { stmts, difference } = buildCloseCashStatements(
+        ctx,
+        session.id,
+        expected,
+        input,
+        now,
+      );
       await batch(stmts);
-      return { closedAt: now, counted, withdraw, difference };
+      return {
+        closedAt: now,
+        counted: input.counted,
+        withdraw: input.withdraw,
+        difference,
+      };
     },
     onSuccess: () => {
       setCashSession(null);

@@ -46,6 +46,7 @@ import {
   useBankAccounts,
 } from './accounts';
 import { expenseStatements } from './expense';
+import { ADJUST_MARK, buildCloseCashStatements } from './cashSessionActions';
 import type {
   AccountKind,
   BankAccount,
@@ -70,7 +71,6 @@ const monthLabel = (m: string) =>
  * cuenta pero se excluye del P&L (ingresos/egresos de los resúmenes), para poder
  * cuadrar sin inflar ventas ni gastos.
  */
-const ADJUST_MARK = '[Ajuste de saldo]';
 /** Filtros SQL para excluir ajustes de las métricas de P&L. */
 const NOT_ADJUST_PAYMENT = `AND COALESCE(reference,'') NOT LIKE '${ADJUST_MARK}%'`;
 const NOT_ADJUST_EXPENSE = `AND COALESCE(description,'') NOT LIKE '${ADJUST_MARK}%'`;
@@ -1400,79 +1400,13 @@ function OpenSessionCard({
   const close = useMutation({
     mutationFn: async () => {
       if (cnt == null) return;
-      const now = new Date().toISOString();
-      const difference = cnt - exp;
-      const stmts: Stmt[] = [];
-
-      // El UPDATE va PRIMERO: el trigger `trg_cash_session_validate_close`
-      // (BEFORE UPDATE) exige que `expected_cash == opening + SUM(in) - SUM(out)`
-      // en ese instante, así que debe correr antes de insertar ajuste y retiro.
-      stmts.push({
-        sql: `UPDATE cash_session
-                 SET status='closed', closed_by=?, closed_at=?,
-                     expected_cash=?, counted_cash=?, difference=?
-               WHERE id = ?`,
-        args: [ctx.userId, now, exp, cnt, difference, session.id],
-      });
-
-      // El descuadre entra como ajuste: así el saldo de la caja es el contado.
-      if (difference !== 0) {
-        stmts.push({
-          sql: `INSERT INTO cash_movement
-                  (id, cash_session_id, branch_id, movement_type, direction, amount,
-                   movement_at, description, created_by)
-                VALUES (?, ?, ?, 'adjustment', ?, ?, ?, ?, ?)`,
-          args: [
-            genId(),
-            session.id,
-            ctx.branchId,
-            difference > 0 ? 'in' : 'out',
-            Math.abs(difference),
-            now,
-            `${ADJUST_MARK} Cierre de caja`,
-            ctx.userId,
-          ],
-        });
-      }
-
-      // Retiro: sale de la caja física y entra a la cuenta elegida.
-      if (out > 0 && destination) {
-        stmts.push({
-          sql: `INSERT INTO account_transfer
-                  (id, organization_id, branch_id, transfer_date, amount,
-                   from_kind, from_bank_account_id, to_kind, to_bank_account_id,
-                   cash_session_id, description, created_by, created_at)
-                VALUES (?, ?, ?, ?, ?, 'cash', NULL, 'bank', ?, ?, ?, ?, ?)`,
-          args: [
-            genId(),
-            ctx.orgId,
-            ctx.branchId,
-            todayISO(),
-            out,
-            destination,
-            session.id,
-            'Retiro de caja al cierre',
-            ctx.userId,
-            now,
-          ],
-        });
-        stmts.push({
-          sql: `INSERT INTO cash_movement
-                  (id, cash_session_id, branch_id, movement_type, direction, amount,
-                   movement_at, description, created_by)
-                VALUES (?, ?, ?, 'cash_out', 'out', ?, ?, ?, ?)`,
-          args: [
-            genId(),
-            session.id,
-            ctx.branchId,
-            out,
-            now,
-            'Retiro de caja al cierre',
-            ctx.userId,
-          ],
-        });
-      }
-
+      const { stmts } = buildCloseCashStatements(
+        ctx,
+        session.id,
+        exp,
+        { counted: cnt, withdraw: out, destination },
+        new Date().toISOString(),
+      );
       await batch(stmts);
     },
     onSuccess: () => {
