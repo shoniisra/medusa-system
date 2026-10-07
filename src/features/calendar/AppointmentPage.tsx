@@ -950,7 +950,7 @@ function NewAppointment() {
   const durationLabel = fmtDuration(reservedMinutes || DEFAULT_SERVICE_MINUTES);
 
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-5 pb-action">
+    <div className="mx-auto w-full max-w-[1500px] space-y-5 pb-action">
       <PageHeader
         title="Agendar cita"
         onBack={() =>
@@ -1536,7 +1536,7 @@ function NewAppointment() {
       {/* Barra de acción fija (alcance táctil). En estos flujos la navegación
           inferior se oculta, así que la barra se apoya en el borde. */}
       <div className="action-bar [--nav-h:0px]">
-        <div className="mx-auto flex w-full max-w-5xl items-center gap-3">
+        <div className="mx-auto flex w-full max-w-[1500px] items-center gap-3">
           {step > 1 && (
             <Button
               variant="outline"
