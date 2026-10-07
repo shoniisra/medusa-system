@@ -28,17 +28,40 @@ interface DbPayload {
   batch?: { sql: string; args?: InValue[] }[];
 }
 
-let _client: Client | null = null;
-function getDb(env: Env): Client {
-  if (!_client) {
-    _client = createClient({
-      url: env.TURSO_DATABASE_URL,
-      authToken: env.TURSO_AUTH_TOKEN,
-      // Evita BigInt en los INTEGER: así rows serializa a JSON sin romper.
-      intMode: 'number',
-    });
-  }
-  return _client;
+/**
+ * Un cliente nuevo por request a propósito: con el singleton compartido entre
+ * requests del mismo isolate, varias queries en paralelo (típicas en el load
+ * del dashboard) se bloqueaban entre sí y CF terminaba matando al Worker con
+ * "code had hung". createClient es un wrapper HTTP liviano, así que armar uno
+ * por request no agrega latencia perceptible.
+ */
+function makeDb(env: Env): Client {
+  return createClient({
+    url: env.TURSO_DATABASE_URL,
+    authToken: env.TURSO_AUTH_TOKEN,
+    // Evita BigInt en los INTEGER: así rows serializa a JSON sin romper.
+    intMode: 'number',
+  });
+}
+
+/** Rechaza con el error dado si `p` no resuelve antes de `ms`. */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(
+      () => reject(new Error(`Timeout de ${label} tras ${ms}ms`)),
+      ms,
+    );
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
 }
 
 export default {
@@ -48,7 +71,7 @@ export default {
     // Webhook de sincronización desde Google Calendar (vía Apps Script).
     if (url.pathname === '/api/gcal-sync' && request.method === 'POST') {
       try {
-        return await handleGcalSync(request, env, getDb(env));
+        return await handleGcalSync(request, env, makeDb(env));
       } catch (e) {
         return Response.json(
           { error: e instanceof Error ? e.message : String(e) },
@@ -68,27 +91,38 @@ export default {
     if (url.pathname === '/api/db' && request.method === 'POST') {
       try {
         const body = (await request.json()) as DbPayload;
-        const db = getDb(env);
+        const db = makeDb(env);
+        // Tope defensivo: si Turso cuelga, respondemos 504 nosotros antes de
+        // que CF mate al Worker. Un isolate caído envenena otros requests que
+        // estén compartiendo el mismo, por eso preferimos abortar explícito.
+        const DB_TIMEOUT_MS = 20_000;
 
         if (Array.isArray(body.batch)) {
-          await db.batch(
-            body.batch.map((s) => ({ sql: s.sql, args: s.args ?? [] })),
-            'write',
+          await withTimeout(
+            db.batch(
+              body.batch.map((s) => ({ sql: s.sql, args: s.args ?? [] })),
+              'write',
+            ),
+            DB_TIMEOUT_MS,
+            'batch',
           );
           return Response.json({ ok: true });
         }
 
         if (typeof body.sql === 'string') {
-          const rs = await db.execute({ sql: body.sql, args: body.args ?? [] });
+          const rs = await withTimeout(
+            db.execute({ sql: body.sql, args: body.args ?? [] }),
+            DB_TIMEOUT_MS,
+            'execute',
+          );
           return Response.json({ rows: rs.rows, rowsAffected: rs.rowsAffected });
         }
 
         return Response.json({ error: 'Payload inválido' }, { status: 400 });
       } catch (e) {
-        return Response.json(
-          { error: e instanceof Error ? e.message : String(e) },
-          { status: 400 },
-        );
+        const message = e instanceof Error ? e.message : String(e);
+        const status = message.startsWith('Timeout de ') ? 504 : 400;
+        return Response.json({ error: message }, { status });
       }
     }
 
