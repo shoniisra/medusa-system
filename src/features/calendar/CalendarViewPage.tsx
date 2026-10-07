@@ -87,7 +87,13 @@ export function CalendarViewPage() {
     [appts.data],
   );
 
+  // Confirmación para alta en hueco vacío. Un tap suelto no debe mandar al
+  // alta: se abre una pregunta corta "¿Agendar aquí a las HH:MM?".
+  const [pendingSlot, setPendingSlot] = useState<Date | null>(null);
+
   // Arrastrar/redimensionar reprograma la cita (y su evento en Google).
+  // `prev` viaja con la mutación para que el toast pueda ofrecer "Deshacer"
+  // sin volver a consultar la base.
   const reschedule = useMutation({
     mutationFn: async ({
       id,
@@ -97,6 +103,8 @@ export function CalendarViewPage() {
       id: string;
       start: Date;
       end: Date;
+      prev?: { start: Date; end: Date } | null;
+      silent?: boolean;
     }) => {
       const row = appts.data?.find((a) => a.id === id);
       const startLocal = toLocalNaive(start);
@@ -117,9 +125,27 @@ export function CalendarViewPage() {
         }
       }
     },
-    onSuccess: (_r, { id, start }) => {
+    onSuccess: (_r, { id, start, prev, silent }) => {
       invalidateAppointments(qc, id);
-      toast.success('Cita reprogramada', `${dateShort(ymd(start))} · ${timeShort(toLocalNaive(start))}`);
+      if (silent) return;
+      toast.show({
+        title: 'Cita reprogramada',
+        description: `${dateShort(ymd(start))} · ${timeShort(toLocalNaive(start))}`,
+        tone: 'success',
+        duration: 6000,
+        action: prev
+          ? {
+              label: 'Deshacer',
+              onClick: () =>
+                reschedule.mutate({
+                  id,
+                  start: prev.start,
+                  end: prev.end,
+                  silent: true,
+                }),
+            }
+          : undefined,
+      });
     },
     onError: (e: Error) => toast.error('No se pudo reprogramar', e.message),
   });
@@ -288,7 +314,18 @@ export function CalendarViewPage() {
           }}
           onDrop={(id, start, end) => {
             const row = appts.data?.find((a) => a.id === id);
-            const staffId = row?.staff_id;
+            if (!row) return;
+            // Mover al pasado nunca es intencional: sería "venta retroactiva"
+            // sin su cobro. Si quieren mover una cita vieja, se hace desde
+            // la ficha.
+            if (end.getTime() < Date.now()) {
+              toast.error(
+                'No se puede mover al pasado',
+                'Las citas pasadas se atienden desde su ficha.',
+              );
+              return;
+            }
+            const staffId = row.staff_id;
             const conflict = staffId
               ? (appts.data ?? []).find(
                   (a) =>
@@ -302,7 +339,7 @@ export function CalendarViewPage() {
               conflict &&
               !window.confirm(
                 `Se solapa con otra cita de ${
-                  row?.staff_name ?? 'la estilista'
+                  row.staff_name ?? 'la estilista'
                 } (${
                   conflict.customer_name ?? 'sin cliente'
                 }). ¿Reprogramar de todas formas?`,
@@ -310,11 +347,14 @@ export function CalendarViewPage() {
             ) {
               return;
             }
-            reschedule.mutate({ id, start, end });
+            reschedule.mutate({
+              id,
+              start,
+              end,
+              prev: { start: new Date(row.start_at), end: new Date(row.end_at) },
+            });
           }}
-          onSelectSlot={(start) =>
-            navigate(`${ROUTES.appointmentNew}?date=${ymd(start)}`)
-          }
+          onSelectSlot={(start) => setPendingSlot(start)}
         />
       )}
 
@@ -324,6 +364,49 @@ export function CalendarViewPage() {
           onClose={() => setSelected(null)}
         />
       )}
+
+      <Modal
+        open={!!pendingSlot}
+        onClose={() => setPendingSlot(null)}
+        title="Agendar cita"
+        className="sm:max-w-sm"
+      >
+        {pendingSlot && (
+          <>
+            <p className="text-sm text-white/70">
+              ¿Agendar una nueva cita el{' '}
+              <span className="font-semibold text-white">
+                {dateShort(ymd(pendingSlot))}
+              </span>{' '}
+              a las{' '}
+              <span className="font-semibold text-white">
+                {timeShort(toLocalNaive(pendingSlot))}
+              </span>
+              ?
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingSlot(null)}
+                className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-white/75 active:bg-white/10"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const d = pendingSlot;
+                  setPendingSlot(null);
+                  navigate(`${ROUTES.appointmentNew}?date=${ymd(d)}`);
+                }}
+                className="rounded-xl bg-gradient-to-b from-gold-300 to-gold-500 px-4 py-2 text-sm font-semibold text-ink-950 active:scale-95"
+              >
+                Agendar
+              </button>
+            </div>
+          </>
+        )}
+      </Modal>
 
       <Modal
         open={menuOpen}

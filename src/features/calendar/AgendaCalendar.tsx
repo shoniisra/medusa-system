@@ -218,6 +218,11 @@ export function AgendaCalendar({
       popup
       selectable
       resizable
+      // En móvil, un roce al hacer scroll disparaba un drag o un "select slot"
+      // y mandaba al alta de cita o reprogramaba por accidente. Con 500 ms
+      // hay que mantener presionado: scroll normal queda intacto, drag queda
+      // explícito. En escritorio el mouse no toca este umbral.
+      longPressThreshold={500}
       min={new Date(1970, 0, 1, 7, 0)}
       max={new Date(1970, 0, 1, 21, 0)}
       scrollToTime={new Date(1970, 0, 1, 8, 0)}

@@ -27,6 +27,13 @@ import { cn } from '@/lib/cn';
 
 export type ToastTone = 'success' | 'danger' | 'info' | 'gold';
 
+export interface ToastAction {
+  /** Texto del botón ("Deshacer", "Ver"). */
+  label: string;
+  /** Handler. El aviso se cierra solo después de dispararlo. */
+  onClick: () => void;
+}
+
 export interface ToastOptions {
   /** Línea principal, corta y en pasado: "Cambios guardados", "Cita creada". */
   title: string;
@@ -35,6 +42,8 @@ export interface ToastOptions {
   tone?: ToastTone;
   /** Milisegundos en pantalla. 0 = queda hasta que se cierre a mano. */
   duration?: number;
+  /** Botón opcional dentro del aviso (ej. "Deshacer" tras reprogramar). */
+  action?: ToastAction;
 }
 
 interface ToastItem extends ToastOptions {
@@ -257,6 +266,23 @@ function ToastCard({
           <p className="mt-0.5 text-xs leading-snug text-white/55">
             {toast.description}
           </p>
+        )}
+        {toast.action && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              toast.action!.onClick();
+              onDismiss(toast.id);
+            }}
+            className={cn(
+              'mt-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold uppercase tracking-wide',
+              style.ring,
+              'text-white hover:bg-white/5',
+            )}
+          >
+            {toast.action.label}
+          </button>
         )}
       </div>
 
