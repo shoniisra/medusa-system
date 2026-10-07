@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Lint + type-check + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - run: npm ci
+
+      # `npm run build` corre tsc (app + worker) y eslint antes del bundle de
+      # Vite, así que una regresión de tipos o lint hace fallar este job.
+      - run: npm run build
+
+  quality:
+    name: Dead code + duplicates
+    runs-on: ubuntu-latest
+    # Informativo: no bloquea el merge. Si knip o jscpd encuentran algo,
+    # queda registrado en el log del job para resolverlo con calma.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - run: npm run dead
+      - run: npm run dup
