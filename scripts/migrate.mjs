@@ -42,15 +42,15 @@ if (!url) {
 
 const db = createClient({ url, authToken: env.VITE_TURSO_AUTH_TOKEN });
 
+// Quitamos los comentarios ANTES de partir por ';': un comentario que
+// contiene un punto y coma (p.ej. "CREATE TABLE IF NOT EXISTS; reejecutable")
+// rompía el split al cortar en medio de la línea comentada.
 const statements = readFileSync(file, 'utf8')
+  .split('\n')
+  .filter((l) => !l.trim().startsWith('--'))
+  .join('\n')
   .split(';')
-  .map((s) =>
-    s
-      .split('\n')
-      .filter((l) => !l.trim().startsWith('--'))
-      .join('\n')
-      .trim(),
-  )
+  .map((s) => s.trim())
   .filter(Boolean);
 
 let failed = false;

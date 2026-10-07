@@ -2,7 +2,7 @@
 -- proxy SQL para no depender de wrangler tail / Cloudflare Observability a la
 -- hora de hacer forensia de incidentes (ej. el hang de Turso del 2026-10-07).
 --
--- Idempotente: CREATE TABLE IF NOT EXISTS; reejecutable por scripts/migrate.mjs.
+-- Idempotente (CREATE TABLE IF NOT EXISTS), reejecutable por scripts/migrate.mjs.
 
 CREATE TABLE IF NOT EXISTS app_error_log (
   id          TEXT PRIMARY KEY,
