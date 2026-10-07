@@ -56,12 +56,50 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
         clearTimeout(t);
         resolve(v);
       },
-      (e) => {
+      (e: unknown) => {
         clearTimeout(t);
-        reject(e);
+        reject(e instanceof Error ? e : new Error(String(e)));
       },
     );
   });
+}
+
+/**
+ * Registra un error 5xx del proxy en `app_error_log`. Es best-effort: usa un
+ * cliente nuevo y un timeout corto, y nunca propaga su propio fallo (si la
+ * base está caída, el logging también lo estaría). La tabla la crea la
+ * migración docs/migrations/2026-10-07-app-error-log.sql; si todavía no se
+ * aplicó, el INSERT falla silenciosamente y el request original sigue su
+ * curso normal.
+ */
+async function logServerError(
+  env: Env,
+  source: string,
+  status: number,
+  message: string,
+  context?: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const db = makeDb(env);
+    await withTimeout(
+      db.execute({
+        sql: `INSERT INTO app_error_log (id, occurred_at, source, status, message, context)
+              VALUES (?, ?, ?, ?, ?, ?)`,
+        args: [
+          crypto.randomUUID(),
+          new Date().toISOString(),
+          source,
+          status,
+          message.slice(0, 500),
+          context ? JSON.stringify(context) : null,
+        ],
+      }),
+      3_000,
+      'log',
+    );
+  } catch {
+    /* best-effort: si no se puede loguear, no hacemos ruido */
+  }
 }
 
 export default {
@@ -122,6 +160,12 @@ export default {
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         const status = message.startsWith('Timeout de ') ? 504 : 400;
+        // Solo registramos los fallos de infra (timeouts / errores del driver).
+        // Los 400 por payload inválido son ruido y no indican incidente.
+        if (status >= 500) {
+          // No await: no bloqueamos la respuesta por el logging.
+          void logServerError(env, 'worker:api/db', status, message);
+        }
         return Response.json({ error: message }, { status });
       }
     }
