@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Lock,
@@ -17,12 +18,14 @@ import {
   ChevronRight,
   SlidersHorizontal,
   Scale,
+  ExternalLink,
 } from 'lucide-react';
 import { query, queryOne, execute, batch, type Stmt } from '@/lib/db';
 import { invalidateFinance, qk } from '@/lib/queryClient';
 import { genId, money, timeShort, dateShort, todayISO } from '@/lib/format';
 import { useSession, useBranchId, useOrgId } from '@/store/session';
 import { cn } from '@/lib/cn';
+import { ROUTES } from '@/config/constants';
 import {
   Button,
   Card,
@@ -1873,6 +1876,10 @@ interface TxRow {
   method_type: PaymentMethod['method_type'];
   amount: number;
   at: string;
+  customer_name: string | null;
+  created_by_name: string | null;
+  appointment_id: string | null;
+  sale_id: string | null;
 }
 
 function TransactionsSection({ branchId }: { branchId: string }) {
@@ -1903,9 +1910,18 @@ function TransactionsSection({ branchId }: { branchId: string }) {
                   pm.name AS method_name,
                   pm.method_type AS method_type,
                   p.amount AS amount,
-                  p.paid_at AS at
+                  p.paid_at AS at,
+                  COALESCE(cs.first_name || ' ' || COALESCE(cs.last_name,''),
+                           ca.first_name || ' ' || COALESCE(ca.last_name,'')) AS customer_name,
+                  u.full_name AS created_by_name,
+                  COALESCE(p.appointment_id, s.appointment_id) AS appointment_id,
+                  p.sale_id AS sale_id
              FROM payment p
              LEFT JOIN sale s ON s.id = p.sale_id
+             LEFT JOIN customer cs ON cs.id = s.customer_id
+             LEFT JOIN appointment a ON a.id = COALESCE(p.appointment_id, s.appointment_id)
+             LEFT JOIN customer ca ON ca.id = a.customer_id
+             LEFT JOIN app_user u ON u.id = p.created_by
              JOIN payment_method pm ON pm.id = p.payment_method_id
             WHERE p.branch_id = ? AND p.status = 'confirmed'
               AND substr(p.paid_at, 1, ?) = ?
@@ -1918,10 +1934,15 @@ function TransactionsSection({ branchId }: { branchId: string }) {
                   pm.name AS method_name,
                   pm.method_type AS method_type,
                   e.amount AS amount,
-                  e.created_at AS at
+                  e.created_at AS at,
+                  NULL AS customer_name,
+                  u.full_name AS created_by_name,
+                  NULL AS appointment_id,
+                  NULL AS sale_id
              FROM expense e
              JOIN expense_category ec ON ec.id = e.expense_category_id
              JOIN payment_method pm ON pm.id = e.payment_method_id
+             LEFT JOIN app_user u ON u.id = e.created_by
             WHERE e.branch_id = ? AND e.status <> 'voided'
               AND substr(e.expense_date, 1, ?) = ?
          ) t
@@ -1973,59 +1994,104 @@ function TransactionsSection({ branchId }: { branchId: string }) {
       {rows.length === 0 ? (
         <EmptyState icon={Receipt} title="Sin transacciones en el periodo" />
       ) : (
-        <div className="-mx-2 overflow-x-auto">
-          <table className="w-full min-w-[640px] text-sm">
-            <thead>
-              <tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-white/40">
-                <th className="px-2 py-2 font-medium">Fecha</th>
-                <th className="px-2 py-2 font-medium">Tipo</th>
-                <th className="px-2 py-2 font-medium">Categoría</th>
-                <th className="px-2 py-2 font-medium">Detalle</th>
-                <th className="px-2 py-2 font-medium">Método</th>
-                <th className="px-2 py-2 text-right font-medium">Monto</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {rows.map((r) => {
-                const isIn = r.direction === 'in';
-                return (
-                  <tr key={r.id} className="text-white/80">
-                    <td className="whitespace-nowrap px-2 py-2 text-white/50">
-                      {range === 'day' ? timeShort(r.at) : dateShort(r.at)}
-                    </td>
-                    <td className="px-2 py-2">
-                      <Badge tone={isIn ? 'success' : 'danger'}>
-                        {isIn ? 'Ingreso' : 'Egreso'}
-                      </Badge>
-                    </td>
-                    <td className="px-2 py-2">{r.category}</td>
-                    <td className="px-2 py-2">
-                      <span className="text-white">{r.reference ?? '—'}</span>
-                      {r.note && (
-                        <span className="block text-xs text-white/40">
-                          {r.note}
-                        </span>
-                      )}
-                    </td>
-                    <td className="whitespace-nowrap px-2 py-2 text-white/60">
-                      {r.method_name}
-                    </td>
-                    <td
-                      className={`whitespace-nowrap px-2 py-2 text-right font-medium ${
-                        isIn ? 'text-success' : 'text-danger'
-                      }`}
-                    >
-                      {isIn ? '+' : '−'}
-                      {money(r.amount)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <TxTable rows={rows} dayMode={range === 'day'} />
       )}
     </Card>
+  );
+}
+
+/**
+ * Tabla de transacciones usada tanto en el resumen diario como en la pestaña
+ * anual: muestra fecha, cliente (en ingresos), categoría/detalle, cuenta,
+ * usuario que registró y un acceso directo a la cita o venta vinculada.
+ * Reemplaza al "código único" ilegible de la primera versión.
+ */
+function TxTable({
+  rows,
+  dayMode,
+  accountOf,
+}: {
+  rows: Array<TxRow | TxFullRow>;
+  dayMode: boolean;
+  accountOf?: (r: TxRow | TxFullRow) => string;
+}) {
+  const navigate = useNavigate();
+  return (
+    <div className="-mx-2 overflow-x-auto">
+      <table className="w-full min-w-[720px] text-sm">
+        <thead>
+          <tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-white/40">
+            <th className="px-2 py-2 font-medium">Fecha</th>
+            <th className="px-2 py-2 font-medium">Tipo</th>
+            <th className="px-2 py-2 font-medium">Cliente / detalle</th>
+            <th className="px-2 py-2 font-medium">Cuenta</th>
+            <th className="px-2 py-2 font-medium">Usuario</th>
+            <th className="px-2 py-2 text-right font-medium">Monto</th>
+            <th className="px-2 py-2 font-medium"> </th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-white/5">
+          {rows.map((r) => {
+            const isIn = r.direction === 'in';
+            const name = r.customer_name?.trim();
+            const target =
+              isIn && r.appointment_id
+                ? `${ROUTES.appointment}/${r.appointment_id}`
+                : null;
+            return (
+              <tr key={r.id} className="text-white/80">
+                <td className="whitespace-nowrap px-2 py-2 text-white/50">
+                  {dayMode ? timeShort(r.at) : dateShort(r.at)}
+                </td>
+                <td className="px-2 py-2">
+                  <Badge tone={isIn ? 'success' : 'danger'}>
+                    {isIn ? 'Ingreso' : 'Egreso'}
+                  </Badge>
+                </td>
+                <td className="px-2 py-2">
+                  <span className="text-white">
+                    {isIn ? (name ? name : r.reference ?? r.category) : r.reference ?? r.category}
+                  </span>
+                  {(r.note || (!isIn && r.category)) && (
+                    <span className="block text-xs text-white/40">
+                      {isIn ? r.category : r.category}
+                      {r.note ? ` · ${r.note}` : ''}
+                    </span>
+                  )}
+                </td>
+                <td className="whitespace-nowrap px-2 py-2 text-white/60">
+                  {accountOf ? accountOf(r) : r.method_name}
+                </td>
+                <td className="whitespace-nowrap px-2 py-2 text-white/60">
+                  {r.created_by_name ?? '—'}
+                </td>
+                <td
+                  className={`whitespace-nowrap px-2 py-2 text-right font-medium ${
+                    isIn ? 'text-success' : 'text-danger'
+                  }`}
+                >
+                  {isIn ? '+' : '−'}
+                  {money(r.amount)}
+                </td>
+                <td className="whitespace-nowrap px-2 py-2 text-right">
+                  {target ? (
+                    <button
+                      onClick={() => navigate(target)}
+                      className="inline-flex items-center gap-1 text-xs font-medium text-gold-300 hover:underline"
+                      title="Abrir cita"
+                    >
+                      Ver <ExternalLink className="h-3 w-3" />
+                    </button>
+                  ) : (
+                    <span className="text-xs text-white/20">—</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -2213,6 +2279,10 @@ interface TxFullRow {
   bank_account_id: string | null;
   amount: number;
   at: string;
+  customer_name: string | null;
+  created_by_name: string | null;
+  appointment_id: string | null;
+  sale_id: string | null;
 }
 
 interface TxFilters {
@@ -2258,9 +2328,18 @@ function TransactionsTab({ ctx }: { ctx: Ctx }) {
                   pm.method_type AS method_type,
                   p.bank_account_id AS bank_account_id,
                   p.amount AS amount,
-                  p.paid_at AS at
+                  p.paid_at AS at,
+                  COALESCE(cs.first_name || ' ' || COALESCE(cs.last_name,''),
+                           ca.first_name || ' ' || COALESCE(ca.last_name,'')) AS customer_name,
+                  u.full_name AS created_by_name,
+                  COALESCE(p.appointment_id, s.appointment_id) AS appointment_id,
+                  p.sale_id AS sale_id
              FROM payment p
              LEFT JOIN sale s ON s.id = p.sale_id
+             LEFT JOIN customer cs ON cs.id = s.customer_id
+             LEFT JOIN appointment a ON a.id = COALESCE(p.appointment_id, s.appointment_id)
+             LEFT JOIN customer ca ON ca.id = a.customer_id
+             LEFT JOIN app_user u ON u.id = p.created_by
              JOIN payment_method pm ON pm.id = p.payment_method_id
             WHERE p.branch_id = ? AND p.status = 'confirmed'
               AND substr(p.paid_at, 1, 4) = ?
@@ -2274,10 +2353,15 @@ function TransactionsTab({ ctx }: { ctx: Ctx }) {
                   pm.method_type AS method_type,
                   e.bank_account_id AS bank_account_id,
                   e.amount AS amount,
-                  e.expense_date AS at
+                  e.expense_date AS at,
+                  NULL AS customer_name,
+                  u.full_name AS created_by_name,
+                  NULL AS appointment_id,
+                  NULL AS sale_id
              FROM expense e
              JOIN expense_category ec ON ec.id = e.expense_category_id
              JOIN payment_method pm ON pm.id = e.payment_method_id
+             LEFT JOIN app_user u ON u.id = e.created_by
             WHERE e.branch_id = ? AND e.status <> 'voided'
               AND substr(e.expense_date, 1, 4) = ?
          ) t
@@ -2409,62 +2493,15 @@ function TransactionsTab({ ctx }: { ctx: Ctx }) {
         {rows.length === 0 ? (
           <EmptyState icon={Receipt} title="Sin transacciones en el periodo" />
         ) : (
-          <div className="-mx-2 overflow-x-auto">
-            <table className="w-full min-w-[640px] text-sm">
-              <thead>
-                <tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-white/40">
-                  <th className="px-2 py-2 font-medium">Fecha</th>
-                  <th className="px-2 py-2 font-medium">Tipo</th>
-                  <th className="px-2 py-2 font-medium">Categoría</th>
-                  <th className="px-2 py-2 font-medium">Detalle</th>
-                  <th className="px-2 py-2 font-medium">Cuenta</th>
-                  <th className="px-2 py-2 text-right font-medium">Monto</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {rows.map((r) => {
-                  const isIn = r.direction === 'in';
-                  const acct = r.bank_account_id
-                    ? bankName(r.bank_account_id)
-                    : r.method_type === 'cash'
-                      ? 'Caja'
-                      : r.method_name;
-                  return (
-                    <tr key={r.id} className="text-white/80">
-                      <td className="whitespace-nowrap px-2 py-2 text-white/50">
-                        {dateShort(r.at)}
-                      </td>
-                      <td className="px-2 py-2">
-                        <Badge tone={isIn ? 'success' : 'danger'}>
-                          {isIn ? 'Ingreso' : 'Egreso'}
-                        </Badge>
-                      </td>
-                      <td className="px-2 py-2">{r.category}</td>
-                      <td className="px-2 py-2">
-                        <span className="text-white">{r.reference ?? '—'}</span>
-                        {r.note && r.note !== r.reference && (
-                          <span className="block text-xs text-white/40">
-                            {r.note}
-                          </span>
-                        )}
-                      </td>
-                      <td className="whitespace-nowrap px-2 py-2 text-white/60">
-                        {acct}
-                      </td>
-                      <td
-                        className={`whitespace-nowrap px-2 py-2 text-right font-medium ${
-                          isIn ? 'text-success' : 'text-danger'
-                        }`}
-                      >
-                        {isIn ? '+' : '−'}
-                        {money(r.amount)}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <TxTable
+            rows={rows}
+            dayMode={false}
+            accountOf={(r) => {
+              const bankId = (r as TxFullRow).bank_account_id;
+              if (bankId) return bankName(bankId);
+              return r.method_type === 'cash' ? 'Caja' : r.method_name;
+            }}
+          />
         )}
       </Card>
 

@@ -187,6 +187,17 @@ export const RESOURCES: ResourceConfig[] = [
     orderBy: 'name',
     hasActive: true,
     hasUpdatedAt: true,
+    // Lista explícita de columnas: evita traer `image_url` u otros blobs
+    // largos en SELECT *, que en catálogos grandes había disparado 500 al
+    // abrir "Productos" desde móvil (payload del Worker excedido).
+    listSql: (orgId) => ({
+      sql: `SELECT id, organization_id, name, sku, unit,
+                   cost_price, base_price, description, active
+              FROM product
+             WHERE organization_id = ?
+             ORDER BY name`,
+      args: [orgId],
+    }),
     columns: [
       { header: 'Nombre', render: (r) => s(r.name) },
       { header: 'SKU', render: (r) => s(r.sku) },

@@ -59,6 +59,7 @@ export function invalidateAppointments(
       ['appointment-head', appointmentId],
       ['appointment-items', appointmentId],
       ['appointment-deposits', appointmentId],
+      ['appointment-payments', appointmentId],
     );
   }
   invalidateAll(qc, keys);

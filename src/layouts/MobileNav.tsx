@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
-  LayoutDashboard,
   CalendarDays,
   CalendarRange,
   ShoppingCart,
@@ -14,6 +13,7 @@ import {
   Users,
   FileText,
   Settings,
+  BarChart3,
   LogOut,
 } from 'lucide-react';
 import { ROUTES } from '@/config/constants';
@@ -24,13 +24,13 @@ import { cn } from '@/lib/cn';
 
 /** Pestañas principales: lo que se usa todos los días. El resto vive en "Más". */
 const TABS = [
-  { to: ROUTES.dashboard, label: 'Inicio', icon: LayoutDashboard, end: true },
+  { to: ROUTES.dashboard, label: 'Inicio', icon: CalendarRange, end: true },
   { to: ROUTES.calendar, label: 'Agenda', icon: CalendarDays },
   { to: ROUTES.pos, label: 'POS', icon: ShoppingCart },
 ];
 
 const MORE = [
-  { to: ROUTES.calendarView, label: 'Calendario', icon: CalendarRange },
+  { to: ROUTES.metrics, label: 'Métricas', icon: BarChart3 },
   { to: ROUTES.tasks, label: 'Tablero', icon: ClipboardList },
   { to: ROUTES.cashflow, label: 'Finanzas', icon: Wallet },
   { to: ROUTES.clients, label: 'Clientes', icon: Contact },

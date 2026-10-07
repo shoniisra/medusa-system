@@ -1830,12 +1830,14 @@ function EditAppointment({ id }: { id: string }) {
       query<DepositRow>(
         `SELECT p.id, p.amount, p.paid_at, p.reference, p.bank_account_id,
                 pm.method_type, ba.name AS bank_name,
-                cm.id AS movement_id, cs.status AS session_status
+                cm.id AS movement_id, cs.status AS session_status,
+                u.full_name AS created_by_name
            FROM payment p
            JOIN payment_method pm ON pm.id = p.payment_method_id
            LEFT JOIN bank_account ba ON ba.id = p.bank_account_id
            LEFT JOIN cash_movement cm ON cm.payment_id = p.id
            LEFT JOIN cash_session cs ON cs.id = cm.cash_session_id
+           LEFT JOIN app_user u ON u.id = p.created_by
           WHERE p.appointment_id = ? AND p.sale_id IS NULL AND p.status = 'confirmed'
           ORDER BY p.paid_at`,
         [id],
@@ -1843,6 +1845,30 @@ function EditAppointment({ id }: { id: string }) {
   });
   const depositList = deposits.data ?? [];
   const depositPaid = depositList.reduce((a, d) => a + d.amount, 0);
+
+  // Historial completo de pagos recibidos por la cita: abonos + pagos de la
+  // venta ya facturada. Se arma acá para que la tarjeta "Pagos recibidos"
+  // muestre todo en una sola línea de tiempo con quién cobró cada uno.
+  const paymentsHistory = useQuery({
+    queryKey: ['appointment-payments', id],
+    queryFn: () =>
+      query<PaymentRow>(
+        `SELECT p.id, p.amount, p.paid_at, p.reference,
+                pm.method_type, ba.name AS bank_name,
+                u.full_name AS created_by_name,
+                CASE WHEN p.sale_id IS NULL THEN 'deposit' ELSE 'sale' END AS kind
+           FROM payment p
+           JOIN payment_method pm ON pm.id = p.payment_method_id
+           LEFT JOIN bank_account ba ON ba.id = p.bank_account_id
+           LEFT JOIN app_user u ON u.id = p.created_by
+           LEFT JOIN sale s ON s.id = p.sale_id
+          WHERE p.status = 'confirmed'
+            AND (p.appointment_id = ? OR s.appointment_id = ?)
+          ORDER BY p.paid_at`,
+        [id, id],
+      ),
+  });
+  const paymentsList = paymentsHistory.data ?? [];
 
   const serviceItems = (items.data ?? []).filter((i) => i.service_id);
 
@@ -2240,6 +2266,10 @@ function EditAppointment({ id }: { id: string }) {
               addProduct.mutate({ pid, qty, product })
             }
           />
+
+          {paymentsList.length > 0 && (
+            <PaymentsHistoryCard payments={paymentsList} />
+          )}
         </div>
 
         {/* Resumen */}
@@ -2334,10 +2364,13 @@ function EditAppointment({ id }: { id: string }) {
                                 </span>
                                 <span className="text-white/50">
                                   {' '}
-                                  · {dateShort(d.paid_at)}
+                                  · {dateShort(d.paid_at)} · {timeShort(d.paid_at)}
                                 </span>
                                 <span className="block truncate text-[11px] text-white/40">
                                   {d.bank_name ?? 'Efectivo'}
+                                  {d.created_by_name
+                                    ? ` · ${d.created_by_name}`
+                                    : ''}
                                 </span>
                               </span>
                               <button
@@ -2964,6 +2997,75 @@ interface DepositRow {
   /** Movimiento de caja generado por el abono (solo si fue en efectivo). */
   movement_id: string | null;
   session_status: string | null;
+  created_by_name: string | null;
+}
+
+/**
+ * Un cobro asociado a la cita, visto desde "detalle de cita":
+ *  - `kind='deposit'`: abono (payment sin sale_id, cobrado antes del servicio);
+ *  - `kind='sale'`: pago de la venta ya facturada contra la cita.
+ * Se unen en una sola lista "Pagos recibidos" porque el usuario los piensa
+ * como "lo que entró por esta cita" sin distinguir el momento.
+ */
+interface PaymentRow {
+  id: string;
+  amount: number;
+  paid_at: string;
+  reference: string | null;
+  bank_name: string | null;
+  method_type: string;
+  created_by_name: string | null;
+  kind: 'deposit' | 'sale';
+}
+
+/**
+ * Historial de todos los pagos recibidos por la cita (abono + pagos de la
+ * venta ya facturada), con la data que pide el personal para auditar: valor,
+ * cuenta/método, día+hora y quién lo registró.
+ */
+function PaymentsHistoryCard({ payments }: { payments: PaymentRow[] }) {
+  const total = payments.reduce((a, p) => a + p.amount, 0);
+  return (
+    <Card>
+      <CardHeader
+        title="Pagos recibidos"
+        subtitle="Todas las transacciones vinculadas a la cita"
+      />
+      <ul className="divide-y divide-white/5">
+        {payments.map((p) => (
+          <li
+            key={p.id}
+            className="flex items-start justify-between gap-3 py-2.5 text-sm"
+          >
+            <span className="min-w-0 flex-1">
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span className="font-semibold text-white">
+                  {money(p.amount)}
+                </span>
+                <Badge
+                  tone={p.kind === 'deposit' ? 'info' : 'success'}
+                >
+                  {p.kind === 'deposit' ? 'Abono' : 'Pago de venta'}
+                </Badge>
+              </span>
+              <span className="mt-0.5 block text-xs text-white/50">
+                {p.bank_name ?? 'Efectivo'}
+                {p.reference ? ` · ${p.reference}` : ''}
+              </span>
+              <span className="mt-0.5 block text-[11px] text-white/40">
+                {dateShort(p.paid_at)} · {timeShort(p.paid_at)}
+                {p.created_by_name ? ` · ${p.created_by_name}` : ''}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ul>
+      <div className="mt-3 flex items-center justify-between border-t border-white/10 pt-3 text-sm">
+        <span className="text-white/60">Total cobrado</span>
+        <span className="font-semibold text-white">{money(total)}</span>
+      </div>
+    </Card>
+  );
 }
 
 /**

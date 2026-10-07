@@ -2,6 +2,7 @@ import { Suspense } from 'react';
 import { createBrowserRouter } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { AppLayout } from '@/layouts/AppLayout';
+import { HomePage } from '@/layouts/HomePage';
 import { lazyPage } from '@/lib/staleBuild';
 import { ProtectedRoute } from './ProtectedRoute';
 import { RouteError } from './RouteError';
@@ -87,7 +88,8 @@ export const router = createBrowserRouter([
         element: <AppLayout />,
         errorElement: <RouteError />,
         children: [
-          { path: ROUTES.dashboard, element: <DashboardPage /> },
+          { path: ROUTES.dashboard, element: <HomePage /> },
+          { path: ROUTES.metrics, element: <DashboardPage /> },
           { path: ROUTES.pos, element: lazyRoute(<PosPage />) },
           { path: ROUTES.cashflow, element: lazyRoute(<CashflowPage />) },
           { path: ROUTES.calendar, element: lazyRoute(<CalendarPage />) },

@@ -1,12 +1,22 @@
+import { useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
 import { MobileNav } from './MobileNav';
+import {
+  CashRegisterModal,
+  useDailyCashGuard,
+} from '@/features/cashflow/CashRegisterModal';
 import { ROUTES } from '@/config/constants';
 import { cn } from '@/lib/cn';
 
 /**
  * Contenedor principal: Sidebar (escritorio) + Topbar + área de contenido.
+ *
+ * El guard diario abre el modal de caja al entrar al día: si quedó una caja
+ * abierta de ayer o todavía no se abrió la de hoy, no deja seguir sin
+ * resolverlo. En rutas inmersivas (una cita a pantalla completa) no interrumpe:
+ * esos flujos ya están protegidos y la caja se abrirá al salir.
  *
  * Los flujos de cita (agendar / atender) son "inmersivos" en móvil: ocultan la
  * navegación inferior para que su propia barra de acción quede al alcance del
@@ -18,6 +28,16 @@ export function AppLayout() {
   // El calendario administra su propio alto y scroll: sin padding ni scroll
   // de página, como una app de calendario nativa.
   const flush = pathname.startsWith(ROUTES.calendarView);
+
+  const guard = useDailyCashGuard();
+  // Si el usuario cierra el modal sin resolver, lo recordamos para el modo
+  // actual: así no se reabre solo mientras siga igual. Al cambiar la
+  // "necesidad" (p.ej. de retro → open después de cuadrar), el estado se
+  // descarta y volvemos a mostrar el modal.
+  const [dismissedMode, setDismissedMode] = useState<string | null>(null);
+  const activeMode = !guard.loading && guard.needsAction ? guard.mode : null;
+  const guardOpen =
+    !!activeMode && !immersive && dismissedMode !== activeMode;
 
   return (
     <div className="flex h-[100dvh] overflow-hidden">
@@ -41,6 +61,12 @@ export function AppLayout() {
         </main>
         {!immersive && <MobileNav />}
       </div>
+
+      <CashRegisterModal
+        open={guardOpen}
+        onClose={() => setDismissedMode(activeMode)}
+        enforce
+      />
     </div>
   );
 }

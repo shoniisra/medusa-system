@@ -67,6 +67,9 @@ export const PAYMENT_METHOD_LABELS: Record<PaymentMethodType, string> = {
 export const ROUTES = {
   login: '/login',
   dashboard: '/',
+  /** Panel de métricas: en móvil se accede desde "Ver métricas" (el "/" muestra
+   *  el calendario); en escritorio también muestra las métricas. */
+  metrics: '/panel',
   pos: '/pos',
   cashflow: '/finanzas',
   staff: '/personal',

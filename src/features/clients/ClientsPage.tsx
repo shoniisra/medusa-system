@@ -758,6 +758,39 @@ function ClientDetail({ customer }: { customer: Customer }) {
       ),
   });
 
+  const payments = useQuery({
+    queryKey: ['client-payments', id],
+    enabled: !!id,
+    queryFn: () =>
+      query<{
+        id: string;
+        amount: number;
+        paid_at: string;
+        reference: string | null;
+        bank_name: string | null;
+        method_type: string;
+        created_by_name: string | null;
+        sale_id: string | null;
+        appointment_id: string | null;
+      }>(
+        `SELECT p.id, p.amount, p.paid_at, p.reference,
+                pm.method_type, ba.name AS bank_name,
+                u.full_name AS created_by_name,
+                p.sale_id, COALESCE(p.appointment_id, s.appointment_id, a.id) AS appointment_id
+           FROM payment p
+           JOIN payment_method pm ON pm.id = p.payment_method_id
+           LEFT JOIN bank_account ba ON ba.id = p.bank_account_id
+           LEFT JOIN app_user u ON u.id = p.created_by
+           LEFT JOIN sale s ON s.id = p.sale_id
+           LEFT JOIN appointment a ON a.id = p.appointment_id
+          WHERE p.status = 'confirmed'
+            AND (s.customer_id = ? OR a.customer_id = ?)
+          ORDER BY p.paid_at DESC
+          LIMIT 200`,
+        [id, id],
+      ),
+  });
+
   const upcoming = useQuery({
     queryKey: ['client-upcoming', id],
     enabled: !!id,
@@ -923,6 +956,68 @@ function ClientDetail({ customer }: { customer: Customer }) {
           )}
 
           <ColorRecordsCard customerId={id} />
+
+          {/* Historial de pagos: todo cobro confirmado del cliente, abierto al
+              detalle de la cita (una sola pantalla donde recibir reclamos). */}
+          <Card>
+            <CardHeader
+              title="Pagos"
+              subtitle="Cobros confirmados (más recientes primero)"
+            />
+            {payments.data && payments.data.length > 0 ? (
+              <ul className="divide-y divide-white/5">
+                {payments.data.map((p) => {
+                  const target = p.appointment_id
+                    ? `${ROUTES.appointment}/${p.appointment_id}`
+                    : null;
+                  const content = (
+                    <div className="flex items-start justify-between gap-3 py-2.5">
+                      <div className="min-w-0">
+                        <p className="text-sm text-white/90">
+                          <span className="font-semibold text-white">
+                            {money(p.amount)}
+                          </span>{' '}
+                          · {p.bank_name ?? 'Efectivo'}
+                          {p.reference ? ` · ${p.reference}` : ''}
+                        </p>
+                        <p className="text-xs text-white/40">
+                          {dateShort(p.paid_at)} · {timeShort(p.paid_at)}
+                          {p.created_by_name
+                            ? ` · ${p.created_by_name}`
+                            : ''}
+                        </p>
+                      </div>
+                      <Badge
+                        tone={p.sale_id ? 'success' : 'info'}
+                      >
+                        {p.sale_id ? 'Pago' : 'Abono'}
+                      </Badge>
+                    </div>
+                  );
+                  return (
+                    <li key={p.id}>
+                      {target ? (
+                        <button
+                          onClick={() => navigate(target)}
+                          className="w-full text-left hover:bg-white/[0.02]"
+                        >
+                          {content}
+                        </button>
+                      ) : (
+                        content
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <EmptyState
+                icon={Wallet}
+                title="Sin pagos"
+                description="Todavía no se registraron cobros a este cliente."
+              />
+            )}
+          </Card>
 
           {/* Historial de servicios */}
           <Card>
