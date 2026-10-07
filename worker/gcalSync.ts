@@ -231,7 +231,12 @@ function parseTitle(
       if (STOPWORDS.has(n) || CONNECTORS.has(n) || svcWords.has(n)) return false;
       return true;
     });
-  const clean: string | null = kept.length ? kept.join(' ') : null;
+  // Un título como "(abono $10)" o "abono 10" dejaba kept vacío o con solo
+  // basura corta (ej. una letra suelta tras partir con puntuación). Exigimos
+  // al menos una palabra "nombre-like" (3+ letras) para considerarlo cliente:
+  // así no se crean fichas "Marcela Vera (abono 00)" ni ".".
+  const hasRealName = kept.some((tok) => /[a-zA-ZÀ-ɏ]{3,}/.test(tok));
+  const clean: string | null = hasRealName ? kept.join(' ') : null;
 
   return { deposit, service: best, customer: clean };
 }
