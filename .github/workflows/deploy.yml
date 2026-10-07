@@ -1,0 +1,33 @@
+name: Deploy Worker
+
+# Manual: no deploya solo. Se dispara desde la pestaña Actions → "Run workflow".
+# El fix del Worker se promueve a producción corriendo este workflow con el
+# commit ya en master.
+#
+# Secrets requeridos en el repo (Settings → Secrets → Actions):
+#   - CLOUDFLARE_API_TOKEN   token con permiso de edit sobre el Worker
+#   - CLOUDFLARE_ACCOUNT_ID  id de la cuenta donde vive el Worker
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - run: npm run build
+
+      # Despliega con la última versión disponible de wrangler. No se guarda
+      # como dependencia porque el deploy no es parte del flujo local.
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
