@@ -17,9 +17,6 @@ export const money = (n: number | null | undefined): string =>
 export const num = (n: number | null | undefined): string =>
   numberFmt.format(n ?? 0);
 
-export const percent = (n: number | null | undefined): string =>
-  `${num(n ?? 0)}%`;
-
 /** ISO → "23 sep 2026". */
 export const dateShort = (iso: string | null | undefined): string => {
   if (!iso) return '—';

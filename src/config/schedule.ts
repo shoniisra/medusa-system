@@ -23,7 +23,7 @@ export interface DayHours {
 }
 
 /** Índice 0=Dom … 6=Sáb. null = cerrado. */
-export const BUSINESS_HOURS: (DayHours | null)[] = [
+const BUSINESS_HOURS: (DayHours | null)[] = [
   null, // Dom
   { open: '10:00', close: '18:00' }, // Lun
   { open: '10:00', close: '18:00' }, // Mar
@@ -41,7 +41,7 @@ export const DEFAULT_SERVICE_MINUTES = 30;
  * exacto: al agendar se reserva por categoría y el detalle se carga al atender.
  * Son los tiempos reales del salón.
  */
-export const CATEGORY_MINUTES: Record<ServiceCategory, number> = {
+const CATEGORY_MINUTES: Record<ServiceCategory, number> = {
   Manicura: 60,
   Pedicura: 60,
   'Cortes de Cabello': 60,
@@ -65,7 +65,7 @@ export function minutesForCategory(category: string | null | undefined): number 
 }
 
 /** Intervalo libre mínimo a mostrar en disponibilidad (min). */
-export const MIN_FREE_MINUTES = 20;
+const MIN_FREE_MINUTES = 20;
 
 export const toMinutes = (hhmm: string): number => {
   const [h, m] = hhmm.split(':').map(Number);
@@ -123,28 +123,3 @@ export function overlaps(booked: Interval[], s: number, e: number): boolean {
   return booked.some((b) => s < b.endMin && e > b.startMin);
 }
 
-export type SlotCheck =
-  | { ok: true; overtime: boolean }
-  | { ok: false; reason: string };
-
-/**
- * Valida una reserva: dentro del día abierto, sin solape (bloquea) y marca
- * si cae fuera de horario (hora extra → permite con aviso).
- */
-export function validateSlot(
-  dateISO: string,
-  startMin: number,
-  durationMin: number,
-  booked: Interval[],
-): SlotCheck {
-  const hours = hoursForDate(dateISO);
-  if (!hours) return { ok: false, reason: 'El local está cerrado ese día.' };
-  const endMin = startMin + durationMin;
-  if (overlaps(booked, startMin, endMin)) {
-    return { ok: false, reason: 'El estilista ya tiene una cita en ese horario.' };
-  }
-  const openMin = toMinutes(hours.open);
-  const closeMin = toMinutes(hours.close);
-  const overtime = startMin < openMin || endMin > closeMin;
-  return { ok: true, overtime };
-}

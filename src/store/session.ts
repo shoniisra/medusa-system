@@ -56,5 +56,3 @@ export const useSession = create<SessionState>()(
 /* Selectores de conveniencia (evitan re-render de todo el store). */
 export const useBranchId = () => useSession((s) => s.branch?.id ?? '');
 export const useOrgId = () => useSession((s) => s.organization?.id ?? '');
-export const useCashSessionId = () =>
-  useSession((s) => s.cashSession?.id ?? null);

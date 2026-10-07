@@ -1,5 +1,13 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
-  "entry": ["src/main.tsx", "worker/index.ts"],
-  "project": ["src/**/*.{ts,tsx}", "worker/**/*.ts"]
+  "entry": [
+    "worker/index.ts",
+    "scripts/*.mjs",
+    "src/**/*.test.{ts,tsx}",
+    "src/types/index.ts",
+    "src/components/ui/index.ts"
+  ],
+  "project": ["src/**/*.{ts,tsx}", "worker/**/*.ts"],
+  "ignoreExportsUsedInFile": true
 }
+

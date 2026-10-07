@@ -47,7 +47,7 @@ export async function startAttention(
   invalidateAppointments(qc, appointmentId);
 }
 
-export const FALLBACK_COLOR = '#64748b';
+const FALLBACK_COLOR = '#64748b';
 
 /**
  * Color con el que se pinta la cita: el de la colaboradora asignada y, si no
@@ -216,7 +216,7 @@ export function ToggleBtn({
  * - Atendiendo (confirmed) → "Finalizar y Cobrar" (abre la ficha para cobrar).
  * - Atendida/cancelada/sin asistir → sin botón.
  */
-export function AttendButton({
+function AttendButton({
   a,
   onStart,
   onFinish,

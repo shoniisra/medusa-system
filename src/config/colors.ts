@@ -20,7 +20,7 @@ export interface CalendarColor {
 }
 
 /** Orden igual al del selector de Google Calendar (rojo → morado → neutros). */
-export const CALENDAR_COLORS: CalendarColor[] = [
+const CALENDAR_COLORS: CalendarColor[] = [
   { name: 'Vino', hex: '#AD1457' },
   { name: 'Rosa', hex: '#D81B60' },
   { name: 'Flamenco', hex: '#E67C73', eventId: '4' },

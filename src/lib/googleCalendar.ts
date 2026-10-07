@@ -121,14 +121,14 @@ function parseHex(hex: string): [number, number, number] | null {
 }
 
 /** Devuelve el hex oficial de un colorId de Google (1..11), o null. */
-export function googleColorIdToHex(colorId?: string | null): string | null {
+function googleColorIdToHex(colorId?: string | null): string | null {
   if (!colorId) return null;
   const c = GOOGLE_EVENT_COLORS.find((x) => x.id === String(colorId));
   return c ? c.hex : null;
 }
 
 /** Mapea un color hex del colaborador al colorId de Google más cercano. */
-export function hexToGoogleColorId(hex?: string | null): string | undefined {
+function hexToGoogleColorId(hex?: string | null): string | undefined {
   if (!hex) return undefined;
   const rgb = parseHex(hex);
   if (!rgb) return undefined;
