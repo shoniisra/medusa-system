@@ -107,5 +107,18 @@ export default defineConfig(({ mode }) => {
       devOptions: { enabled: false },
     }),
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        // Separar libs pesadas para que la primera carga del shell no las arrastre.
+        manualChunks: {
+          'vendor-calendar': ['react-big-calendar'],
+          'vendor-datefns': ['date-fns'],
+          'vendor-query': ['@tanstack/react-query'],
+          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+        },
+      },
+    },
+  },
   };
 });
