@@ -10,6 +10,8 @@ export type CustomerDraft = {
   phone: string;
   email: string;
   birth: string;
+  /** Cédula o RUC (opcional). Para factura. */
+  taxId: string;
 };
 
 export const EMPTY_CUSTOMER_DRAFT: CustomerDraft = {
@@ -20,6 +22,7 @@ export const EMPTY_CUSTOMER_DRAFT: CustomerDraft = {
   phone: '',
   email: '',
   birth: '',
+  taxId: '',
 };
 
 /**
@@ -84,6 +87,13 @@ export function CustomerFields({
         label="Email"
         value={draft.email}
         onChange={(v) => set('email', v)}
+      />
+      <Input
+        label="Cédula o RUC"
+        placeholder="Opcional, para factura"
+        value={draft.taxId}
+        onChange={(e) => set('taxId', e.target.value)}
+        inputMode="numeric"
       />
       <DateInput
         label="Cumpleaños"

@@ -145,6 +145,8 @@ export interface Customer {
   phone: string | null; // WhatsApp
   email: string | null;
   birth_date: ISODate | null; // cumpleaños
+  /** Cédula o RUC (opcional). Texto libre: lo valida la factura electrónica. */
+  tax_id: string | null;
   notes: string | null;
   /** Alergias / sensibilidades a productos. */
   allergies: string | null;

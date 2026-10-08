@@ -1,15 +1,21 @@
 import { useState } from 'react';
 import { LogOut, Building2, CircleDot, Wallet } from 'lucide-react';
-import { useSession } from '@/store/session';
+import { useSession, useBranchId } from '@/store/session';
 import { fullName } from '@/lib/format';
 import { CashRegisterModal } from '@/features/cashflow/CashRegisterModal';
+import { useBranchCashSession } from '@/features/cashflow/cashSessionActions';
 import { cn } from '@/lib/cn';
 
 export function Topbar() {
-  const { user, branch, cashSession, logout } = useSession();
+  const { user, branch, logout } = useSession();
+  const branchId = useBranchId();
   const [cashOpen, setCashOpen] = useState(false);
 
-  const isOpen = cashSession?.status === 'open';
+  // Estado de caja desde la DB (compartido entre dispositivos): si alguien de
+  // la sucursal la abre o la cierra, la barra lo refleja al próximo refetch sin
+  // depender del localStorage de este navegador.
+  const { session } = useBranchCashSession(branchId);
+  const isOpen = !!session;
 
   return (
     <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-white/5 bg-ink-900/60 px-4 backdrop-blur-xl lg:h-16 lg:px-6">

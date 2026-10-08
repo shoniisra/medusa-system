@@ -46,6 +46,7 @@ import {
   useOpenCashSession,
   usePaymentTarget,
 } from '@/features/cashflow/accounts';
+import { useBranchCashSession } from '@/features/cashflow/cashSessionActions';
 import { searchCustomers } from '@/features/clients/customerSearch';
 import { useOrgId, useBranchId, useSession } from '@/store/session';
 import { useCustomers, useServices, useProducts, useStaff } from '@/features/pos/useCatalog';
@@ -108,6 +109,10 @@ import {
 import { ymd } from '@/lib/date';
 import { isNoCharge, stripNoCharge } from './appointmentBoard';
 import { PaymentsHistoryCard, type PaymentRow } from './PaymentsHistoryCard';
+import {
+  CustomerHistoryCard,
+  loadCustomerHistory,
+} from './CustomerHistoryCard';
 import type {
   AppointmentStatus,
   BankAccount,
@@ -406,6 +411,7 @@ function NewAppointment() {
         phone: ph || null,
         email: null,
         birth_date: null,
+        tax_id: null,
         notes: null,
         allergies: null,
         hair_notes: null,
@@ -494,6 +500,8 @@ function NewAppointment() {
       ),
   });
   const openCash = useOpenCashSession(branchId);
+  const todayCash = useBranchCashSession(branchId);
+  const hasOpenCashToday = !!todayCash.session;
   const cashMethod = payMethods.data?.find((m) => m.method_type === 'cash');
   const transferMethod = payMethods.data?.find((m) => m.method_type === 'transfer');
   const firstBankId = banks.data?.[0]?.id ?? '';
@@ -1335,12 +1343,22 @@ function NewAppointment() {
                     ))}
                     <option value="cash">Efectivo (caja)</option>
                   </Select>
-                  {depositIsCash && !openCash.data && (
-                    <p className="flex items-start gap-1.5 text-xs text-amber-300/80">
-                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> No
-                      hay caja abierta: la seña se registra pero no entra al
-                      efectivo.
+                  {!hasOpenCashToday ? (
+                    <p className="flex items-start gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-100">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <span>
+                        No podés cobrar la seña con la caja cerrada. Abrí la
+                        caja de hoy desde la barra superior.
+                      </span>
                     </p>
+                  ) : (
+                    depositIsCash && !openCash.data && (
+                      <p className="flex items-start gap-1.5 text-xs text-amber-300/80">
+                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{' '}
+                        No hay caja abierta: la seña se registra pero no entra
+                        al efectivo.
+                      </p>
+                    )
                   )}
                   {!depositIsCash && (
                     <div className="pt-2">
@@ -1519,7 +1537,12 @@ function NewAppointment() {
               <Button
                 className="flex-1 sm:flex-none"
                 size="lg"
-                disabled={cats.length === 0 || !clientReady || !depositChosen}
+                disabled={
+                  cats.length === 0 ||
+                  !clientReady ||
+                  !depositChosen ||
+                  (dep > 0 && !hasOpenCashToday)
+                }
                 loading={save.isPending}
                 onClick={() => attemptSchedule(false)}
               >
@@ -1665,6 +1688,7 @@ interface ApptHead {
   customer_phone: string | null;
   customer_email: string | null;
   customer_birth_date: string | null;
+  customer_tax_id: string | null;
   created_at: string | null;
   created_by_name: string | null;
   google_calendar_id: string | null;
@@ -1716,6 +1740,7 @@ function EditAppointment({ id }: { id: string }) {
                 c.phone AS customer_phone,
                 c.email AS customer_email,
                 c.birth_date AS customer_birth_date,
+                c.tax_id AS customer_tax_id,
                 u.full_name AS created_by_name
            FROM appointment a
            LEFT JOIN customer c ON c.id = a.customer_id
@@ -1791,6 +1816,15 @@ function EditAppointment({ id }: { id: string }) {
       ),
   });
   const paymentsList = paymentsHistory.data ?? [];
+
+  // Historial del cliente: cuántas veces vino, promedio de gasto, último
+  // colaborador y servicios habituales. Útil para abordar la cita conociendo
+  // qué suele hacerse — info que antes había que ir a buscar a la ficha.
+  const customerHistory = useQuery({
+    queryKey: ['customer-history', head.data?.customer_id ?? '', id],
+    enabled: !!head.data?.customer_id,
+    queryFn: () => loadCustomerHistory(head.data!.customer_id!, id),
+  });
 
   const serviceItems = (items.data ?? []).filter((i) => i.service_id);
 
@@ -2189,6 +2223,13 @@ function EditAppointment({ id }: { id: string }) {
             }
           />
 
+          {head.data.customer_id && (
+            <CustomerHistoryCard
+              history={customerHistory.data}
+              loading={customerHistory.isLoading}
+            />
+          )}
+
           {paymentsList.length > 0 && (
             <PaymentsHistoryCard payments={paymentsList} />
           )}
@@ -2443,6 +2484,7 @@ function EditAppointment({ id }: { id: string }) {
           phone={head.data.customer_phone}
           email={head.data.customer_email}
           birthDate={head.data.customer_birth_date}
+          taxId={head.data.customer_tax_id}
           onClose={() => setCustomerOpen(false)}
           onDone={() => {
             setCustomerOpen(false);
@@ -2515,6 +2557,7 @@ function ApptCustomerModal({
   phone: initialPhone,
   email: initialEmail,
   birthDate: initialBirth,
+  taxId: initialTaxId,
   onClose,
   onDone,
 }: {
@@ -2528,6 +2571,7 @@ function ApptCustomerModal({
   phone: string | null;
   email: string | null;
   birthDate: string | null;
+  taxId: string | null;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -2540,6 +2584,7 @@ function ApptCustomerModal({
     phone: initialPhone ?? '',
     email: initialEmail ?? '',
     birth: initialBirth ?? '',
+    taxId: initialTaxId ?? '',
   });
   const [error, setError] = useState('');
   /** Ficha que ya tiene el número que se acaba de escribir. */
@@ -2577,6 +2622,7 @@ function ApptCustomerModal({
     phone: draft.phone.trim() || null,
     email: normalizeEmail(draft.email) || null,
     birth_date: draft.birth || null,
+    tax_id: draft.taxId.trim() || null,
   };
 
   const save = useMutation({
@@ -2607,7 +2653,7 @@ function ApptCustomerModal({
           `UPDATE customer
               SET first_name = ?, last_name = ?, nickname = ?, imported_name = ?,
                   phone = ?, email = ?,
-                  birth_date = ?, updated_at = ?
+                  birth_date = ?, tax_id = ?, updated_at = ?
             WHERE id = ?`,
           [
             name,
@@ -2617,6 +2663,7 @@ function ApptCustomerModal({
             canonical,
             email || null,
             draft.birth || null,
+            draft.taxId.trim() || null,
             now,
             customerId,
           ],
@@ -2629,8 +2676,8 @@ function ApptCustomerModal({
         {
           sql: `INSERT INTO customer
                   (id, organization_id, first_name, last_name, nickname,
-                   imported_name, phone, email, birth_date)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                   imported_name, phone, email, birth_date, tax_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           args: [
             newId,
             orgId,
@@ -2641,6 +2688,7 @@ function ApptCustomerModal({
             canonical,
             email || null,
             draft.birth || null,
+            draft.taxId.trim() || null,
           ],
         },
         {
@@ -2795,7 +2843,7 @@ function DepositModal({
   const [error, setError] = useState('');
 
   const target = usePaymentTarget(orgId, branchId, dest);
-  const { sessionId, effectiveDest, isCash, method } = target;
+  const { sessionId, effectiveDest, isCash, method, hasOpenCashToday } = target;
   const value = Number(amount) || 0;
 
   const save = useMutation({
@@ -2894,7 +2942,7 @@ function DepositModal({
 
         <Button
           className="w-full"
-          disabled={value <= 0 || !method}
+          disabled={value <= 0 || !method || !hasOpenCashToday}
           loading={save.isPending}
           onClick={() => {
             setError('');
@@ -3301,7 +3349,7 @@ function ConfirmSaleModal({
   const [error, setError] = useState('');
 
   const target = usePaymentTarget(orgId, branchId, dest);
-  const { sessionId, effectiveDest, isCash, method } = target;
+  const { sessionId, effectiveDest, isCash, method, hasOpenCashToday } = target;
 
   // ¿La cita es de un día anterior? → venta retroactiva.
   const now = new Date();
@@ -3474,6 +3522,7 @@ function ConfirmSaleModal({
   const canConfirm =
     items.length > 0 &&
     !confirm.isPending &&
+    hasOpenCashToday &&
     (balance === 0 || (!!method && balance > 0));
 
   return (

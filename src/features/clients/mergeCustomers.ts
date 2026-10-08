@@ -413,6 +413,7 @@ export interface CustomerPatch {
   phone?: string | null;
   email?: string | null;
   birth_date?: string | null;
+  tax_id?: string | null;
   preferred_staff_id?: string | null;
   notes?: string | null;
   allergies?: string | null;
@@ -473,6 +474,7 @@ export function mergedFields(keep: Customer, dup: Customer) {
     phone: firstOf(keep.phone, dup.phone),
     email: firstOf(keep.email, dup.email),
     birth_date: firstOf(keep.birth_date, dup.birth_date),
+    tax_id: firstOf(keep.tax_id, dup.tax_id),
     preferred_staff_id: firstOf(keep.preferred_staff_id, dup.preferred_staff_id),
     notes: joinText(keep.notes, dup.notes),
     allergies: joinText(keep.allergies, dup.allergies),
@@ -540,7 +542,7 @@ export async function mergeCustomers(
       sql: `UPDATE customer SET
               first_name = ?, last_name = ?, nickname = ?, imported_name = ?,
               phone = ?, email = ?,
-              birth_date = ?, preferred_staff_id = ?, notes = ?,
+              birth_date = ?, tax_id = ?, preferred_staff_id = ?, notes = ?,
               allergies = ?, hair_notes = ?, first_visit_at = ?,
               last_visit_at = ?, active = 1, updated_at = ?
             WHERE id = ?`,
@@ -552,6 +554,7 @@ export async function mergeCustomers(
         f.phone,
         f.email,
         f.birth_date,
+        f.tax_id,
         f.preferred_staff_id,
         f.notes,
         f.allergies,
@@ -576,6 +579,7 @@ const FIELD_LABELS: Record<keyof CustomerPatch, string> = {
   phone: 'WhatsApp',
   email: 'email',
   birth_date: 'cumpleaños',
+  tax_id: 'cédula o RUC',
   preferred_staff_id: 'estilista preferido',
   notes: 'notas',
   allergies: 'alergias',

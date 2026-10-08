@@ -19,6 +19,7 @@ export interface AppointmentRow {
   end_at: string;
   status: AppointmentStatus;
   notes: string | null;
+  customer_id: string | null;
   customer_name: string | null;
   phone: string | null;
   staff_id: string | null;
@@ -29,7 +30,12 @@ export interface AppointmentRow {
   google_calendar_event_id: string | null;
   /** Color con que se pintó el evento en Google (hex ya resuelto en el sync). */
   google_color_hex: string | null;
+  /** Citas atendidas previas del mismo cliente. 0 = cliente nuevo. */
+  past_visits: number;
 }
+
+/** Umbral a partir del cual un cliente se muestra como "frecuente". */
+export const FREQUENT_VISITS = 3;
 
 /**
  * "Iniciar atención": pasa la cita a confirmada. Está acá y no en cada pantalla
@@ -166,6 +172,7 @@ export function useAppointments(from: string, to: string) {
     queryFn: () =>
       query<AppointmentRow>(
         `SELECT a.id, a.start_at, a.end_at, a.status, a.notes,
+                a.customer_id,
                 a.google_calendar_id, a.google_calendar_event_id,
                 a.google_color_hex,
                 ${customerNameSql()} AS customer_name,
@@ -173,7 +180,12 @@ export function useAppointments(from: string, to: string) {
                 s.id AS staff_id,
                 s.first_name || CASE WHEN s.last_name IS NOT NULL THEN ' ' || s.last_name ELSE '' END AS staff_name,
                 s.color AS staff_color,
-                COALESCE(sv.name, ai.category) AS service_name
+                COALESCE(sv.name, ai.category) AS service_name,
+                COALESCE((SELECT COUNT(*) FROM appointment a2
+                           WHERE a2.customer_id = a.customer_id
+                             AND a2.status = 'attended'
+                             AND a2.id <> a.id
+                             AND a2.start_at < a.start_at), 0) AS past_visits
            FROM appointment a
            LEFT JOIN customer c ON c.id = a.customer_id
            LEFT JOIN appointment_item ai
@@ -186,6 +198,30 @@ export function useAppointments(from: string, to: string) {
         [branchId, from, to],
       ),
   });
+}
+
+/**
+ * Pastilla "Nuevo" / "Frecuente" según cuántas citas atendidas previas tiene
+ * el cliente. Para clientes sin ficha (`customer_id` nulo) no se muestra nada:
+ * no hay historial para contar.
+ */
+export function CustomerTenureBadge({ a }: { a: AppointmentRow }) {
+  if (!a.customer_id) return null;
+  if (a.past_visits === 0) {
+    return (
+      <span className="rounded bg-sky-400/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-sky-200">
+        Nuevo
+      </span>
+    );
+  }
+  if (a.past_visits >= FREQUENT_VISITS) {
+    return (
+      <span className="rounded bg-success/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-success">
+        Frecuente
+      </span>
+    );
+  }
+  return null;
 }
 
 export function ToggleBtn({
@@ -307,6 +343,7 @@ export function ListView({
                       Sin cobro
                     </span>
                   )}
+                  <CustomerTenureBadge a={a} />
                   {/* El estado va junto a la hora en móvil; en escritorio, al final. */}
                   <span className="lg:hidden">
                     <Badge tone={meta.tone}>{meta.label}</Badge>
@@ -474,6 +511,7 @@ export function KanbanView({
                                 Sin cobro
                               </span>
                             )}
+                            <CustomerTenureBadge a={a} />
                           </div>
                           <p className="mt-0.5 truncate text-sm font-medium text-white">
                             {a.customer_name ?? 'Sin cliente'}

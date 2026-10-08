@@ -334,6 +334,7 @@ export const RESOURCES: ResourceConfig[] = [
       { name: 'phone', label: 'WhatsApp', type: 'text' },
       { name: 'email', label: 'Email', type: 'text' },
       { name: 'birth_date', label: 'Cumpleaños', type: 'date' },
+      { name: 'tax_id', label: 'Cédula o RUC', type: 'text' },
       { name: 'notes', label: 'Notas', type: 'textarea', colSpan: 2 },
     ],
   },

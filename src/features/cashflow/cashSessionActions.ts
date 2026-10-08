@@ -22,6 +22,16 @@ import type { CashRegister, CashSession } from '@/types';
 /** Marca de un ajuste de saldo: cuenta para el saldo pero se excluye del P&L. */
 export const ADJUST_MARK = '[Ajuste de saldo]';
 
+/**
+ * Redondea un monto a 2 decimales. Los importes se guardan como REAL (SQLite)
+ * y las sumas con punto flotante devuelven cosas como 24.260000000000002
+ * cuando lo correcto es 24.26 — el formato de moneda las muestra bien, pero
+ * el input de apertura las vuelca tal cual y el usuario ve ese ruido.
+ */
+export function round2(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
 export interface CashCtx {
   branchId: string;
   orgId: string;
@@ -75,7 +85,7 @@ export function useCashCarryover(branchId: string, enabled = true) {
           LIMIT 1`,
         [branchId],
       );
-      return row?.left_cash ?? 0;
+      return round2(row?.left_cash ?? 0);
     },
   });
 }
@@ -91,7 +101,7 @@ export function useExpectedCash(session: CashSession | null) {
            FROM cash_movement WHERE cash_session_id = ?`,
         [session!.id],
       );
-      return (session!.opening_cash ?? 0) + (row?.net ?? 0);
+      return round2((session!.opening_cash ?? 0) + (row?.net ?? 0));
     },
   });
 }
@@ -100,6 +110,20 @@ export function useExpectedCash(session: CashSession | null) {
 export function isOpenedToday(session: CashSession | null, today = ymd(new Date())): boolean {
   if (!session) return false;
   return ymd(new Date(session.opened_at)) === today;
+}
+
+/**
+ * Sesión de caja "efectiva" para la sucursal: la última que la DB conoce, si
+ * está abierta Y se abrió hoy. Reemplaza al `cashSession` persistido en el
+ * store local de la sesión, que no se enteraba cuando otra persona abría o
+ * cerraba caja desde otro dispositivo.
+ */
+export function useBranchCashSession(branchId: string) {
+  const latest = useLatestCashSession(branchId);
+  const today = ymd(new Date());
+  const s = latest.data ?? null;
+  const open = s?.status === 'open' && isOpenedToday(s, today) ? s : null;
+  return { session: open, isLoading: latest.isLoading };
 }
 
 /** Mutación: abrir caja con `opening` como fondo inicial. */

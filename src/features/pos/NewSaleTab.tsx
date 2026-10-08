@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Check,
+  Pencil,
   UserRound,
 } from 'lucide-react';
 import { batch, execute, queryOne, type Stmt } from '@/lib/db';
@@ -11,6 +12,7 @@ import {
 } from '@/features/cashflow/accounts';
 import { searchCustomers } from '@/features/clients/customerSearch';
 import { CustomerPicker } from '@/features/clients/CustomerPicker';
+import { QuickCustomerModal } from '@/features/clients/QuickCustomerModal';
 import { genId, money, customerName, fullName } from '@/lib/format';
 import { useSession, useBranchId, useOrgId } from '@/store/session';
 import { usePosDraft } from '@/store/posDraft';
@@ -83,6 +85,7 @@ export function NewSaleTab() {
   const phoneRef = useRef<HTMLInputElement>(null);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [moreDataOpen, setMoreDataOpen] = useState(false);
 
   const selectedCustomer = customers.data?.find((c) => c.id === customerId);
 
@@ -282,6 +285,16 @@ export function NewSaleTab() {
             onStartNewClient={startNewClient}
             onClear={clearClient}
             onUseExisting={() => useExistingClient.mutate()}
+            newClientAfter={
+              <button
+                type="button"
+                onClick={() => setMoreDataOpen(true)}
+                className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.03] py-2 text-xs font-medium text-gold-200 hover:bg-white/10"
+              >
+                <Pencil className="h-3.5 w-3.5" /> Completar más datos
+                (cédula/RUC, email, cumpleaños)
+              </button>
+            }
             emptyHint={
               <p className="flex items-start gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-xs leading-relaxed text-white/50">
                 <UserRound className="mt-0.5 h-4 w-4 shrink-0 text-white/30" />
@@ -406,6 +419,25 @@ export function NewSaleTab() {
         </div>
       </div>
 
+      {moreDataOpen && (
+        <QuickCustomerModal
+          orgId={orgId}
+          initial={{
+            firstName: firstName.trim(),
+            lastName: lastName.trim(),
+            phone: phone.trim(),
+          }}
+          onClose={() => setMoreDataOpen(false)}
+          onCreated={(c) => {
+            setMoreDataOpen(false);
+            qc.setQueryData<Customer[]>(['customers', orgId], (old) =>
+              old ? [...old, c] : old,
+            );
+            pickExisting(c);
+          }}
+        />
+      )}
+
       {confirmOpen && (
         <ConfirmSalePosModal
           orgId={orgId}
@@ -482,7 +514,7 @@ function ConfirmSalePosModal({
   const [error, setError] = useState('');
 
   const target = usePaymentTarget(orgId, branchId, dest);
-  const { sessionId, effectiveDest, isCash, method } = target;
+  const { sessionId, effectiveDest, isCash, method, hasOpenCashToday } = target;
 
   const confirm = useMutation({
     mutationFn: async () => {
@@ -616,7 +648,8 @@ function ConfirmSalePosModal({
     },
   });
 
-  const canConfirm = !confirm.isPending && !!method && total > 0;
+  const canConfirm =
+    !confirm.isPending && !!method && total > 0 && hasOpenCashToday;
 
   return (
     <Modal open onClose={onClose} title="Confirmar venta">

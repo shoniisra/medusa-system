@@ -540,6 +540,7 @@ function CreateClientModal({
     phone: draft.phone.trim() || null,
     email: normalizeEmail(draft.email) || null,
     birth_date: draft.birth || null,
+    tax_id: draft.taxId.trim() || null,
   };
 
   /** Nombre que quedaría en la ficha existente si se la usa (null: no cambia). */
@@ -573,8 +574,8 @@ function CreateClientModal({
       await execute(
         `INSERT INTO customer
            (id, organization_id, first_name, last_name, nickname, imported_name,
-            phone, email, birth_date)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            phone, email, birth_date, tax_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           orgId,
@@ -585,6 +586,7 @@ function CreateClientModal({
           canonical,
           email || null,
           draft.birth || null,
+          draft.taxId.trim() || null,
         ],
       );
       return id;
@@ -1126,6 +1128,7 @@ function draftFromCustomer(c: Customer): ClientDraft {
     phone: c.phone ?? '',
     email: c.email ?? '',
     birth: c.birth_date ?? '',
+    taxId: c.tax_id ?? '',
     preferred: c.preferred_staff_id ?? '',
     notes: c.notes ?? '',
     allergies: c.allergies ?? '',
@@ -1177,6 +1180,7 @@ function useClientDraft(
     phone: draft.phone.trim() || null,
     email: normalizeEmail(draft.email) || null,
     birth_date: draft.birth || null,
+    tax_id: draft.taxId.trim() || null,
     preferred_staff_id: draft.preferred || null,
     notes: draft.notes.trim() || null,
     allergies: draft.allergies.trim() || null,
@@ -1211,7 +1215,7 @@ function useClientDraft(
       return execute(
         `UPDATE customer SET
            first_name = ?, last_name = ?, nickname = ?, imported_name = ?,
-           phone = ?, email = ?, birth_date = ?,
+           phone = ?, email = ?, birth_date = ?, tax_id = ?,
            preferred_staff_id = ?, notes = ?, allergies = ?, hair_notes = ?,
            updated_at = ?
          WHERE id = ?`,
@@ -1223,6 +1227,7 @@ function useClientDraft(
           canonical,
           email || null,
           draft.birth || null,
+          draft.taxId.trim() || null,
           draft.preferred || null,
           draft.notes.trim() || null,
           draft.allergies.trim() || null,

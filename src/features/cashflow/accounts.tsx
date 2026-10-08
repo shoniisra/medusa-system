@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { query, queryOne } from '@/lib/db';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Lock } from 'lucide-react';
 import { Input, Select } from '@/components/ui';
+import { useBranchCashSession } from './cashSessionActions';
 import type { BankAccount, CashSession, PaymentMethod } from '@/types';
 
 /** Cuentas bancarias activas de la organización (la caja física no es una fila). */
@@ -113,6 +114,9 @@ export function usePaymentTarget(orgId: string, branchId: string, dest: string) 
   const banks = useBankAccounts(orgId, true);
   const methods = usePaymentMethods(orgId, true);
   const cash = useOpenCashSession(branchId);
+  // Para el gate "sin caja no se cobra": la caja debe estar abierta hoy. Si
+  // quedó una sesión abierta de ayer, el guard diario fuerza cerrarla primero.
+  const today = useBranchCashSession(branchId);
 
   const effectiveDest = dest || banks.data?.[0]?.id || 'cash';
   const isCash = effectiveDest === 'cash';
@@ -121,6 +125,7 @@ export function usePaymentTarget(orgId: string, branchId: string, dest: string) 
     banks,
     methods,
     sessionId: cash.data?.id ?? null,
+    hasOpenCashToday: !!today.session,
     effectiveDest,
     isCash,
     method: paymentMethodFor(methods.data, isCash),
@@ -179,7 +184,17 @@ export function PaymentTargetFields({
 
       {extra}
 
-      {target.isCash && !target.sessionId && (
+      {!target.hasOpenCashToday && (
+        <p className="flex items-start gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-100">
+          <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            No podés registrar un {noun} con la caja cerrada. Abrí la caja de
+            hoy desde el botón <b>Abrir caja</b> de la barra superior.
+          </span>
+        </p>
+      )}
+
+      {target.hasOpenCashToday && target.isCash && !target.sessionId && (
         <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
           <AlertTriangle className="h-3.5 w-3.5" /> No hay caja abierta: el{' '}
           {noun} se registra pero no entra al efectivo de caja.
