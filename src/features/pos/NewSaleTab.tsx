@@ -2,10 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Check,
-  Search,
-  UserPlus,
   UserRound,
-  X,
 } from 'lucide-react';
 import { batch, execute, queryOne, type Stmt } from '@/lib/db';
 import {
@@ -13,6 +10,7 @@ import {
   usePaymentTarget,
 } from '@/features/cashflow/accounts';
 import { searchCustomers } from '@/features/clients/customerSearch';
+import { CustomerPicker } from '@/features/clients/CustomerPicker';
 import { genId, money, customerName, fullName } from '@/lib/format';
 import { useSession, useBranchId, useOrgId } from '@/store/session';
 import { usePosDraft } from '@/store/posDraft';
@@ -31,7 +29,6 @@ import {
   findCustomerByPhone,
   phoneOwner,
 } from '@/features/clients/customerLookup';
-import { DuplicatePhoneNotice } from '@/features/clients/DuplicatePhoneNotice';
 import {
   fillCustomerGaps,
   gapFillSummary,
@@ -47,7 +44,6 @@ import {
   CardHeader,
   Modal,
   Badge,
-  PhoneInput,
   useToast,
   DetailRow,
 } from '@/components/ui';
@@ -89,7 +85,6 @@ export function NewSaleTab() {
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   const selectedCustomer = customers.data?.find((c) => c.id === customerId);
-  const hasClient = !!customerId || newClient;
 
   const clientMatches = useMemo(
     () => searchCustomers(customers.data ?? [], clientSearch),
@@ -265,122 +260,41 @@ export function NewSaleTab() {
             subtitle="Buscá un cliente registrado o dejalo como Consumidor Final"
           />
 
-          {hasClient ? (
-            <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
-              <div className="flex items-center gap-3">
-                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-gold/15 text-gold-200">
-                  {newClient ? (
-                    <UserPlus className="h-4 w-4" />
-                  ) : (
-                    <UserRound className="h-4 w-4" />
-                  )}
-                </span>
-                <div>
-                  <p className="text-sm font-medium text-white">
-                    {newClient
-                      ? fullName(firstName, lastName) || 'Cliente nuevo'
-                      : selectedCustomer
-                        ? customerName(selectedCustomer)
-                        : ''}
-                  </p>
-                  <p className="text-xs text-white/40">
-                    {newClient
-                      ? 'Se creará como cliente nuevo'
-                      : selectedCustomer?.phone || 'Sin WhatsApp'}
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={clearClient}
-                className="rounded-lg p-2 text-white/40 hover:bg-white/10 hover:text-white"
-                title="Cambiar cliente"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
-                <input
-                  ref={searchRef}
-                  value={clientSearch}
-                  onChange={(e) => setClientSearch(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      if (clientMatches.length > 0) pickExisting(clientMatches[0]);
-                      else if (clientSearch.trim()) startNewClient();
-                    }
-                  }}
-                  placeholder="Buscar cliente por nombre o WhatsApp…"
-                  className="input-base w-full pl-9"
-                />
-              </div>
-
-              {clientSearch.trim() && (
-                <ul className="max-h-56 divide-y divide-white/5 overflow-y-auto rounded-xl border border-white/10">
-                  {clientMatches.map((c) => (
-                    <li key={c.id}>
-                      <button
-                        onClick={() => pickExisting(c)}
-                        className="flex w-full items-center justify-between gap-3 px-3 py-3.5 text-left hover:bg-white/10"
-                      >
-                        <span className="text-sm text-white/90">
-                          {customerName(c)}
-                        </span>
-                        {c.phone && (
-                          <span className="text-xs text-white/40">{c.phone}</span>
-                        )}
-                      </button>
-                    </li>
-                  ))}
-                  <li>
-                    <button
-                      onClick={startNewClient}
-                      className="flex w-full items-center gap-2 px-3 py-3.5 text-left text-gold-200 hover:bg-white/10"
-                    >
-                      <UserPlus className="h-4 w-4 shrink-0" />
-                      <span className="text-sm">
-                        Crear «{clientSearch.trim()}» como cliente nuevo
-                      </span>
-                    </button>
-                  </li>
-                </ul>
-              )}
-
-              {!clientSearch.trim() && (
-                <p className="flex items-start gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-xs leading-relaxed text-white/50">
-                  <UserRound className="mt-0.5 h-4 w-4 shrink-0 text-white/30" />
-                  <span>
-                    Sin cliente: la venta se registra como{' '}
-                    <span className="font-medium text-white/80">
-                      {CONSUMIDOR_FINAL_LABEL}
-                    </span>
-                    .
+          <CustomerPicker
+            customerId={customerId}
+            newClient={newClient}
+            selectedCustomer={selectedCustomer}
+            firstName={firstName}
+            lastName={lastName}
+            phone={phone}
+            clientSearch={clientSearch}
+            clientMatches={clientMatches}
+            phoneTaken={phoneTaken}
+            renameTo={renameTo}
+            useExistingBusy={useExistingClient.isPending}
+            searchPlaceholder="Buscar cliente por nombre o WhatsApp…"
+            phoneUseHint="Usá esa ficha para esta venta en vez de crear un contacto nuevo."
+            searchRef={searchRef}
+            phoneRef={phoneRef}
+            onSearchChange={setClientSearch}
+            onPhoneChange={setPhone}
+            onPickExisting={pickExisting}
+            onStartNewClient={startNewClient}
+            onClear={clearClient}
+            onUseExisting={() => useExistingClient.mutate()}
+            emptyHint={
+              <p className="flex items-start gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-xs leading-relaxed text-white/50">
+                <UserRound className="mt-0.5 h-4 w-4 shrink-0 text-white/30" />
+                <span>
+                  Sin cliente: la venta se registra como{' '}
+                  <span className="font-medium text-white/80">
+                    {CONSUMIDOR_FINAL_LABEL}
                   </span>
-                </p>
-              )}
-            </div>
-          )}
-
-          {newClient && (
-            <div className="mt-3 space-y-2">
-              <PhoneInput
-                ref={phoneRef}
-                label="WhatsApp"
-                value={phone}
-                onChange={setPhone}
-              />
-              <DuplicatePhoneNotice
-                owner={phoneTaken}
-                renameTo={renameTo}
-                busy={useExistingClient.isPending}
-                onUse={() => useExistingClient.mutate()}
-                useHint="Usá esa ficha para esta venta en vez de crear un contacto nuevo."
-              />
-            </div>
-          )}
+                  .
+                </span>
+              </p>
+            }
+          />
         </Card>
 
         {/* Detalle de venta (mismo editor que Atención de cita) */}
