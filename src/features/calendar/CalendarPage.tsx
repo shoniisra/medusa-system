@@ -1,25 +1,19 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { CalendarDays, CalendarPlus, CalendarRange } from 'lucide-react';
 import { ROUTES } from '@/config/constants';
-import { Card, Button, Badge, EmptyState } from '@/components/ui';
+import { Button, Badge } from '@/components/ui';
 import { useStaff } from '@/features/pos/useCatalog';
 import {
   type AppointmentRow,
-  rangeFor,
-  isOverdue,
   ListView,
-  useAppointments,
   startAttention,
 } from './appointmentBoard';
 import { AppointmentActionsModal } from './AppointmentActions';
-import {
-  FilterBar,
-  defaultAppointmentFilters,
-  activeFilterCount,
-  type AppointmentFilters,
-} from './FilterBar';
+import { FilterBar } from './FilterBar';
+import { useAppointmentListFilters } from './useAppointmentListFilters';
+import { AppointmentsEmptyState } from './AppointmentsEmptyState';
 
 /** Marcador de carga de la lista: evita el falso "Sin citas" mientras consulta. */
 function ListSkeleton() {
@@ -47,22 +41,12 @@ export function CalendarPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
 
-  const [filters, setFilters] = useState<AppointmentFilters>(
-    defaultAppointmentFilters,
-  );
-  const patch = (p: Partial<AppointmentFilters>) =>
-    setFilters((f) => ({ ...f, ...p }));
-
   // Cita sobre la que está abierto el menú de acciones (el mismo de Tareas).
   const [selected, setSelected] = useState<AppointmentRow | null>(null);
 
   const staff = useStaff();
-
-  const { from, to, label } = useMemo(
-    () => rangeFor(filters.mode, filters.anchor),
-    [filters.mode, filters.anchor],
-  );
-  const appts = useAppointments(from, to);
+  const { filters, patch, label, appts, filteredRows, overdueInView } =
+    useAppointmentListFilters();
 
   // "Empezar a Atender": la cita pasa a "Atendiendo" y la persona sigue en la
   // agenda (el detalle se carga después, al finalizar y cobrar).
@@ -76,31 +60,6 @@ export function CalendarPage() {
   const finishAttention = (a: AppointmentRow) => {
     navigate(`${ROUTES.appointment}/${a.id}?atender=1`);
   };
-
-  // Aplica los mismos filtros que Tareas: colaborador, estado, vencidas y texto.
-  const filteredRows = useMemo(() => {
-    let rows = appts.data ?? [];
-    const f = filters;
-    if (f.staffId) rows = rows.filter((a) => a.staff_id === f.staffId);
-    if (f.statuses.length)
-      rows = rows.filter((a) => f.statuses.includes(a.status));
-    if (f.onlyOverdue) rows = rows.filter(isOverdue);
-    const q = f.q.trim().toLowerCase();
-    if (q) {
-      rows = rows.filter((a) =>
-        [a.customer_name, a.service_name, a.staff_name, a.phone, a.notes].some(
-          (v) => (v ?? '').toLowerCase().includes(q),
-        ),
-      );
-    }
-    return rows;
-  }, [appts.data, filters]);
-
-  // Vencidas del rango visible (contador de la pastilla del filtro).
-  const overdueInView = useMemo(
-    () => (appts.data ?? []).filter(isOverdue).length,
-    [appts.data],
-  );
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-3 lg:space-y-5">
@@ -145,17 +104,14 @@ export function CalendarPage() {
       {appts.isLoading ? (
         <ListSkeleton />
       ) : filteredRows.length === 0 ? (
-        <Card>
-          <EmptyState
-            icon={CalendarDays}
-            title="Sin citas"
-            description={
-              (appts.data?.length ?? 0) > 0 || activeFilterCount(filters) > 0
-                ? 'Ninguna cita coincide con los filtros.'
-                : 'No hay reservas para el rango seleccionado.'
-            }
-          />
-        </Card>
+        <AppointmentsEmptyState
+          icon={CalendarDays}
+          title="Sin citas"
+          totalRows={appts.data?.length ?? 0}
+          filters={filters}
+          filteredHint="Ninguna cita coincide con los filtros."
+          emptyHint="No hay reservas para el rango seleccionado."
+        />
       ) : (
         <ListView
           rows={filteredRows}

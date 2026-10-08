@@ -4,23 +4,17 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { CalendarPlus, ClipboardCheck, ClipboardList } from 'lucide-react';
 import { execute } from '@/lib/db';
 import { ROUTES } from '@/config/constants';
-import { Card, Button, Badge, EmptyState, useToast } from '@/components/ui';
+import { Button, Badge, useToast } from '@/components/ui';
 import { useStaff } from '@/features/pos/useCatalog';
 import {
   type AppointmentRow,
-  rangeFor,
-  isOverdue,
-  useAppointments,
   KanbanView,
   STATUS_ORDER,
 } from '@/features/calendar/appointmentBoard';
 import { AppointmentActionsModal } from '@/features/calendar/AppointmentActions';
-import {
-  FilterBar,
-  defaultAppointmentFilters,
-  activeFilterCount,
-  type AppointmentFilters,
-} from '@/features/calendar/FilterBar';
+import { FilterBar } from '@/features/calendar/FilterBar';
+import { useAppointmentListFilters } from '@/features/calendar/useAppointmentListFilters';
+import { AppointmentsEmptyState } from '@/features/calendar/AppointmentsEmptyState';
 import { CloseOverdueModal, useOverduePending } from './CloseOverdueModal';
 import type { AppointmentStatus } from '@/types';
 import { invalidateAppointments } from '@/lib/queryClient';
@@ -42,52 +36,19 @@ export function TasksPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
 
-  const [filters, setFilters] = useState<AppointmentFilters>(
-    defaultAppointmentFilters,
-  );
-  const patch = (p: Partial<AppointmentFilters>) =>
-    setFilters((f) => ({ ...f, ...p }));
-
   const [selected, setSelected] = useState<AppointmentRow | null>(null);
   const [closeOverdue, setCloseOverdue] = useState(false);
   const [notice, setNotice] = useState('');
 
   const staff = useStaff();
+  const { filters, patch, label, appts, filteredRows, overdueInView } =
+    useAppointmentListFilters();
 
-  const { from, to, label } = useMemo(
-    () => rangeFor(filters.mode, filters.anchor),
-    [filters.mode, filters.anchor],
-  );
-
-  const appts = useAppointments(from, to);
   // Pila total de vencidas (independiente del rango): habilita el cierre masivo.
   const overduePending = useOverduePending();
 
   const invalidate = () => invalidateAppointments(qc);
 
-  const filteredRows = useMemo(() => {
-    let rows = appts.data ?? [];
-    const f = filters;
-    if (f.staffId) rows = rows.filter((a) => a.staff_id === f.staffId);
-    if (f.statuses.length)
-      rows = rows.filter((a) => f.statuses.includes(a.status));
-    if (f.onlyOverdue) rows = rows.filter(isOverdue);
-    const q = f.q.trim().toLowerCase();
-    if (q) {
-      rows = rows.filter((a) =>
-        [a.customer_name, a.service_name, a.staff_name, a.phone, a.notes].some(
-          (v) => (v ?? '').toLowerCase().includes(q),
-        ),
-      );
-    }
-    return rows;
-  }, [appts.data, filters]);
-
-  // Vencidas del rango visible (contador de la pastilla del filtro).
-  const overdueInView = useMemo(
-    () => (appts.data ?? []).filter(isOverdue).length,
-    [appts.data],
-  );
   const overdueTotal = overduePending.data?.length ?? 0;
 
   // Columnas visibles: filtrar por estado es mostrar solo esas listas.
@@ -211,17 +172,14 @@ export function TasksPage() {
           ))}
         </div>
       ) : filteredRows.length === 0 ? (
-        <Card>
-          <EmptyState
-            icon={ClipboardList}
-            title="Sin tareas"
-            description={
-              (appts.data?.length ?? 0) > 0 || activeFilterCount(filters) > 0
-                ? 'Ninguna cita coincide con los filtros.'
-                : 'No hay citas para el rango seleccionado.'
-            }
-          />
-        </Card>
+        <AppointmentsEmptyState
+          icon={ClipboardList}
+          title="Sin tareas"
+          totalRows={appts.data?.length ?? 0}
+          filters={filters}
+          filteredHint="Ninguna cita coincide con los filtros."
+          emptyHint="No hay citas para el rango seleccionado."
+        />
       ) : (
         <KanbanView
           rows={filteredRows}
