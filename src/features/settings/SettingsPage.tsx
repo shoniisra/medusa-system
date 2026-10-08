@@ -1,11 +1,16 @@
 import { useState } from 'react';
+import { Stethoscope } from 'lucide-react';
 import { RESOURCES } from './resources';
 import { ResourceManager } from './ResourceManager';
+import { DiagnosticsPanel } from './DiagnosticsPanel';
 import { cn } from '@/lib/cn';
 
+const DIAGNOSTICS_KEY = '__diagnostics';
+
 export function SettingsPage() {
-  const [active, setActive] = useState(RESOURCES[0].key);
-  const resource = RESOURCES.find((r) => r.key === active)!;
+  const [active, setActive] = useState<string>(RESOURCES[0].key);
+  const resource = RESOURCES.find((r) => r.key === active);
+  const isDiagnostics = active === DIAGNOSTICS_KEY;
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-6">
@@ -20,14 +25,14 @@ export function SettingsPage() {
       <div className="flex flex-wrap gap-2">
         {RESOURCES.map((r) => {
           const Icon = r.icon;
-          const isActive = r.key === active;
+          const activeTab = r.key === active;
           return (
             <button
               key={r.key}
               onClick={() => setActive(r.key)}
               className={cn(
                 'flex items-center gap-2 rounded-xl border px-3 py-2 text-sm transition-colors',
-                isActive
+                activeTab
                   ? 'border-gold/40 bg-gold/10 text-gold-200 shadow-gold-glow'
                   : 'border-white/10 text-white/60 hover:bg-white/5 hover:text-white',
               )}
@@ -37,9 +42,25 @@ export function SettingsPage() {
             </button>
           );
         })}
+        <button
+          onClick={() => setActive(DIAGNOSTICS_KEY)}
+          className={cn(
+            'flex items-center gap-2 rounded-xl border px-3 py-2 text-sm transition-colors',
+            isDiagnostics
+              ? 'border-gold/40 bg-gold/10 text-gold-200 shadow-gold-glow'
+              : 'border-white/10 text-white/60 hover:bg-white/5 hover:text-white',
+          )}
+        >
+          <Stethoscope className="h-4 w-4" />
+          Diagnóstico
+        </button>
       </div>
 
-      <ResourceManager key={resource.key} resource={resource} />
+      {isDiagnostics ? (
+        <DiagnosticsPanel />
+      ) : resource ? (
+        <ResourceManager key={resource.key} resource={resource} />
+      ) : null}
     </div>
   );
 }
