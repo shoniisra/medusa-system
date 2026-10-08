@@ -39,6 +39,8 @@ import {
   useToast,
 } from '@/components/ui';
 import { CollectSection } from './CollectSection';
+import { CountCashFields } from './CountCashFields';
+import { MetricCard } from './MetricCard';
 import {
   AccountSelect,
   paymentMethodFor,
@@ -292,9 +294,9 @@ function SummaryCard({ branchId }: { branchId: string }) {
               {b.label}
             </p>
             <div className="grid grid-cols-3 gap-3">
-              <Metric label="Ventas" value={money(sales)} tone="success" />
-              <Metric label="Egresos" value={money(expense)} tone="danger" />
-              <Metric label="Neto" value={money(sales + other - expense)} gold />
+              <MetricCard size="xl" label="Ventas" value={money(sales)} tone="success" />
+              <MetricCard size="xl" label="Egresos" value={money(expense)} tone="danger" />
+              <MetricCard size="xl" label="Neto" value={money(sales + other - expense)} gold />
             </div>
             {other > 0 && (
               <p className="mt-3 text-xs text-white/40">
@@ -1426,10 +1428,10 @@ function OpenSessionCard({
         subtitle={`Abierta ${timeShort(session.opened_at)}`}
       />
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-        <Metric label="Apertura" value={money(session.opening_cash)} />
-        <Metric label="Esperado" value={money(exp)} gold />
+        <MetricCard size="xl" label="Apertura" value={money(session.opening_cash)} />
+        <MetricCard size="xl" label="Esperado" value={money(exp)} gold />
         {diff != null && (
-          <Metric
+          <MetricCard size="xl"
             label="Diferencia"
             value={money(diff)}
             tone={diff < 0 ? 'danger' : 'success'}
@@ -1456,56 +1458,15 @@ function OpenSessionCard({
             onChange={(e) => setCounted(e.target.value)}
           />
 
-          <div className="space-y-3 rounded-xl border border-white/10 bg-white/[0.02] p-3">
-            <div className="flex items-center justify-between">
-              <p className="text-xs uppercase tracking-wide text-white/40">
-                Retirar de caja (opcional)
-              </p>
-              {cnt != null && cnt > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setWithdraw(String(cnt))}
-                  className="text-xs text-gold-300 hover:underline"
-                >
-                  Retirar todo
-                </button>
-              )}
-            </div>
-            <Input
-              label="Monto a retirar"
-              type="number"
-              min="0"
-              step="0.01"
-              value={withdraw}
-              onChange={(e) => setWithdraw(e.target.value)}
-            />
-            <Select
-              label="Depositar en"
-              value={destination}
-              onChange={(e) => setDestination(e.target.value)}
-            >
-              <option value="">Seleccionar…</option>
-              {banks.data?.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
-            </Select>
-            {banks.data?.length === 0 && (
-              <p className="text-xs text-white/40">
-                No hay cuentas donde depositar. Creá una en Configuración → Cuentas
-                (por ejemplo «Ahorros efectivo»).
-              </p>
-            )}
-            {cnt != null && (
-              <div className="flex items-center justify-between border-t border-white/10 pt-3 text-sm">
-                <span className="text-white/60">Queda en caja para vueltos</span>
-                <span className="font-semibold text-gold-300">
-                  {money(left ?? 0)}
-                </span>
-              </div>
-            )}
-          </div>
+          <CountCashFields
+            cnt={cnt}
+            withdraw={withdraw}
+            onWithdrawChange={setWithdraw}
+            destination={destination}
+            onDestinationChange={setDestination}
+            banks={banks.data ?? []}
+            left={left}
+          />
 
           {tooMuch && (
             <p className="text-xs text-danger">
@@ -1574,10 +1535,10 @@ function DebtsTab({ ctx }: { ctx: Ctx }) {
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Card>
-          <Metric label="Por pagar (deudas)" value={money(pend(debts))} tone="danger" />
+          <MetricCard size="xl" label="Por pagar (deudas)" value={money(pend(debts))} tone="danger" />
         </Card>
         <Card>
-          <Metric label="Por cobrar (créditos)" value={money(pend(credits))} tone="success" />
+          <MetricCard size="xl" label="Por cobrar (créditos)" value={money(pend(credits))} tone="success" />
         </Card>
       </div>
 
@@ -1923,9 +1884,9 @@ function TransactionsSection({ branchId }: { branchId: string }) {
       />
 
       <div className="mb-4 grid grid-cols-3 gap-3">
-        <Metric label="Ingresos" value={money(totalIn)} tone="success" />
-        <Metric label="Egresos" value={money(totalOut)} tone="danger" />
-        <Metric label="Neto" value={money(totalIn - totalOut)} gold />
+        <MetricCard size="xl" label="Ingresos" value={money(totalIn)} tone="success" />
+        <MetricCard size="xl" label="Egresos" value={money(totalOut)} tone="danger" />
+        <MetricCard size="xl" label="Neto" value={money(totalIn - totalOut)} gold />
       </div>
 
       {rows.length === 0 ? (
@@ -2150,9 +2111,9 @@ function MonthlyResumenTab({ branchId }: { branchId: string }) {
 
       <Card gold>
         <div className="grid grid-cols-3 gap-3">
-          <Metric label="Ingresos" value={money(yearIncome)} tone="success" />
-          <Metric label="Egresos" value={money(yearExpense)} tone="danger" />
-          <Metric
+          <MetricCard size="xl" label="Ingresos" value={money(yearIncome)} tone="success" />
+          <MetricCard size="xl" label="Egresos" value={money(yearExpense)} tone="danger" />
+          <MetricCard size="xl"
             label="Total"
             value={money(yearTotal)}
             tone={yearTotal >= 0 ? 'success' : 'danger'}
@@ -2422,9 +2383,9 @@ function TransactionsTab({ ctx }: { ctx: Ctx }) {
 
       <Card>
         <div className="mb-4 grid grid-cols-3 gap-3">
-          <Metric label="Ingresos" value={money(totalIn)} tone="success" />
-          <Metric label="Egresos" value={money(totalOut)} tone="danger" />
-          <Metric label="Neto" value={money(totalIn - totalOut)} gold />
+          <MetricCard size="xl" label="Ingresos" value={money(totalIn)} tone="success" />
+          <MetricCard size="xl" label="Egresos" value={money(totalOut)} tone="danger" />
+          <MetricCard size="xl" label="Neto" value={money(totalIn - totalOut)} gold />
         </div>
 
         {rows.length === 0 ? (
@@ -2556,28 +2517,3 @@ function SearchModal({
   );
 }
 
-function Metric({
-  label,
-  value,
-  gold,
-  tone,
-}: {
-  label: string;
-  value: string;
-  gold?: boolean;
-  tone?: 'danger' | 'success';
-}) {
-  const color = gold
-    ? 'kpi-gold'
-    : tone === 'danger'
-      ? 'text-danger'
-      : tone === 'success'
-        ? 'text-success'
-        : 'text-white';
-  return (
-    <div className="rounded-xl bg-white/5 p-3">
-      <p className="text-xs text-white/50">{label}</p>
-      <p className={`mt-1 text-xl font-semibold ${color}`}>{value}</p>
-    </div>
-  );
-}

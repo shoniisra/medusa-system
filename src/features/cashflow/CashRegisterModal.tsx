@@ -8,8 +8,10 @@ import {
   Unlock,
   Wallet,
 } from 'lucide-react';
-import { Button, Input, Modal, Select, useToast } from '@/components/ui';
+import { Button, Input, Modal, useToast } from '@/components/ui';
 import { useBankAccounts } from './accounts';
+import { CountCashFields } from './CountCashFields';
+import { MetricCard } from './MetricCard';
 import {
   isOpenedToday,
   useCashCarryover,
@@ -345,50 +347,15 @@ function CloseBody({
         </div>
       )}
 
-      <div className="space-y-3 rounded-xl border border-white/10 bg-white/[0.02] p-3">
-        <div className="flex items-center justify-between">
-          <p className="text-xs uppercase tracking-wide text-white/40">
-            Retirar de caja (opcional)
-          </p>
-          {cnt != null && cnt > 0 && (
-            <button
-              type="button"
-              onClick={() => setWithdraw(String(cnt))}
-              className="text-xs text-gold-300 hover:underline"
-            >
-              Retirar todo
-            </button>
-          )}
-        </div>
-        <Input
-          label="Monto a retirar"
-          type="number"
-          min="0"
-          step="0.01"
-          value={withdraw}
-          onChange={(e) => setWithdraw(e.target.value)}
-        />
-        <Select
-          label="Depositar en"
-          value={destination}
-          onChange={(e) => setDestination(e.target.value)}
-        >
-          <option value="">Seleccionar…</option>
-          {banks.data?.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name}
-            </option>
-          ))}
-        </Select>
-        {cnt != null && (
-          <div className="flex items-center justify-between border-t border-white/10 pt-3 text-sm">
-            <span className="text-white/60">Queda en caja para vueltos</span>
-            <span className="font-semibold text-gold-300">
-              {money(left ?? 0)}
-            </span>
-          </div>
-        )}
-      </div>
+      <CountCashFields
+        cnt={cnt}
+        withdraw={withdraw}
+        onWithdrawChange={setWithdraw}
+        destination={destination}
+        onDestinationChange={setDestination}
+        banks={banks.data ?? []}
+        left={left}
+      />
 
       {tooMuch && (
         <p className="text-xs text-danger">
@@ -464,20 +431,20 @@ function SummaryBody({
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <Metric label="Ventas" value={String(m?.salesCount ?? 0)} />
-        <Metric label="Total vendido" value={money(m?.salesTotal ?? 0)} gold />
-        <Metric
+        <MetricCard label="Ventas" value={String(m?.salesCount ?? 0)} />
+        <MetricCard label="Total vendido" value={money(m?.salesTotal ?? 0)} gold />
+        <MetricCard
           label="Cobrado en efectivo"
           value={money(m?.cashReceived ?? 0)}
           tone="success"
         />
-        <Metric
+        <MetricCard
           label="Cobrado a cuentas"
           value={money(m?.bankReceived ?? 0)}
           tone="success"
         />
-        <Metric label="Gastos" value={money(m?.expenses ?? 0)} tone="danger" />
-        <Metric
+        <MetricCard label="Gastos" value={money(m?.expenses ?? 0)} tone="danger" />
+        <MetricCard
           label="Retirado al banco"
           value={money(m?.withdrawnToBank ?? 0)}
         />
@@ -543,32 +510,6 @@ function SummaryBody({
           <CalendarDays className="h-4 w-4" /> Comenzar a agendar
         </Button>
       </div>
-    </div>
-  );
-}
-
-function Metric({
-  label,
-  value,
-  gold,
-  tone,
-}: {
-  label: string;
-  value: string;
-  gold?: boolean;
-  tone?: 'danger' | 'success';
-}) {
-  const color = gold
-    ? 'kpi-gold'
-    : tone === 'danger'
-      ? 'text-danger'
-      : tone === 'success'
-        ? 'text-success'
-        : 'text-white';
-  return (
-    <div className="rounded-xl bg-white/5 p-3">
-      <p className="text-xs text-white/50">{label}</p>
-      <p className={`mt-1 text-lg font-semibold ${color}`}>{value}</p>
     </div>
   );
 }
