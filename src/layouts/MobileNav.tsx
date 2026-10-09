@@ -16,6 +16,7 @@ import {
   Settings,
   BarChart3,
   LogOut,
+  History,
 } from 'lucide-react';
 import { ROUTES } from '@/config/constants';
 import { useSession } from '@/store/session';
@@ -33,6 +34,7 @@ const TABS = [
 const MORE = [
   { to: ROUTES.metrics, label: 'Métricas', icon: BarChart3 },
   { to: ROUTES.tasks, label: 'Tablero', icon: ClipboardList },
+  { to: ROUTES.history, label: 'Historial', icon: History },
   { to: ROUTES.cashflow, label: 'Finanzas', icon: Wallet },
   { to: ROUTES.clients, label: 'Clientes', icon: Contact },
   { to: ROUTES.reminders, label: 'Recordatorios', icon: BellRing },

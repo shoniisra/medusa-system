@@ -47,6 +47,7 @@ import {
   usePaymentTarget,
 } from '@/features/cashflow/accounts';
 import { useBranchCashSession } from '@/features/cashflow/cashSessionActions';
+import { SaleDetailModal } from '@/features/sales/SaleDetailModal';
 import { searchCustomers } from '@/features/clients/customerSearch';
 import { useOrgId, useBranchId, useSession } from '@/store/session';
 import { useCustomers, useServices, useProducts, useStaff } from '@/features/pos/useCatalog';
@@ -1839,6 +1840,7 @@ function EditAppointment({ id }: { id: string }) {
   const userId = useSession((s) => s.user?.id ?? null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [voidOpen, setVoidOpen] = useState(false);
+  const [saleOpen, setSaleOpen] = useState(false);
   const [customerOpen, setCustomerOpen] = useState(false);
   const [depositOpen, setDepositOpen] = useState(false);
   const [voidDeposit, setVoidDeposit] = useState<DepositRow | null>(null);
@@ -2268,12 +2270,20 @@ function EditAppointment({ id }: { id: string }) {
                   <p className="text-xs text-white/40">
                     Cita atendida: ya tiene venta y cobro registrados.
                   </p>
-                  <button
-                    onClick={() => setVoidOpen(true)}
-                    className="text-xs font-medium text-danger hover:underline"
-                  >
-                    Anular venta y cobro
-                  </button>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1">
+                    <button
+                      onClick={() => setSaleOpen(true)}
+                      className="text-xs font-medium text-gold-300 hover:underline"
+                    >
+                      Ver venta / corregir colaboradora
+                    </button>
+                    <button
+                      onClick={() => setVoidOpen(true)}
+                      className="text-xs font-medium text-danger hover:underline"
+                    >
+                      Anular venta y cobro
+                    </button>
+                  </div>
                 </div>
               )}
               {noCharge && (
@@ -2522,6 +2532,10 @@ function EditAppointment({ id }: { id: string }) {
             refreshMoney();
           }}
         />
+      )}
+
+      {saleOpen && (
+        <SaleDetailModal appointmentId={id} onClose={() => setSaleOpen(false)} />
       )}
 
       {voidOpen && (

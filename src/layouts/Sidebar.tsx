@@ -12,6 +12,7 @@ import {
   Settings,
   BellRing,
   ShoppingCart,
+  History,
 } from "lucide-react";
 import { ROUTES, APP_NAME } from "@/config/constants";
 import { query } from "@/lib/db";
@@ -53,6 +54,7 @@ const NAV_SECTIONS: {
           { to: ROUTES.calendar, label: "Lista", icon: CalendarDays, end: true },
           { to: ROUTES.calendarView, label: "Calendario", icon: CalendarRange },
           { to: ROUTES.tasks, label: "Tablero", icon: ClipboardList },
+          { to: ROUTES.history, label: "Historial", icon: History },
         ],
       },
       { to: ROUTES.reminders, label: "Recordatorios", icon: BellRing },

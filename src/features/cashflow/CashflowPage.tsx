@@ -41,6 +41,7 @@ import {
 import { CollectSection } from './CollectSection';
 import { CountCashFields } from './CountCashFields';
 import { MetricCard } from './MetricCard';
+import { SaleDetailModal } from '@/features/sales/SaleDetailModal';
 import {
   AccountSelect,
   paymentMethodFor,
@@ -1914,6 +1915,8 @@ function TxTable({
   accountOf?: (r: TxRow | TxFullRow) => string;
 }) {
   const navigate = useNavigate();
+  // Venta abierta en el modal de detalle (ingresos del POS o de cita).
+  const [openSale, setOpenSale] = useState<string | null>(null);
   return (
     <div className="-mx-2 overflow-x-auto">
       <table className="w-full min-w-[720px] text-sm">
@@ -1972,14 +1975,27 @@ function TxTable({
                   {money(r.amount)}
                 </td>
                 <td className="whitespace-nowrap px-2 py-2 text-right">
-                  {target ? (
-                    <button
-                      onClick={() => navigate(target)}
-                      className="inline-flex items-center gap-1 text-xs font-medium text-gold-300 hover:underline"
-                      title="Abrir cita"
-                    >
-                      Ver <ExternalLink className="h-3 w-3" />
-                    </button>
+                  {target || (isIn && r.sale_id) ? (
+                    <span className="inline-flex items-center gap-3">
+                      {target && (
+                        <button
+                          onClick={() => navigate(target)}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-gold-300 hover:underline"
+                          title="Abrir cita"
+                        >
+                          Cita <ExternalLink className="h-3 w-3" />
+                        </button>
+                      )}
+                      {isIn && r.sale_id && (
+                        <button
+                          onClick={() => setOpenSale(r.sale_id)}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-gold-300 hover:underline"
+                          title="Ver detalle de la venta"
+                        >
+                          Venta <Receipt className="h-3 w-3" />
+                        </button>
+                      )}
+                    </span>
                   ) : (
                     <span className="text-xs text-white/20">—</span>
                   )}
@@ -1989,6 +2005,9 @@ function TxTable({
           })}
         </tbody>
       </table>
+      {openSale && (
+        <SaleDetailModal saleId={openSale} onClose={() => setOpenSale(null)} />
+      )}
     </div>
   );
 }

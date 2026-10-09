@@ -77,6 +77,8 @@ export const ROUTES = {
   client: '/clientes', // + /:id
   calendar: '/agenda',
   calendarView: '/calendario',
+  /** Citas atendidas + ventas del POS: lo que ya pasó. */
+  history: '/historial',
   tasks: '/tareas',
   reminders: '/recordatorios',
   appointmentNew: '/agenda/cita/nueva',

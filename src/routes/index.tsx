@@ -47,6 +47,11 @@ const AppointmentPage = lazyPage(() =>
     default: m.AppointmentPage,
   })),
 );
+const HistoryPage = lazyPage(() =>
+  import('@/features/history/HistoryPage').then((m) => ({
+    default: m.HistoryPage,
+  })),
+);
 const TasksPage = lazyPage(() =>
   import('@/features/tasks/TasksPage').then((m) => ({ default: m.TasksPage })),
 );
@@ -98,6 +103,7 @@ export const router = createBrowserRouter([
             element: lazyRoute(<CalendarViewPage />),
           },
           { path: ROUTES.tasks, element: lazyRoute(<TasksPage />) },
+          { path: ROUTES.history, element: lazyRoute(<HistoryPage />) },
           { path: ROUTES.reminders, element: lazyRoute(<RemindersPage />) },
           {
             path: ROUTES.appointmentNew,
