@@ -2019,6 +2019,10 @@ function EditAppointment({ id }: { id: string }) {
   // servicio ni producto) son la intención de la reserva y no van a la venta
   // (violarían el CHECK de sale_item y sumarían líneas en $0).
   const sellableItems = all.filter((i) => i.service_id || i.product_id);
+  // Filas reservadas por categoría sin servicio/producto todavía: no son
+  // vendibles. Si son las únicas, la venta no se puede confirmar hasta elegirles
+  // el servicio concreto en el detalle.
+  const placeholderItems = all.filter((i) => !i.service_id && !i.product_id);
   const subtotal = all.reduce((a, i) => a + i.list_unit_price * i.quantity, 0);
   const discountTotal = all.reduce(
     (a, i) => a + i.discount_amount * i.quantity,
@@ -2417,6 +2421,13 @@ function EditAppointment({ id }: { id: string }) {
                   >
                     <Check className="h-4 w-4" /> Confirmar venta
                   </Button>
+                  {sellableItems.length === 0 && (
+                    <p className="hidden text-center text-xs text-amber-300/80 lg:block">
+                      {placeholderItems.length > 0
+                        ? 'Elegí el servicio de cada ítem reservado por categoría (en el detalle) para poder cobrar.'
+                        : 'Agregá un servicio o producto al detalle para poder cobrar.'}
+                    </p>
+                  )}
                 </>
               )}
 

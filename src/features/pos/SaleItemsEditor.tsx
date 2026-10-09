@@ -61,6 +61,28 @@ function finalPricePatch(
   };
 }
 
+/**
+ * Convierte una fila reservada por categoría (sin servicio concreto) en un
+ * servicio vendible: le fija `service_id`, nombre y precio de lista. Si ya tenía
+ * un precio cargado a mano se respeta y se recalcula el descuento; si no, toma
+ * el precio del servicio. Sin esto, la cita reservada por categoría nunca se
+ * puede cobrar: el ítem no tiene servicio ni producto y queda fuera de la venta.
+ */
+function servicePatch(
+  i: EditorItem,
+  s: Service,
+): Record<string, number | string> {
+  const list = round2(s.base_price);
+  const keep = i.final_unit_price > 0 ? round2(i.final_unit_price) : list;
+  return {
+    service_id: s.id,
+    description: s.name,
+    list_unit_price: list,
+    final_unit_price: keep,
+    discount_amount: Math.max(0, round2(list - keep)),
+  };
+}
+
 /** Comisión de una línea (solo servicios con estilista y reglas cargadas). */
 function lineCommission(
   i: EditorItem,
@@ -157,6 +179,7 @@ export function SaleItemsEditor({
         {items.map((i) => {
           const c = lineCommission(i, rules);
           const assignable = !!(i.service_id || i.category);
+          const placeholder = !i.service_id && !i.product_id;
           return (
             <div
               key={i.id}
@@ -185,6 +208,19 @@ export function SaleItemsEditor({
                   <Trash2 className="h-4 w-4" />
                 </button>
               </div>
+
+              {placeholder && (
+                <div className="mt-2 space-y-1">
+                  <ServicePicker
+                    item={i}
+                    services={services}
+                    onPick={(patch) => onUpdateItem(i.id, patch)}
+                  />
+                  <p className="text-[11px] text-amber-300/80">
+                    Reservado por categoría: elegí el servicio para poder cobrar.
+                  </p>
+                </div>
+              )}
 
               {assignable && (
                 <div className="mt-2">
@@ -298,6 +334,7 @@ export function SaleItemsEditor({
             )}
             {items.map((i) => {
               const c = lineCommission(i, rules);
+              const placeholder = !i.service_id && !i.product_id;
               return (
                 <tr key={i.id} className="align-middle">
                   <td className="py-1 pr-1">
@@ -312,14 +349,22 @@ export function SaleItemsEditor({
                     />
                   </td>
                   <td className="py-1 pr-2">
-                    <InlineEdit
-                      value={i.description}
-                      align="left"
-                      onCommit={(v) =>
-                        v.trim() &&
-                        onUpdateItem(i.id, { description: v.trim() })
-                      }
-                    />
+                    {placeholder ? (
+                      <ServicePicker
+                        item={i}
+                        services={services}
+                        onPick={(patch) => onUpdateItem(i.id, patch)}
+                      />
+                    ) : (
+                      <InlineEdit
+                        value={i.description}
+                        align="left"
+                        onCommit={(v) =>
+                          v.trim() &&
+                          onUpdateItem(i.id, { description: v.trim() })
+                        }
+                      />
+                    )}
                   </td>
                   <td className="py-1 pr-2">
                     {i.service_id || i.category ? (
@@ -460,6 +505,53 @@ export function SaleItemsEditor({
         />
       )}
     </Card>
+  );
+}
+
+/**
+ * Selector de servicio para una fila reservada por categoría. Al elegir, la
+ * línea pasa de "intención de reserva" a servicio vendible (ver `servicePatch`),
+ * que es lo que habilita el botón de cobrar. Prioriza los servicios de la misma
+ * categoría de la reserva y deja el resto en un grupo aparte.
+ */
+function ServicePicker({
+  item,
+  services,
+  onPick,
+}: {
+  item: EditorItem;
+  services: Service[];
+  onPick: (patch: Record<string, number | string>) => void;
+}) {
+  const cat = item.category ?? '';
+  // Los de la misma categoría primero; al resto se les muestra su categoría
+  // para no confundir. (El Select solo lee <option> directos: nada de optgroup.)
+  const sorted = [...services].sort((a, b) => {
+    const am = (a.category ?? '') === cat ? 0 : 1;
+    const bm = (b.category ?? '') === cat ? 0 : 1;
+    return am - bm || a.name.localeCompare(b.name);
+  });
+  const pick = (id: string) => {
+    const s = services.find((x) => x.id === id);
+    if (s) onPick(servicePatch(item, s));
+  };
+  return (
+    <Select
+      value=""
+      onChange={(e) => e.target.value && pick(e.target.value)}
+      className="border-amber-400/40"
+    >
+      <option value="">
+        {item.category ? `Elegí servicio de ${item.category}…` : 'Elegí servicio…'}
+      </option>
+      {sorted.map((s) => (
+        <option key={s.id} value={s.id}>
+          {(s.category ?? '') === cat
+            ? `${s.name} · ${money(s.base_price)}`
+            : `${s.name} · ${money(s.base_price)} (${s.category ?? 'Otros'})`}
+        </option>
+      ))}
+    </Select>
   );
 }
 
