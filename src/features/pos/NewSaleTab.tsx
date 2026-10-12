@@ -54,6 +54,7 @@ import type {
   DraftCommission,
   DraftSaleItem,
   Product,
+  Service,
 } from '@/types';
 
 /**
@@ -216,8 +217,16 @@ export function NewSaleTab() {
   // Vendibles reales (todo el borrador lo es: no hay filas de sola categoría).
   const canConfirm = draft.items.length > 0 && !phoneTaken;
 
-  function onAddService({ sid, stid }: { sid: string; stid: string | null }) {
-    const s = services.data?.find((x) => x.id === sid);
+  function onAddService({
+    sid,
+    stid,
+    service,
+  }: {
+    sid: string;
+    stid: string | null;
+    service?: Service;
+  }) {
+    const s = service ?? services.data?.find((x) => x.id === sid);
     if (!s) return;
     draft.addItem({
       service_id: s.id,

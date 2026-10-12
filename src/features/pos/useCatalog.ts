@@ -122,3 +122,69 @@ export function useCreateProduct() {
     },
   });
 }
+
+/** Datos mínimos para dar de alta un servicio desde el mostrador. */
+export interface NewServiceDraft {
+  name: string;
+  category: string | null;
+  base_price: number;
+  duration_minutes: number | null;
+}
+
+/**
+ * Alta rápida de servicio durante una venta, espejo de `useCreateProduct`. Solo
+ * pide lo indispensable para cobrarlo hoy (nombre, categoría y precio); el resto
+ * del detalle se completa en Configuración → Servicios.
+ *
+ * Deja la fila en la caché de `useServices` antes de resolver, así quien la
+ * llama puede agregarla a la venta enseguida sin esperar el refetch.
+ */
+export function useCreateService() {
+  const orgId = useOrgId();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (draft: NewServiceDraft): Promise<Service> => {
+      const now = new Date().toISOString();
+      const row: Service = {
+        id: genId(),
+        organization_id: orgId,
+        code: null,
+        name: draft.name.trim(),
+        description: null,
+        duration_minutes: draft.duration_minutes,
+        base_price: draft.base_price,
+        category: draft.category?.trim() || null,
+        active: 1,
+        created_at: now,
+        updated_at: now,
+      };
+      await execute(
+        `INSERT INTO service
+           (id, organization_id, code, name, description, duration_minutes,
+            base_price, category, active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+        [
+          row.id,
+          row.organization_id,
+          row.code,
+          row.name,
+          row.description,
+          row.duration_minutes,
+          row.base_price,
+          row.category,
+          row.created_at,
+          row.updated_at,
+        ],
+      );
+      return row;
+    },
+    onSuccess: (s) => {
+      // Igual que en productos: se inserta en la caché y se marca stale para que
+      // el servicio nuevo aparezca al instante en el selector.
+      qc.setQueryData<Service[]>(['services', orgId], (old) =>
+        [...(old ?? []), s].sort((a, b) => a.name.localeCompare(b.name)),
+      );
+      void qc.invalidateQueries({ queryKey: ['services', orgId] });
+    },
+  });
+}

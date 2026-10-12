@@ -122,6 +122,7 @@ import type {
   DraftSaleItem,
   PaymentMethod,
   Product,
+  Service,
 } from '@/types';
 import { customerNameSql } from '@/features/clients/customerNameSql';
 
@@ -1884,8 +1885,16 @@ function EditAppointment({ id }: { id: string }) {
   });
 
   const addService = useMutation({
-    mutationFn: async ({ sid, stid }: { sid: string; stid: string | null }) => {
-      const s = services.data?.find((x) => x.id === sid);
+    mutationFn: async ({
+      sid,
+      stid,
+      service,
+    }: {
+      sid: string;
+      stid: string | null;
+      service?: Service;
+    }) => {
+      const s = service ?? services.data?.find((x) => x.id === sid);
       if (!s) return;
       await execute(
         `INSERT INTO appointment_item
@@ -2223,7 +2232,9 @@ function EditAppointment({ id }: { id: string }) {
               reassign.mutate({ itemId, staffId })
             }
             onRemoveItem={(itemId) => removeItem.mutate(itemId)}
-            onAddService={({ sid, stid }) => addService.mutate({ sid, stid })}
+            onAddService={({ sid, stid, service }) =>
+              addService.mutate({ sid, stid, service })
+            }
             onAddProduct={({ pid, qty, product }) =>
               addProduct.mutate({ pid, qty, product })
             }

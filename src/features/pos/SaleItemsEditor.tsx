@@ -13,7 +13,12 @@ import { SERVICE_CATEGORIES } from '@/config/constants';
 import { cn } from '@/lib/cn';
 import { Button, Card, CardHeader, Input, Modal, Select } from '@/components/ui';
 import { commissionForItem, type CommissionRule } from './createSale';
-import { useCreateProduct, type NewProductDraft } from './useCatalog';
+import {
+  useCreateProduct,
+  useCreateService,
+  type NewProductDraft,
+  type NewServiceDraft,
+} from './useCatalog';
 import type { CommissionType, Product, Service, StaffMember } from '@/types';
 import { normalizeText } from '@/lib/text';
 
@@ -147,7 +152,12 @@ export function SaleItemsEditor({
   onUpdateItem: (id: string, patch: Record<string, number | string>) => void;
   onReassign: (id: string, staffId: string | null) => void;
   onRemoveItem: (id: string) => void;
-  onAddService: (args: { sid: string; stid: string | null }) => void;
+  /** `service` viene solo en el alta al vuelo: aún no está en el catálogo cargado. */
+  onAddService: (args: {
+    sid: string;
+    stid: string | null;
+    service?: Service;
+  }) => void;
   /** `product` viene solo en el alta al vuelo: aún no está en el catálogo cargado. */
   onAddProduct: (args: {
     pid: string;
@@ -487,8 +497,8 @@ export function SaleItemsEditor({
           onClose={() => setAdding(null)}
           services={services}
           staff={staff}
-          onAdd={(sid, stid) => {
-            onAddService({ sid, stid });
+          onAdd={(sid, stid, service) => {
+            onAddService({ sid, stid, service });
             setAdding(null);
           }}
         />
@@ -695,11 +705,17 @@ function AddServiceSheet({
   onClose: () => void;
   services: Service[];
   staff: StaffMember[];
-  onAdd: (sid: string, stid: string | null) => void;
+  /** `service` viene solo en el alta al vuelo: aún no está en el catálogo cargado. */
+  onAdd: (sid: string, stid: string | null, service?: Service) => void;
 }) {
   const [category, setCategory] = useState('');
   const [service, setService] = useState<Service | null>(null);
   const [q, setQ] = useState('');
+  const [creating, setCreating] = useState(false);
+  // Fila recién creada: se arrastra hasta el paso de estilista porque el
+  // contenedor todavía tiene en memoria el catálogo anterior.
+  const [created, setCreated] = useState<Service | null>(null);
+  const createService = useCreateService();
 
   const OTHERS = 'Otros';
   // Solo las categorías que tienen servicios cargados.
@@ -734,8 +750,9 @@ function AddServiceSheet({
       ? 'service'
       : 'category';
 
-  const title =
-    step === 'staff'
+  const title = creating
+    ? 'Nuevo servicio'
+    : step === 'staff'
       ? '¿Quién lo hace?'
       : step === 'service'
         ? category || 'Buscar servicio'
@@ -743,18 +760,45 @@ function AddServiceSheet({
 
   return (
     <Modal open={open} onClose={onClose} title={title} className="sm:max-w-2xl">
-      {step !== 'category' && (
-        <button
-          type="button"
-          onClick={() => (service ? setService(null) : (setCategory(''), setQ('')))}
-          className="mb-3 flex items-center gap-1 text-sm text-white/50 active:text-white"
-        >
-          <ChevronLeft className="h-4 w-4" />
-          {service ? 'Cambiar servicio' : 'Todas las categorías'}
-        </button>
-      )}
+      {creating ? (
+        <NewServiceForm
+          initialName={q.trim()}
+          initialCategory={category}
+          saving={createService.isPending}
+          error={
+            createService.isError
+              ? 'No se pudo guardar el servicio. Reintentá.'
+              : ''
+          }
+          onCancel={() => setCreating(false)}
+          onSubmit={(draft) => {
+            void createService
+              .mutateAsync(draft)
+              .then((s) => {
+                // Se pasa al paso de estilista y se recuerda la fila para el alta.
+                setCreated(s);
+                setService(s);
+                setCreating(false);
+              })
+              .catch(() => {
+                /* el aviso ya lo da createService.isError en el formulario */
+              });
+          }}
+        />
+      ) : (
+        <>
+          {step !== 'category' && (
+            <button
+              type="button"
+              onClick={() => (service ? setService(null) : (setCategory(''), setQ('')))}
+              className="mb-3 flex items-center gap-1 text-sm text-white/50 active:text-white"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              {service ? 'Cambiar servicio' : 'Todas las categorías'}
+            </button>
+          )}
 
-      {step === 'staff' && service ? (
+          {step === 'staff' && service ? (
         <>
           <p className="mb-3 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white/70">
             <span className="font-medium text-white">{service.name}</span>
@@ -764,7 +808,13 @@ function AddServiceSheet({
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
             <button
               type="button"
-              onClick={() => onAdd(service.id, null)}
+              onClick={() =>
+                onAdd(
+                  service.id,
+                  null,
+                  created?.id === service.id ? created : undefined,
+                )
+              }
               className={cn(CARD_BASE, 'text-white/60')}
             >
               Sin asignar
@@ -773,7 +823,13 @@ function AddServiceSheet({
               <button
                 key={s.id}
                 type="button"
-                onClick={() => onAdd(service.id, s.id)}
+                onClick={() =>
+                  onAdd(
+                    service.id,
+                    s.id,
+                    created?.id === service.id ? created : undefined,
+                  )
+                }
                 className={CARD_BASE}
               >
                 <span
@@ -790,6 +846,19 @@ function AddServiceSheet({
           <SheetSearch value={q} onChange={setQ} placeholder="Buscar servicio…" />
           {step === 'category' ? (
             <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
+              {/* Alta rápida: el catálogo se arma sobre la marcha, sin salir de
+                  la venta. */}
+              <button
+                type="button"
+                onClick={() => setCreating(true)}
+                className={cn(
+                  CARD_BASE,
+                  'border-dashed border-gold/40 bg-gold/[0.06] text-gold-100',
+                )}
+              >
+                <Plus className="h-5 w-5" />
+                Nuevo servicio
+              </button>
               {categories.map((c) => (
                 <button
                   key={c}
@@ -804,12 +873,21 @@ function AddServiceSheet({
                 </button>
               ))}
             </div>
-          ) : list.length === 0 ? (
-            <p className="py-8 text-center text-sm text-white/40">
-              Sin servicios que coincidan.
-            </p>
           ) : (
             <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+              {/* Alta rápida, igual que en productos: toma el término de búsqueda
+                  como nombre tentativo. */}
+              <button
+                type="button"
+                onClick={() => setCreating(true)}
+                className={cn(
+                  CARD_BASE,
+                  'border-dashed border-gold/40 bg-gold/[0.06] text-gold-100',
+                )}
+              >
+                <Plus className="h-5 w-5" />
+                {q.trim() ? `Crear "${q.trim()}"` : 'Nuevo servicio'}
+              </button>
               {list.map((s) => (
                 <button
                   key={s.id}
@@ -825,6 +903,8 @@ function AddServiceSheet({
               ))}
             </div>
           )}
+        </>
+      )}
         </>
       )}
     </Modal>
@@ -1017,6 +1097,102 @@ function NewProductForm({
         >
           <Plus className="h-4 w-4" />
           {saving ? 'Guardando…' : 'Crear y agregar'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Alta mínima de servicio: lo indispensable para poder cobrarlo hoy. */
+function NewServiceForm({
+  initialName,
+  initialCategory,
+  saving,
+  error,
+  onCancel,
+  onSubmit,
+}: {
+  initialName: string;
+  initialCategory: string;
+  saving: boolean;
+  error: string;
+  onCancel: () => void;
+  onSubmit: (draft: NewServiceDraft) => void;
+}) {
+  const [name, setName] = useState(initialName);
+  const [category, setCategory] = useState(initialCategory);
+  const [price, setPrice] = useState('');
+  const [duration, setDuration] = useState('');
+
+  const priceNum = Number(price.replace(',', '.')) || 0;
+  const durationNum = Number(duration) || 0;
+  const ready = name.trim().length > 0 && priceNum > 0;
+
+  return (
+    <div className="space-y-3">
+      <Input
+        label="Nombre"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="Ej: Corte y peinado"
+      />
+      <Select
+        label="Categoría"
+        value={category}
+        onChange={(e) => setCategory(e.target.value)}
+      >
+        <option value="">Sin categoría</option>
+        {SERVICE_CATEGORIES.map((c) => (
+          <option key={c} value={c}>
+            {c}
+          </option>
+        ))}
+      </Select>
+      <div className="grid grid-cols-2 gap-3">
+        <Input
+          label="Precio de venta"
+          type="number"
+          inputMode="decimal"
+          min="0"
+          step="0.01"
+          value={price}
+          onChange={(e) => setPrice(e.target.value)}
+          placeholder="0,00"
+        />
+        <Input
+          label="Duración (min, opcional)"
+          type="number"
+          inputMode="numeric"
+          min="0"
+          step="5"
+          value={duration}
+          onChange={(e) => setDuration(e.target.value)}
+          placeholder="Ej: 45"
+        />
+      </div>
+      <p className="text-xs text-white/40">
+        El resto del detalle se completa en Configuración → Servicios.
+      </p>
+      {error && <p className="text-sm text-danger">{error}</p>}
+
+      <div className="flex gap-2 pt-1">
+        <Button variant="ghost" className="flex-1" onClick={onCancel}>
+          Cancelar
+        </Button>
+        <Button
+          className="flex-1"
+          disabled={!ready || saving}
+          onClick={() =>
+            onSubmit({
+              name: name.trim(),
+              category: category.trim() || null,
+              base_price: priceNum,
+              duration_minutes: durationNum > 0 ? durationNum : null,
+            })
+          }
+        >
+          <Plus className="h-4 w-4" />
+          {saving ? 'Guardando…' : 'Crear y continuar'}
         </Button>
       </div>
     </div>
