@@ -162,6 +162,33 @@ function todayLocalISO(): string {
   return toLocalNaive(new Date()).slice(0, 10);
 }
 
+/**
+ * Primer arranque con sentido: el próximo bloque de 30 min que entra en el
+ * horario del local, desde ahora. Si hoy ya cerró (o estamos fuera de horario),
+ * salta al siguiente día abierto. Evita el default fijo de hoy 10:00 cuando esa
+ * hora ya pasó. El solape con citas lo refina luego el efecto de "primer hueco".
+ */
+function nextAvailableStart(): { date: string; time: string } {
+  const now = new Date();
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  for (let i = 0; i < 14; i++) {
+    const d = new Date(now);
+    d.setDate(now.getDate() + i);
+    const iso = toLocalNaive(d).slice(0, 10);
+    const hours = hoursForDate(iso);
+    if (!hours) continue;
+    const openMin = toMinutes(hours.open);
+    const closeMin = toMinutes(hours.close);
+    // Hoy no proponemos nada anterior a ahora (redondeado al próximo bloque).
+    const earliest =
+      i === 0 && nowMin > openMin ? Math.ceil(nowMin / 30) * 30 : openMin;
+    if (earliest + DEFAULT_SERVICE_MINUTES <= closeMin) {
+      return { date: iso, time: fromMinutes(earliest) };
+    }
+  }
+  return { date: todayLocalISO(), time: '10:00' };
+}
+
 /** Etiqueta corta de día: { wd: 'lun', dm: '24 sep' }. */
 function dayLabel(iso: string): { wd: string; dm: string } {
   const d = new Date(`${iso}T00:00:00`);
@@ -261,8 +288,14 @@ function NewAppointment() {
   const phoneRef = useRef<HTMLInputElement>(null);
 
   // Fecha / hora / abono
-  const [date, setDate] = useState(params.get('date') || todayLocalISO());
-  const [time, setTime] = useState('10:00');
+  // Arranque: fecha pedida por URL, o el próximo hueco de horario desde ahora.
+  const initialStart = useMemo(() => nextAvailableStart(), []);
+  const [date, setDate] = useState(
+    params.get('date') || initialStart.date,
+  );
+  const [time, setTime] = useState(
+    params.get('date') ? '10:00' : initialStart.time,
+  );
   /**
    * ¿La hora la eligió el usuario? Mientras no la toque, el asistente puede
    * proponer el primer hueco libre. Apenas la elige, su decisión manda: ir y
@@ -458,14 +491,72 @@ function NewAppointment() {
   }
 
   // ── Categorías ──
+  // Especialidades: qué estilistas atienden cada categoría y con qué prioridad
+  // (1 = primaria, 2 = respaldo). Base del auto-asignado al elegir categoría.
+  const catSkills = useQuery({
+    queryKey: ['staff-category-skills', orgId],
+    enabled: !!orgId,
+    queryFn: () =>
+      query<{ category: string; staff_member_id: string; priority: number }>(
+        `SELECT sc.category, sc.staff_member_id, sc.priority
+           FROM staff_category sc
+           JOIN staff_member sm ON sm.id = sc.staff_member_id
+          WHERE sm.organization_id = ? AND sc.active = 1 AND sm.active = 1
+          ORDER BY sc.category, sc.priority`,
+        [orgId],
+      ),
+  });
+  const eligibleByCat = useMemo(() => {
+    const m = new Map<string, { staffId: string; priority: number }[]>();
+    for (const r of catSkills.data ?? []) {
+      const arr = m.get(r.category) ?? [];
+      arr.push({ staffId: r.staff_member_id, priority: r.priority });
+      m.set(r.category, arr);
+    }
+    return m;
+  }, [catSkills.data]);
+
+  /**
+   * Estilista a preseleccionar al elegir una categoría: si hay una sola primaria
+   * (o una sola candidata), se asigna sola; si hay varias primarias, se deja en
+   * blanco para que la usuaria elija por disponibilidad.
+   */
+  const defaultStaffForCat = useCallback(
+    (category: string): string => {
+      const elig = eligibleByCat.get(category) ?? [];
+      if (elig.length === 0) return '';
+      const primaries = elig.filter((e) => e.priority === 1);
+      if (primaries.length === 1) return primaries[0].staffId;
+      if (elig.length === 1) return elig[0].staffId;
+      return '';
+    },
+    [eligibleByCat],
+  );
+
   function toggleCat(category: string) {
     setCats((cs) =>
       cs.some((c) => c.category === category)
         ? cs.filter((c) => c.category !== category)
-        : [...cs, { category, staffId: '' }],
+        : [...cs, { category, staffId: defaultStaffForCat(category) }],
     );
     setConflicts([]);
   }
+
+  // Si las especialidades llegan después de que ya se tocaron categorías (carrera
+  // al abrir la pantalla), rellenamos la estilista por defecto una sola vez.
+  useEffect(() => {
+    if (!catSkills.data) return;
+    // Rellenar el default al llegar los datos es sincronizar estado con una
+    // carga async, no un bucle: solo toca las categorías sin estilista.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setCats((cs) =>
+      cs.map((c) =>
+        c.staffId ? c : { ...c, staffId: defaultStaffForCat(c.category) },
+      ),
+    );
+    // Solo al llegar los datos: no se repite al reasignar a mano después.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catSkills.data]);
   function setCatStaff(category: string, staffId: string) {
     setCats((cs) =>
       cs.map((c) => (c.category === category ? { ...c, staffId } : c)),
@@ -478,6 +569,8 @@ function NewAppointment() {
     const s = staff.data?.find((x) => x.id === sid);
     return s ? fullName(s.first_name, s.last_name) : 'Sin asignar';
   };
+  const staffColor = (sid: string) =>
+    staff.data?.find((x) => x.id === sid)?.color ?? '#64748b';
 
   const dep = Number(deposit) || 0;
 
@@ -577,7 +670,28 @@ function NewAppointment() {
   // Eventos del calendario: citas ocupadas (color del estilista, atenuadas) + el
   // bloque propuesto en dorado.
   const calEvents = useMemo(() => {
-    const busy = (weekAppts.data ?? []).map((r) => ({
+    // Una cita con varias categorías trae una fila por estilista (weekAppts
+    // agrupa por cita+estilista, lo necesita `bookedByStaff`). Para el
+    // calendario hay que colapsarlas en UN bloque por cita: si no, la misma
+    // cita se pintaba dos veces, solapada y en dos colores.
+    const byAppt = new Map<
+      string,
+      {
+        id: string;
+        start_at: string;
+        end_at: string;
+        staff_color: string | null;
+        google_color_hex: string | null;
+        cust: string | null;
+      }
+    >();
+    for (const r of weekAppts.data ?? []) {
+      // Nos quedamos con la primera fila con estilista (para el color); si
+      // ninguna tiene, vale igual la primera.
+      const ex = byAppt.get(r.id);
+      if (!ex || (!ex.staff_color && r.staff_color)) byAppt.set(r.id, r);
+    }
+    const busy = [...byAppt.values()].map((r) => ({
       id: r.id,
       title: r.cust || 'Ocupado',
       start: new Date(r.start_at),
@@ -955,6 +1069,23 @@ function NewAppointment() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slots]);
 
+  /** Próxima hora libre de una estilista ese día, dado el largo del servicio. */
+  const nextFreeLabel = (staffId: string, durMin: number): string | null => {
+    const hours = hoursForDate(date);
+    if (!hours) return null;
+    const openMin = toMinutes(hours.open);
+    const closeMin = toMinutes(hours.close);
+    const now = new Date();
+    const nowMin =
+      date === todayLocalISO() ? now.getHours() * 60 + now.getMinutes() : -1;
+    const booked = bookedByStaff.get(staffId) ?? [];
+    for (let m = openMin; m + durMin <= closeMin; m += 30) {
+      if (m < nowMin) continue;
+      if (!overlaps(booked, m, m + durMin)) return fromMinutes(m);
+    }
+    return null;
+  };
+
   const closedDay = !hoursForDate(date);
   const durationLabel = fmtDuration(reservedMinutes || DEFAULT_SERVICE_MINUTES);
 
@@ -1005,39 +1136,92 @@ function NewAppointment() {
           {cats.length > 0 && (
             <div className="mt-4 space-y-2">
               <p className="text-xs font-medium text-white/50">
-                Estilista por categoría (opcional)
+                Estilista por categoría
               </p>
-              {cats.map((c) => (
-                <div
-                  key={c.category}
-                  className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] p-2.5 sm:gap-3"
-                >
-                  <span className="w-[76px] shrink-0 text-xs font-medium text-white sm:w-[92px] sm:text-sm">
-                    {c.category}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <Select
-                      value={c.staffId}
-                      onChange={(e) => setCatStaff(c.category, e.target.value)}
-                    >
-                      <option value="">Sin asignar</option>
-                      {staff.data?.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {fullName(s.first_name, s.last_name)}
-                        </option>
-                      ))}
-                    </Select>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => toggleCat(c.category)}
-                    className="tap flex shrink-0 items-center justify-center rounded-lg text-white/40 hover:bg-white/10 hover:text-white"
-                    title="Quitar"
+              {cats.map((c) => {
+                const elig = eligibleByCat.get(c.category) ?? [];
+                const dur = minutesForCategory(c.category);
+                return (
+                  <div
+                    key={c.category}
+                    className="rounded-xl border border-white/10 bg-white/[0.03] p-2.5"
                   >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-              ))}
+                    <div className="flex items-center gap-2">
+                      <span className="flex-1 text-xs font-medium text-white sm:text-sm">
+                        {c.category}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => toggleCat(c.category)}
+                        className="tap flex shrink-0 items-center justify-center rounded-lg text-white/40 hover:bg-white/10 hover:text-white"
+                        title="Quitar"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    {/* Candidatas de la especialidad, cada una con su próxima
+                        hora libre. La primaria queda preseleccionada; si varias
+                        pueden, se elige por disponibilidad. */}
+                    {elig.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {elig.map((e) => {
+                          const on = c.staffId === e.staffId;
+                          const free = nextFreeLabel(e.staffId, dur);
+                          return (
+                            <button
+                              key={e.staffId}
+                              type="button"
+                              onClick={() =>
+                                setCatStaff(c.category, on ? '' : e.staffId)
+                              }
+                              className={cn(
+                                'flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition active:scale-[0.97]',
+                                on
+                                  ? 'border-gold/60 bg-gold/15 text-gold-100'
+                                  : 'border-white/10 bg-white/[0.03] text-white/70 hover:bg-white/[0.06]',
+                              )}
+                            >
+                              <span
+                                className="h-2.5 w-2.5 shrink-0 rounded-full"
+                                style={{ backgroundColor: staffColor(e.staffId) }}
+                              />
+                              <span className="font-medium">
+                                {staffName(e.staffId)}
+                              </span>
+                              <span className="opacity-60">
+                                {free ? `· libre ${free}` : '· sin cupo hoy'}
+                              </span>
+                              {e.priority >= 2 && (
+                                <span className="rounded bg-white/10 px-1 text-[10px] uppercase tracking-wide opacity-70">
+                                  respaldo
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Override universal: otra estilista o sin asignar. */}
+                    <div className="mt-2">
+                      <Select
+                        value={c.staffId}
+                        onChange={(e) => setCatStaff(c.category, e.target.value)}
+                      >
+                        <option value="">
+                          {elig.length > 0 ? 'Otra / sin asignar' : 'Sin asignar'}
+                        </option>
+                        {staff.data?.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {fullName(s.first_name, s.last_name)}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </Card>

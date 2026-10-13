@@ -215,6 +215,34 @@ export interface StaffServiceCommission {
   active: BoolInt;
 }
 
+/**
+ * Categoría de servicio que un colaborador atiende. Base del auto-agendado:
+ * `priority` 1 = primaria, 2 = secundaria… (al cliente se le ofrece la
+ * secundaria solo si la primaria no tiene cupo).
+ */
+export interface StaffCategory {
+  id: ID;
+  staff_member_id: ID;
+  category: string;
+  priority: number;
+  active: BoolInt;
+  created_at: ISODateTime;
+  updated_at: ISODateTime | null;
+}
+
+/**
+ * Servicio puntual que un colaborador NO hace aunque atienda su categoría
+ * (excepción dentro de una categoría habilitada en `staff_category`).
+ */
+export interface StaffServiceExclusion {
+  id: ID;
+  staff_member_id: ID;
+  service_id: ID;
+  active: BoolInt;
+  created_at: ISODateTime;
+  updated_at: ISODateTime | null;
+}
+
 /* ─────────────────────────── Ventas y comisiones ─────────────────────────── */
 
 export type SaleStatus =

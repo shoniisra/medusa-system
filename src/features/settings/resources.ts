@@ -11,6 +11,8 @@ import {
   Landmark,
   Calculator,
   Percent,
+  Star,
+  Ban,
   type LucideIcon,
 } from 'lucide-react';
 import { money, fullName } from '@/lib/format';
@@ -29,6 +31,15 @@ const CATEGORY_OPTIONS = SERVICE_CATEGORIES.map((c) => ({
   value: c,
   label: c,
 }));
+
+/** Prioridad de una habilidad: 1 = primaria, 2 = secundaria (respaldo). */
+const PRIORITY_OPTIONS = [
+  { value: '1', label: 'Primaria' },
+  { value: '2', label: 'Secundaria' },
+];
+
+const priorityLabel = (p: SqlValue) =>
+  Number(p) === 1 ? 'Primaria' : Number(p) === 2 ? 'Secundaria' : `Nivel ${p}`;
 
 /* ─────────────────────────── Tipos del motor CRUD ────────────────────────── */
 
@@ -134,6 +145,20 @@ const colorDot = (hex: string | null): ReactNode =>
         ),
       )
     : '—';
+
+/** Etiqueta de prioridad con color: dorado la primaria, tenue la secundaria. */
+const priorityTag = (p: SqlValue): ReactNode =>
+  createElement(
+    'span',
+    {
+      className: `inline-flex items-center rounded-full px-2 py-0.5 text-xs ${
+        Number(p) === 1
+          ? 'bg-gold/15 text-gold-200'
+          : 'bg-white/10 text-white/60'
+      }`,
+    },
+    priorityLabel(p),
+  );
 
 /* ────────────────────────── Definición de recursos ───────────────────────── */
 
@@ -278,6 +303,110 @@ export const RESOURCES: ResourceConfig[] = [
         options: PAY_CYCLE_OPTIONS,
       },
       { name: 'notes', label: 'Notas', type: 'textarea', colSpan: 2 },
+    ],
+  },
+  {
+    key: 'staff_categories',
+    label: 'Especialidades',
+    singular: 'especialidad',
+    icon: Star,
+    table: 'staff_category',
+    autoScopeOrg: false,
+    // Scope por organización vía join a staff_member (la tabla no tiene
+    // organization_id, igual que staff_service_commission).
+    listSql: (orgId) => ({
+      sql: `SELECT sc.*,
+                   sm.first_name || CASE WHEN sm.last_name IS NOT NULL THEN ' ' || sm.last_name ELSE '' END AS staff_name,
+                   sm.color AS staff_color
+              FROM staff_category sc
+              JOIN staff_member sm ON sm.id = sc.staff_member_id
+             WHERE sm.organization_id = ?
+             ORDER BY sm.first_name, sc.priority, sc.category`,
+      args: [orgId],
+    }),
+    orderBy: 'id',
+    hasActive: true,
+    hasUpdatedAt: true,
+    columns: [
+      { header: 'Colaborador', render: (r) => s(r.staff_name) },
+      { header: 'Categoría', render: (r) => s(r.category) },
+      {
+        header: 'Prioridad',
+        render: (r) => priorityTag(r.priority),
+        sortValue: (r) => Number(r.priority),
+      },
+    ],
+    fields: [
+      {
+        name: 'staff_member_id',
+        label: 'Colaborador',
+        type: 'select',
+        required: true,
+        optionsKey: 'staff',
+        colSpan: 2,
+      },
+      {
+        name: 'category',
+        label: 'Categoría',
+        type: 'select',
+        required: true,
+        options: CATEGORY_OPTIONS,
+        colSpan: 2,
+      },
+      {
+        name: 'priority',
+        label: 'Prioridad',
+        type: 'select',
+        required: true,
+        options: PRIORITY_OPTIONS,
+        defaultValue: 1,
+      },
+    ],
+  },
+  {
+    key: 'staff_exclusions',
+    label: 'Servicios excluidos',
+    singular: 'servicio excluido',
+    icon: Ban,
+    table: 'staff_service_exclusion',
+    autoScopeOrg: false,
+    listSql: (orgId) => ({
+      sql: `SELECT sse.*,
+                   sm.first_name || CASE WHEN sm.last_name IS NOT NULL THEN ' ' || sm.last_name ELSE '' END AS staff_name,
+                   sv.name AS service_name,
+                   sv.category AS service_category
+              FROM staff_service_exclusion sse
+              JOIN staff_member sm ON sm.id = sse.staff_member_id
+              JOIN service sv ON sv.id = sse.service_id
+             WHERE sm.organization_id = ?
+             ORDER BY sm.first_name, sv.name`,
+      args: [orgId],
+    }),
+    orderBy: 'id',
+    hasActive: true,
+    hasUpdatedAt: true,
+    columns: [
+      { header: 'Colaborador', render: (r) => s(r.staff_name) },
+      { header: 'Servicio', render: (r) => s(r.service_name) },
+      { header: 'Categoría', render: (r) => s(r.service_category) },
+    ],
+    fields: [
+      {
+        name: 'staff_member_id',
+        label: 'Colaborador',
+        type: 'select',
+        required: true,
+        optionsKey: 'staff',
+        colSpan: 2,
+      },
+      {
+        name: 'service_id',
+        label: 'Servicio que no hace',
+        type: 'select',
+        required: true,
+        optionsKey: 'services',
+        colSpan: 2,
+      },
     ],
   },
   {
