@@ -157,7 +157,10 @@ interface DailyServiceRow {
   staff_name: string;
   service: string;
   client: string | null;
+  /** Lo cobrado por el servicio (base de la comisión). */
   amount: number;
+  /** La comisión que le corresponde al colaborador por ese servicio. */
+  commission: number;
   sold_at: string;
 }
 
@@ -216,6 +219,7 @@ function TeamActivitySection({ orgId }: { orgId: string }) {
                 si.description AS service,
                 c.first_name || CASE WHEN c.last_name IS NOT NULL THEN ' ' || c.last_name ELSE '' END AS client,
                 sss.basis_amount AS amount,
+                sss.commission_amount AS commission,
                 s.sold_at AS sold_at
            FROM sale s
            JOIN sale_item si ON si.sale_id = s.id
@@ -230,13 +234,17 @@ function TeamActivitySection({ orgId }: { orgId: string }) {
       ),
   });
 
-  /** Servicios del rango agrupados por colaborador. */
+  /** Servicios del rango agrupados por colaborador, con ambos totales. */
   const byStaff = useMemo(() => {
-    const m = new Map<string, { items: DailyServiceRow[]; total: number }>();
+    const m = new Map<
+      string,
+      { items: DailyServiceRow[]; billed: number; commission: number }
+    >();
     for (const r of rows.data ?? []) {
-      const g = m.get(r.staff_id) ?? { items: [], total: 0 };
+      const g = m.get(r.staff_id) ?? { items: [], billed: 0, commission: 0 };
       g.items.push(r);
-      g.total += r.amount ?? 0;
+      g.billed += r.amount ?? 0;
+      g.commission += r.commission ?? 0;
       m.set(r.staff_id, g);
     }
     return m;
@@ -248,7 +256,7 @@ function TeamActivitySection({ orgId }: { orgId: string }) {
     <Card>
       <CardHeader
         title="Actividad del equipo"
-        subtitle="Servicios facturados por cada colaborador"
+        subtitle="Lo cobrado por cada servicio y la comisión del colaborador"
         action={
           <div className="flex flex-wrap gap-1 rounded-xl bg-white/5 p-1">
             {(Object.keys(RANGE_LABELS) as RangeKey[]).map((k) => (
@@ -300,47 +308,70 @@ function TeamActivitySection({ orgId }: { orgId: string }) {
                       </p>
                     </div>
                   </div>
-                  {g ? (
-                    <span
-                      className="shrink-0 text-sm font-semibold"
-                      style={{ color: c }}
-                    >
-                      {money(g.total)}
-                    </span>
-                  ) : (
-                    <Badge tone={s.active ? 'success' : 'muted'}>
-                      {s.active ? 'Activo' : 'Inactivo'}
-                    </Badge>
-                  )}
+                  <Badge tone={s.active ? 'success' : 'muted'}>
+                    {s.active ? 'Activo' : 'Inactivo'}
+                  </Badge>
                 </div>
 
                 {g ? (
-                  <ul
-                    className="mt-3 divide-y divide-white/5 border-t pt-1"
-                    style={{ borderTopColor: tint(c, 0.35) }}
-                  >
-                    {g.items.map((it, i) => (
-                      <li
-                        key={i}
-                        className="flex items-center gap-2 py-1.5 text-sm"
-                      >
-                        <span
-                          className="h-1.5 w-1.5 shrink-0 rounded-full"
-                          style={{ backgroundColor: c }}
-                        />
-                        <span className="min-w-0 flex-1 truncate text-white/80">
-                          {it.service}
-                          <span className="text-white/40">
-                            {it.client ? ` · ${it.client}` : ''}
-                            {multiDay ? ` · ${dateShort(it.sold_at)}` : ''}
+                  <div className="mt-3">
+                    {/* Cabecera de columnas */}
+                    <div
+                      className="flex items-center gap-2 border-t pb-1.5 pt-2 text-[11px] font-medium uppercase tracking-wide text-white/40"
+                      style={{ borderTopColor: tint(c, 0.35) }}
+                    >
+                      <span className="flex-1">Servicio</span>
+                      <span className="w-20 shrink-0 text-right">Cobrado</span>
+                      <span className="w-20 shrink-0 text-right">Comisión</span>
+                    </div>
+                    <ul className="divide-y divide-white/5">
+                      {g.items.map((it, i) => (
+                        <li
+                          key={i}
+                          className="flex items-center gap-2 py-1.5 text-sm"
+                        >
+                          <span className="flex min-w-0 flex-1 items-center gap-2">
+                            <span
+                              className="h-1.5 w-1.5 shrink-0 rounded-full"
+                              style={{ backgroundColor: c }}
+                            />
+                            <span className="min-w-0 truncate text-white/80">
+                              {it.service}
+                              <span className="text-white/40">
+                                {it.client ? ` · ${it.client}` : ''}
+                                {multiDay ? ` · ${dateShort(it.sold_at)}` : ''}
+                              </span>
+                            </span>
                           </span>
-                        </span>
-                        <span className="shrink-0 font-medium text-white">
-                          {money(it.amount)}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
+                          <span className="w-20 shrink-0 text-right text-white/70">
+                            {money(it.amount)}
+                          </span>
+                          <span
+                            className="w-20 shrink-0 text-right font-medium"
+                            style={{ color: c }}
+                          >
+                            {money(it.commission)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    {/* Dos totales */}
+                    <div
+                      className="flex items-center gap-2 border-t pt-2 text-sm font-semibold"
+                      style={{ borderTopColor: tint(c, 0.35) }}
+                    >
+                      <span className="flex-1 text-white/60">Total</span>
+                      <span className="w-20 shrink-0 text-right text-white">
+                        {money(g.billed)}
+                      </span>
+                      <span
+                        className="w-20 shrink-0 text-right"
+                        style={{ color: c }}
+                      >
+                        {money(g.commission)}
+                      </span>
+                    </div>
+                  </div>
                 ) : (
                   <p className="mt-3 flex items-center gap-1.5 text-xs text-white/40">
                     <Scissors className="h-3.5 w-3.5" /> Sin servicios en el período
