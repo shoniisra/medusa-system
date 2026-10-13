@@ -512,6 +512,7 @@ export function DashboardPage() {
             end_at: selectedAppt.end_at,
             status: selectedAppt.status as AppointmentStatus,
             customer_name: selectedAppt.customer_name,
+            customer_id: selectedAppt.customer_id,
             service_name: selectedAppt.services,
           }}
           onClose={() => setSelectedAppt(null)}

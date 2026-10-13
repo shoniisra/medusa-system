@@ -24,6 +24,7 @@ export interface NextAppointment {
   start_at: string;
   end_at: string;
   status: string;
+  customer_id: string | null;
   customer_name: string | null;
   phone: string | null;
   services: string | null;
@@ -126,7 +127,7 @@ export function useDashboardMetrics() {
           [branchId, day],
         ),
         query<NextAppointment>(
-          `SELECT a.id, a.start_at, a.end_at, a.status,
+          `SELECT a.id, a.start_at, a.end_at, a.status, a.customer_id,
                   c.first_name || CASE WHEN c.last_name IS NOT NULL THEN ' ' || c.last_name ELSE '' END AS customer_name,
                   c.phone,
                   (SELECT GROUP_CONCAT(ai.description, ', ')

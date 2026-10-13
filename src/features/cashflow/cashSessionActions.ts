@@ -126,6 +126,53 @@ export function useBranchCashSession(branchId: string) {
   return { session: open, isLoading: latest.isLoading };
 }
 
+/** Última sesión de caja ya cerrada: alimenta el resumen "último cierre" al abrir. */
+export function useLastClosedSession(branchId: string, enabled = true) {
+  return useQuery({
+    queryKey: ['last-closed-cash', branchId],
+    enabled: enabled && !!branchId,
+    queryFn: () =>
+      queryOne<Pick<CashSession, 'id' | 'closed_at'>>(
+        `SELECT cs.id, cs.closed_at FROM cash_session cs
+           JOIN cash_register cr ON cr.id = cs.cash_register_id
+          WHERE cr.branch_id = ? AND cs.status = 'closed'
+          ORDER BY cs.closed_at DESC LIMIT 1`,
+        [branchId],
+      ),
+  });
+}
+
+/**
+ * Citas que no se pueden arrastrar al cerrar la caja: reservadas de hoy (aún sin
+ * atender) y vencidas (reservadas o en atención de días pasados). Cerrar la caja
+ * con estas pendientes deja ventas sin cobrar y descuadra días futuros, así que
+ * el cierre las exige resolver primero.
+ */
+export function usePendingAppointments(branchId: string, enabled = true) {
+  // El corte es la fecha LOCAL del navegador (no UTC de la DB): de noche en
+  // UTC−5 "hoy" allá ya sería mañana y las citas de hoy entrarían como vencidas.
+  const today = ymd(new Date());
+  return useQuery({
+    queryKey: ['cash-blocking-appts', branchId, today],
+    enabled: enabled && !!branchId,
+    queryFn: async () => {
+      const row = await queryOne<{ reserved_today: number; overdue: number }>(
+        `SELECT
+            COALESCE(SUM(CASE WHEN a.status = 'reserved' AND date(a.start_at) = ?
+                              THEN 1 ELSE 0 END), 0) AS reserved_today,
+            COALESCE(SUM(CASE WHEN a.status IN ('reserved','confirmed')
+                               AND date(a.start_at) < ? THEN 1 ELSE 0 END), 0) AS overdue
+           FROM appointment a
+          WHERE a.branch_id = ?`,
+        [today, today, branchId],
+      );
+      const reservedToday = row?.reserved_today ?? 0;
+      const overdue = row?.overdue ?? 0;
+      return { reservedToday, overdue, total: reservedToday + overdue };
+    },
+  });
+}
+
 /** Mutación: abrir caja con `opening` como fondo inicial. */
 export function useOpenCashMutation(
   ctx: CashCtx,

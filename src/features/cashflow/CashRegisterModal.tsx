@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
   BarChart3,
   CalendarDays,
+  ClipboardList,
   Lock,
   Unlock,
   Wallet,
@@ -19,8 +20,10 @@ import {
   useCloseCashMutation,
   useDayMetricsForSession,
   useExpectedCash,
+  useLastClosedSession,
   useLatestCashSession,
   useOpenCashMutation,
+  usePendingAppointments,
   type CashCtx,
 } from './cashSessionActions';
 import { money, dateShort, timeShort } from '@/lib/format';
@@ -63,16 +66,18 @@ export function CashRegisterModal({
   // Decide el modo inicial del flujo:
   //  - "retro"   : hay sesión abierta de un día previo → cerrar primero + abrir hoy
   //  - "close"   : sesión abierta de hoy → cerrar normal
-  //  - "open"    : no hay sesión abierta → abrir caja
+  //  - "open"    : no hay sesión abierta (nunca o ya cerrada) → abrir caja
+  //
+  // El resumen del día NO es un modo inicial: solo se llega a él tras cerrar la
+  // caja en esta tanda. Antes, una caja cerrada hoy abría el chip "Abrir caja"
+  // directo en el resumen, que es lo que el usuario reportó como comportamiento
+  // equivocado.
   type Mode = 'open' | 'close' | 'retro' | 'summary';
-  const initialMode: Mode = useMemo(() => {
-    if (!session) return 'open';
-    if (session_isOpen && openedToday) return 'close';
-    if (session_isOpen && !openedToday) return 'retro';
-    // Última sesión cerrada: si fue hoy mostramos resumen; si no, abrir caja.
-    const closedDay = session.closed_at ? ymd(new Date(session.closed_at)) : null;
-    return closedDay === today ? 'summary' : 'open';
-  }, [session, session_isOpen, openedToday, today]);
+  const initialMode: Mode =
+    !session ? 'open'
+    : session_isOpen && openedToday ? 'close'
+    : session_isOpen && !openedToday ? 'retro'
+    : 'open';
 
   // El modo "activo" permite avanzar en el flujo (retro → open → summary).
   const [mode, setMode] = useState<Mode>(initialMode);
@@ -132,6 +137,7 @@ export function CashRegisterModal({
           ctx={ctx}
           session={session}
           retro={mode === 'retro'}
+          onDismiss={onClose}
           onClosed={(closedDay) => {
             setJustClosedSession(session);
             setJustClosedDay(closedDay);
@@ -146,6 +152,7 @@ export function CashRegisterModal({
           ctx={ctx}
           registerId={register.data.id}
           retroContext={!!justClosedSession}
+          onDismiss={onClose}
           onOpened={() => {
             // Tras abrir la caja de hoy luego de un cierre retroactivo, cerramos
             // el modal: no hay métricas del día actual todavía. Si no fue retro,
@@ -198,11 +205,13 @@ function OpenBody({
   registerId,
   retroContext,
   onOpened,
+  onDismiss,
 }: {
   ctx: CashCtx;
   registerId: string;
   retroContext: boolean;
   onOpened: () => void;
+  onDismiss: () => void;
 }) {
   const toast = useToast();
   const carry = useCashCarryover(ctx.branchId);
@@ -221,6 +230,14 @@ function OpenBody({
           Caja de ayer cerrada. Ahora abrí la de hoy con el fondo que quedó.
         </p>
       )}
+
+      {/* Al empezar el día: qué dejó el último cierre y qué quedó pendiente. En
+          el arrastre (retro) no va: ahí el foco es abrir la caja de hoy. */}
+      {!retroContext && <LastCloseSummary branchId={ctx.branchId} />}
+      {!retroContext && (
+        <PendingTodayNotice branchId={ctx.branchId} onGoTasks={onDismiss} />
+      )}
+
       <Input
         label="Efectivo de apertura"
         type="number"
@@ -248,8 +265,98 @@ function OpenBody({
           {openIt.error instanceof Error ? openIt.error.message : 'Error al abrir caja.'}
         </p>
       )}
+      {!retroContext && (
+        <Button variant="ghost" className="w-full" onClick={onDismiss}>
+          Cerrar
+        </Button>
+      )}
     </div>
   );
+}
+
+/** Resumen compacto del último cierre: ventas, cobrado y fondo que quedó. */
+function LastCloseSummary({ branchId }: { branchId: string }) {
+  const last = useLastClosedSession(branchId);
+  const sessionId = last.data?.id ?? null;
+  const day = last.data?.closed_at ? ymd(new Date(last.data.closed_at)) : null;
+  const metrics = useDayMetricsForSession(sessionId, branchId, day);
+  const m = metrics.data;
+
+  if (!day || !m) return null;
+  const received = m.cashReceived + m.bankReceived;
+
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-white/40">
+        Último cierre · {dateShort(day)}
+      </p>
+      <div className="mt-2 grid grid-cols-3 gap-2 text-center">
+        <MiniStat label="Ventas" value={String(m.salesCount)} />
+        <MiniStat label="Cobrado" value={money(received)} />
+        <MiniStat label="Quedó en caja" value={money(m.countedCash)} />
+      </div>
+    </div>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-white/5 p-2">
+      <p className="text-sm font-semibold text-white">{value}</p>
+      <p className="mt-0.5 text-[10px] uppercase tracking-wide text-white/40">
+        {label}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Pendientes del día que conviene procesar: reservadas de hoy y vencidas.
+ * Informativo al abrir (no bloquea); al cerrar la caja sí son obligatorias.
+ */
+function PendingTodayNotice({
+  branchId,
+  onGoTasks,
+}: {
+  branchId: string;
+  onGoTasks: () => void;
+}) {
+  const navigate = useNavigate();
+  const pending = usePendingAppointments(branchId);
+  const p = pending.data;
+  if (!p || p.total === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-100">
+      <div className="flex items-start gap-2">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>
+          Pendiente para hoy: <b>{pendingLabel(p.reservedToday, p.overdue)}</b>.
+          Conviene procesarlas antes de cerrar la caja.
+        </span>
+      </div>
+      <Button
+        size="sm"
+        variant="outline"
+        className="self-start"
+        onClick={() => {
+          navigate(ROUTES.tasks);
+          onGoTasks();
+        }}
+      >
+        <ClipboardList className="h-4 w-4" /> Ver en tareas
+      </Button>
+    </div>
+  );
+}
+
+/** "2 reservadas · 1 vencida" según lo que haya. */
+function pendingLabel(reservedToday: number, overdue: number): string {
+  const parts: string[] = [];
+  if (reservedToday > 0)
+    parts.push(`${reservedToday} reservada${reservedToday === 1 ? '' : 's'} de hoy`);
+  if (overdue > 0) parts.push(`${overdue} vencida${overdue === 1 ? '' : 's'}`);
+  return parts.join(' · ');
 }
 
 /* ────────────────── Cerrar caja ────────────────── */
@@ -259,16 +366,25 @@ function CloseBody({
   session,
   retro,
   onClosed,
+  onDismiss,
 }: {
   ctx: CashCtx;
   session: CashSession;
   retro: boolean;
   onClosed: (closedDay: string) => void;
+  onDismiss: () => void;
 }) {
   const toast = useToast();
+  const navigate = useNavigate();
   const banks = useBankAccounts(ctx.orgId, true);
   const expectedQ = useExpectedCash(session);
   const expected = expectedQ.data ?? session.opening_cash;
+
+  // Cerrar la caja con citas reservadas de hoy o vencidas sin resolver arrastra
+  // ventas sin cobrar y descuadra días futuros: el cierre las exige procesar.
+  const pending = usePendingAppointments(ctx.branchId);
+  const blockers = pending.data ?? { reservedToday: 0, overdue: 0, total: 0 };
+  const blocked = blockers.total > 0;
 
   const [counted, setCounted] = useState('');
   const [withdraw, setWithdraw] = useState('');
@@ -366,11 +482,36 @@ function CloseBody({
         <p className="text-xs text-danger">Elegí la cuenta donde entra el retiro.</p>
       )}
 
+      {blocked && (
+        <div className="flex flex-col gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-100">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              No podés cerrar la caja con tareas sin procesar:{' '}
+              <b>{pendingLabel(blockers.reservedToday, blockers.overdue)}</b>.
+              Resolvelas en el tablero de tareas para no arrastrar
+              inconsistencias.
+            </span>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="self-start"
+            onClick={() => {
+              navigate(ROUTES.tasks);
+              onDismiss();
+            }}
+          >
+            <ClipboardList className="h-4 w-4" /> Ir a tareas
+          </Button>
+        </div>
+      )}
+
       <Button
         variant="danger"
         className="w-full"
         size="lg"
-        disabled={cnt == null || tooMuch || noDestination}
+        disabled={cnt == null || tooMuch || noDestination || blocked}
         loading={closeIt.isPending}
         onClick={() =>
           closeIt.mutate({

@@ -29,7 +29,7 @@ import {
   useToast,
 } from '@/components/ui';
 import { useStaff } from '@/features/pos/useCatalog';
-import { CustomerCareNotes } from './CustomerHistoryCard';
+import { AppointmentCustomerExtras, CustomerCareNotes } from './CustomerHistoryCard';
 import type { AppointmentStatus } from '@/types';
 import { isNoCharge, isOverdue, ymd } from './appointmentBoard';
 import { invalidateAppointments } from '@/lib/queryClient';
@@ -53,6 +53,8 @@ export interface ApptActionTarget {
   /** Ficha del cliente: alergias y notas capilares, para avisar al atender. */
   allergies?: string | null;
   hair_notes?: string | null;
+  /** Ficha del cliente: habilita cumpleaños, saldo a favor, color y notas. */
+  customer_id?: string | null;
 }
 
 /** Fila de la cita que necesitan las acciones que sincronizan con Google. */
@@ -275,6 +277,8 @@ export function AppointmentActionsModal({
             allergies={appt.allergies}
             hairNotes={appt.hair_notes}
           />
+
+          <AppointmentCustomerExtras customerId={appt.customer_id} />
 
           <Button
             variant="ghost"
