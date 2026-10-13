@@ -1,37 +1,22 @@
-import { useState } from 'react';
-import {
-  TrendingUp,
-  Banknote,
-  Receipt,
-  Wallet,
-  Sparkles,
-  type LucideIcon,
-} from 'lucide-react';
+import { Sparkles } from 'lucide-react';
 import { money } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import { Donut } from '@/components/ui';
 import {
   usePeriodFinance,
   type PeriodKey,
   type PeriodFinance,
 } from './usePeriodFinance';
 
-const TABS: { key: PeriodKey; label: string }[] = [
+const PERIODS: { key: PeriodKey; label: string }[] = [
   { key: 'day', label: 'Día' },
   { key: 'week', label: 'Semana' },
   { key: 'month', label: 'Mes' },
 ];
 
-const PERIOD_LABEL: Record<PeriodKey, string> = {
-  day: 'hoy',
-  week: 'esta semana',
-  month: 'este mes',
-};
-
-/** Tarjeta hero con tabs día/semana/mes: Ventas, Recibido, Egresos, Ganancias. */
+/** Tarjeta hero con 3 donas de ingresos vs egresos: día, semana y mes. */
 export function FinanceOverview() {
-  const [tab, setTab] = useState<PeriodKey>('day');
   const { data, isLoading } = usePeriodFinance();
-  const f: PeriodFinance | undefined = data?.[tab];
 
   return (
     <section className="finance-hero relative overflow-hidden rounded-3xl p-4 sm:p-6">
@@ -45,139 +30,75 @@ export function FinanceOverview() {
         className="pointer-events-none absolute -bottom-28 -left-16 h-64 w-64 rounded-full bg-emerald-400/10 blur-3xl"
       />
 
-      <div className="relative mb-5 flex flex-col gap-3 sm:mb-6 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <span className="icon-badge icon-badge-gold h-11 w-11">
-            <Sparkles className="h-5 w-5" />
-          </span>
-          <div>
-            <h2 className="text-base font-semibold text-white">
-              Resumen financiero
-            </h2>
-            <p className="text-xs text-white/45">
-              Movimiento de {PERIOD_LABEL[tab]}
-            </p>
-          </div>
-        </div>
-        <div className="flex rounded-xl border border-white/10 bg-black/30 p-1 backdrop-blur">
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              onClick={() => setTab(t.key)}
-              className={cn(
-                'flex-1 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all sm:flex-none sm:py-1.5',
-                tab === t.key
-                  ? 'bg-gradient-to-b from-gold-300 to-gold-500 text-ink-950 shadow-gold-glow'
-                  : 'text-white/50 hover:text-white',
-              )}
-            >
-              {t.label}
-            </button>
-          ))}
+      <div className="relative mb-5 flex items-center gap-3 sm:mb-6">
+        <span className="icon-badge icon-badge-gold h-11 w-11">
+          <Sparkles className="h-5 w-5" />
+        </span>
+        <div>
+          <h2 className="text-base font-semibold text-white">
+            Resumen financiero
+          </h2>
+          <p className="text-xs text-white/45">Ingresos vs egresos</p>
         </div>
       </div>
 
-      <div className="relative grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Tile
-          icon={TrendingUp}
-          label="Ventas"
-          value={isLoading ? '—' : money(f?.sales)}
-          accent="gold"
-          featured
-        />
-        <Tile
-          icon={Banknote}
-          label="Dinero recibido"
-          value={isLoading ? '—' : money(f?.received)}
-          accent="emerald"
-        />
-        <Tile
-          icon={Receipt}
-          label="Egresos"
-          value={isLoading ? '—' : money(f?.expenses)}
-          accent="rose"
-        />
-        <Tile
-          icon={Wallet}
-          label="Ganancias"
-          value={isLoading ? '—' : money(f?.profit)}
-          accent={(f?.profit ?? 0) >= 0 ? 'emerald' : 'rose'}
-          hint="Recibido − egresos"
-        />
+      <div className="relative flex flex-col gap-3 sm:flex-row">
+        {PERIODS.map((p) => (
+          <PeriodDonutCard
+            key={p.key}
+            label={p.label}
+            f={data?.[p.key]}
+            isLoading={isLoading}
+          />
+        ))}
       </div>
     </section>
   );
 }
 
-const ACCENTS = {
-  gold: {
-    badge: 'text-gold-200 bg-gold/15 ring-gold/30',
-    value: 'kpi-gold',
-    glow: 'from-gold/[0.14]',
-  },
-  emerald: {
-    badge: 'text-emerald-300 bg-emerald-400/12 ring-emerald-400/25',
-    value: 'text-emerald-300',
-    glow: 'from-emerald-400/[0.12]',
-  },
-  rose: {
-    badge: 'text-rose-300 bg-rose-400/12 ring-rose-400/25',
-    value: 'text-rose-300',
-    glow: 'from-rose-400/[0.12]',
-  },
-} as const;
-
-function Tile({
-  icon: Icon,
+function PeriodDonutCard({
   label,
-  value,
-  accent,
-  hint,
-  featured,
+  f,
+  isLoading,
 }: {
-  icon: LucideIcon;
   label: string;
-  value: string;
-  accent: keyof typeof ACCENTS;
-  hint?: string;
-  featured?: boolean;
+  f: PeriodFinance | undefined;
+  isLoading: boolean;
 }) {
-  const a = ACCENTS[accent];
+  const income = f?.received ?? 0;
+  const expense = f?.expenses ?? 0;
+  const total = f?.profit ?? 0;
+
   return (
-    <div
-      className={cn(
-        'relative overflow-hidden rounded-2xl border p-4 transition-all',
-        featured
-          ? 'border-gold/25 bg-white/[0.05]'
-          : 'border-white/[0.07] bg-white/[0.03] hover:border-white/15',
-      )}
-    >
-      <div
-        aria-hidden
-        className={cn(
-          'pointer-events-none absolute inset-0 bg-gradient-to-tr to-transparent',
-          a.glow,
-        )}
-      />
-      <div className="relative">
-        <div
-          className={cn(
-            'mb-3 inline-flex h-9 w-9 items-center justify-center rounded-xl ring-1',
-            a.badge,
-          )}
-        >
-          <Icon className="h-5 w-5" />
+    <div className="flex-1 rounded-2xl border border-white/[0.07] bg-white/[0.03] p-4 transition-all hover:border-white/15">
+      <p className="mb-3 text-sm font-medium text-white">{label}</p>
+      <div className="flex items-center gap-4">
+        <Donut income={income} expense={expense} />
+        <div className="min-w-0 flex-1 space-y-1 text-xs">
+          <div className="flex justify-between">
+            <span className="text-white/50">Ingresos</span>
+            <span className="font-medium text-success">
+              {isLoading ? '—' : money(income)}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-white/50">Egresos</span>
+            <span className="font-medium text-danger">
+              {isLoading ? '—' : money(expense)}
+            </span>
+          </div>
+          <div className="flex justify-between border-t border-white/10 pt-1">
+            <span className="text-white/50">Total</span>
+            <span
+              className={cn(
+                'font-semibold',
+                total >= 0 ? 'text-success' : 'text-danger',
+              )}
+            >
+              {isLoading ? '—' : money(total)}
+            </span>
+          </div>
         </div>
-        <p className="text-xs text-white/45">{label}</p>
-        <p
-          className={cn(
-            'mt-1 text-2xl font-semibold tracking-tight',
-            featured ? a.value : 'text-white',
-          )}
-        >
-          {value}
-        </p>
-        {hint && <p className="mt-0.5 text-[10px] text-white/25">{hint}</p>}
       </div>
     </div>
   );
