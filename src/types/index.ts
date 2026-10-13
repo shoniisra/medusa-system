@@ -153,6 +153,8 @@ export interface Customer {
   /** Notas capilares: condición, historial químico, advertencias. */
   hair_notes: string | null;
   preferred_staff_id: ID | null;
+  /** Clienta de confianza: no se le pide abono al reservar. */
+  deposit_exempt: BoolInt;
   first_visit_at: ISODateTime | null;
   last_visit_at: ISODateTime | null;
   active: BoolInt;
@@ -172,6 +174,28 @@ export interface CustomerColorRecord {
   result: string | null;
   notes: string | null;
   staff_member_id: ID | null;
+  created_by: ID | null;
+  created_at: ISODateTime;
+}
+
+/** Tipo de movimiento de saldo a favor del cliente. */
+export type CreditKind = 'load' | 'redeem' | 'adjustment' | 'refund';
+
+/**
+ * Movimiento del saldo a favor (gift card / bono) de un cliente. Libro
+ * append-only: `amount` firmado (+ carga, − canje); el saldo disponible es la
+ * suma de los movimientos del cliente.
+ */
+export interface CustomerCreditEntry {
+  id: ID;
+  organization_id: ID;
+  customer_id: ID;
+  amount: number;
+  kind: CreditKind;
+  sale_id: ID | null;
+  appointment_id: ID | null;
+  payment_id: ID | null;
+  note: string | null;
   created_by: ID | null;
   created_at: ISODateTime;
 }

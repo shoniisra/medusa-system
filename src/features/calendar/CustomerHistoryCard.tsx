@@ -1,9 +1,64 @@
-import { Clock3, DollarSign, History, Scissors, UserRound } from 'lucide-react';
+import {
+  Clock3,
+  DollarSign,
+  History,
+  Palette,
+  Scissors,
+  TriangleAlert,
+  UserRound,
+} from 'lucide-react';
 import { query, queryOne } from '@/lib/db';
 import { Card, CardHeader } from '@/components/ui';
 import { dateShort, money } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { FREQUENT_VISITS } from './appointmentBoard';
+
+/**
+ * Datos clínicos de la ficha que conviene tener a la vista antes de atender:
+ * alergias (crítico, en rojo) y notas capilares / color (en dorado). No muestra
+ * nada si la ficha no tiene ninguno de los dos, así no ocupa lugar de más.
+ */
+export function CustomerCareNotes({
+  allergies,
+  hairNotes,
+  className,
+}: {
+  allergies?: string | null;
+  hairNotes?: string | null;
+  className?: string;
+}) {
+  if (!allergies && !hairNotes) return null;
+  return (
+    <div className={cn('space-y-2', className)}>
+      {allergies && (
+        <div className="flex gap-2 rounded-xl border border-danger/40 bg-danger/10 p-3">
+          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-danger" />
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-danger">
+              Alergias / sensibilidades
+            </p>
+            <p className="mt-0.5 whitespace-pre-wrap break-words text-sm text-white/80">
+              {allergies}
+            </p>
+          </div>
+        </div>
+      )}
+      {hairNotes && (
+        <div className="flex gap-2 rounded-xl border border-gold/30 bg-gold/[0.08] p-3">
+          <Palette className="mt-0.5 h-4 w-4 shrink-0 text-gold-300" />
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-gold-300">
+              Notas capilares / color
+            </p>
+            <p className="mt-0.5 whitespace-pre-wrap break-words text-sm text-white/80">
+              {hairNotes}
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /**
  * Resumen histórico del cliente de una cita: cuántas veces vino, qué suele

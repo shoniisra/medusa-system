@@ -13,10 +13,17 @@ import {
 import { searchCustomers } from '@/features/clients/customerSearch';
 import { CustomerPicker } from '@/features/clients/CustomerPicker';
 import { QuickCustomerModal } from '@/features/clients/QuickCustomerModal';
+import {
+  useCustomerCredit,
+  creditBalance,
+  storeCreditMethod,
+  invalidateCredit,
+} from '@/features/clients/customerCredit';
 import { genId, money, customerName, fullName } from '@/lib/format';
 import { useSession, useBranchId, useOrgId } from '@/store/session';
 import { usePosDraft } from '@/store/posDraft';
 import { useCustomers, useServices, useProducts, useStaff } from './useCatalog';
+import { useCategorySkills } from '@/features/staff/useCategorySkills';
 import {
   SaleItemsEditor,
   commissionByStaff,
@@ -44,6 +51,7 @@ import {
   Button,
   Card,
   CardHeader,
+  Input,
   Modal,
   Badge,
   useToast,
@@ -172,6 +180,10 @@ export function NewSaleTab() {
   });
   const rules = commissionRules.data;
 
+  // Especialidades: al agregar un servicio, si no se eligió estilista, se
+  // preselecciona la de la categoría del servicio (ej. Color → Lesly).
+  const { defaultStaffForCategory } = useCategorySkills();
+
   // Borrador → filas del editor compartido (estilista con nombre/color).
   const staffById = useMemo(
     () => new Map((staff.data ?? []).map((s) => [s.id, s])),
@@ -228,6 +240,8 @@ export function NewSaleTab() {
   }) {
     const s = service ?? services.data?.find((x) => x.id === sid);
     if (!s) return;
+    // Estilista explícita si se eligió; si no, la de la categoría del servicio.
+    const assigned = stid || defaultStaffForCategory(s.category) || null;
     draft.addItem({
       service_id: s.id,
       product_id: null,
@@ -236,7 +250,7 @@ export function NewSaleTab() {
       list_unit_price: s.base_price,
       discount_amount: 0,
       final_unit_price: s.base_price,
-      assigned_staff_id: stid,
+      assigned_staff_id: assigned,
     });
   }
   function onAddProduct({
@@ -517,13 +531,23 @@ function ConfirmSalePosModal({
 }) {
   const userId = useSession((s) => s.user?.id ?? null);
   const toast = useToast();
+  const qc = useQueryClient();
   // Destino del cobro: una cuenta bancaria (transferencia) o "cash" (efectivo).
   const [dest, setDest] = useState('');
   const [reference, setReference] = useState('');
   const [error, setError] = useState('');
+  // Saldo a favor a canjear en esta venta (parcial o total).
+  const [creditStr, setCreditStr] = useState('');
 
   const target = usePaymentTarget(orgId, branchId, dest);
   const { sessionId, effectiveDest, isCash, method, hasOpenCashToday } = target;
+
+  // Saldo a favor disponible del cliente (solo clientes existentes lo tienen).
+  const creditQ = useCustomerCredit(customerId);
+  const creditAvailable = creditQ.data?.balance ?? 0;
+  const creditMethod = storeCreditMethod(target.methods.data);
+  const creditUsed = Math.min(Math.max(0, Number(creditStr) || 0), creditAvailable, total);
+  const remainderDue = Math.max(0, total - creditUsed);
 
   const confirm = useMutation({
     mutationFn: async () => {
@@ -592,50 +616,101 @@ function ConfirmSalePosModal({
         total,
       });
 
-      if (!method)
-        throw new Error(
-          `No hay un método de pago ${isCash ? 'en efectivo' : 'por transferencia'} configurado.`,
-        );
+      // Canje de saldo a favor: se revalida el disponible contra la base por si
+      // cambió en otra pantalla, y se acota a lo que cubre el total.
+      let creditToUse = 0;
+      if (custId && creditUsed > 0) {
+        const avail = await creditBalance(custId);
+        creditToUse = Math.min(creditUsed, avail, total);
+      }
+      const dueInMoney = Math.max(0, total - creditToUse);
 
       const now = new Date().toISOString();
-      const bankId = isCash ? null : effectiveDest;
       const stmts: Stmt[] = [];
-      const paymentId = genId();
-      stmts.push({
-        sql: `INSERT INTO payment
-                (id, organization_id, branch_id, sale_id, payment_method_id,
-                 bank_account_id, paid_at, amount, status, reference)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)`,
-        args: [
-          paymentId,
-          orgId,
-          branchId,
-          saleId,
-          method.id,
-          bankId,
-          now,
-          total,
-          reference || null,
-        ],
-      });
 
-      // Solo el efectivo ingresa a la caja física.
-      if (isCash && sessionId) {
+      // Parte cobrada en plata real (efectivo/transferencia): el resto del total
+      // una vez descontado el saldo a favor.
+      if (dueInMoney > 0) {
+        if (!method)
+          throw new Error(
+            `No hay un método de pago ${isCash ? 'en efectivo' : 'por transferencia'} configurado.`,
+          );
+        const bankId = isCash ? null : effectiveDest;
+        const paymentId = genId();
         stmts.push({
-          sql: `INSERT INTO cash_movement
-                  (id, cash_session_id, branch_id, movement_type, direction, amount,
-                   movement_at, sale_id, payment_id, description, created_by)
-                VALUES (?, ?, ?, 'sale', 'in', ?, ?, ?, ?, ?, ?)`,
+          sql: `INSERT INTO payment
+                  (id, organization_id, branch_id, sale_id, payment_method_id,
+                   bank_account_id, paid_at, amount, status, reference)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)`,
+          args: [
+            paymentId,
+            orgId,
+            branchId,
+            saleId,
+            method.id,
+            bankId,
+            now,
+            dueInMoney,
+            reference || null,
+          ],
+        });
+        // Solo el efectivo ingresa a la caja física.
+        if (isCash && sessionId) {
+          stmts.push({
+            sql: `INSERT INTO cash_movement
+                    (id, cash_session_id, branch_id, movement_type, direction, amount,
+                     movement_at, sale_id, payment_id, description, created_by)
+                  VALUES (?, ?, ?, 'sale', 'in', ?, ?, ?, ?, ?, ?)`,
+            args: [
+              genId(),
+              sessionId,
+              branchId,
+              dueInMoney,
+              now,
+              saleId,
+              paymentId,
+              'Venta POS',
+              userId,
+            ],
+          });
+        }
+      }
+
+      // Parte pagada con saldo a favor: un pago que NO mueve plata real (sin
+      // cuenta ni movimiento de caja) + el descuento del saldo en su libreta.
+      if (creditToUse > 0) {
+        if (!creditMethod)
+          throw new Error('No está configurado el método "Saldo a favor".');
+        const creditPaymentId = genId();
+        stmts.push({
+          sql: `INSERT INTO payment
+                  (id, organization_id, branch_id, sale_id, payment_method_id,
+                   bank_account_id, paid_at, amount, status, reference)
+                VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 'confirmed', '[Saldo a favor]')`,
+          args: [
+            creditPaymentId,
+            orgId,
+            branchId,
+            saleId,
+            creditMethod.id,
+            now,
+            creditToUse,
+          ],
+        });
+        stmts.push({
+          sql: `INSERT INTO customer_credit_ledger
+                  (id, organization_id, customer_id, amount, kind, sale_id,
+                   appointment_id, payment_id, note, created_by, created_at)
+                VALUES (?, ?, ?, ?, 'redeem', ?, NULL, ?, '[Canje] venta', ?, ?)`,
           args: [
             genId(),
-            sessionId,
-            branchId,
-            total,
-            now,
+            orgId,
+            custId,
+            -creditToUse,
             saleId,
-            paymentId,
-            'Venta POS',
+            creditPaymentId,
             userId,
+            now,
           ],
         });
       }
@@ -643,6 +718,7 @@ function ConfirmSalePosModal({
       await batch(stmts);
     },
     onSuccess: () => {
+      invalidateCredit(qc);
       toast.success(
         'Venta registrada',
         `${customerLabel || 'Consumidor final'} · ${money(total)}`,
@@ -657,8 +733,13 @@ function ConfirmSalePosModal({
     },
   });
 
+  // Si el saldo a favor cubre todo el total, no hace falta mover plata ni tener
+  // caja abierta: la venta se cierra solo con el canje.
   const canConfirm =
-    !confirm.isPending && !!method && total > 0 && hasOpenCashToday;
+    !confirm.isPending &&
+    total > 0 &&
+    (creditUsed === 0 || !!creditMethod) &&
+    (remainderDue === 0 || (!!method && hasOpenCashToday));
 
   return (
     <Modal open onClose={onClose} title="Confirmar venta">
@@ -674,12 +755,55 @@ function ConfirmSalePosModal({
           </div>
         </div>
 
-        <PaymentTargetFields
-          target={target}
-          onDest={setDest}
-          reference={reference}
-          onReference={setReference}
-        />
+        {customerId && creditAvailable > 0 && (
+          <div className="space-y-2 rounded-xl border border-gold/30 bg-gold/[0.06] p-3">
+            <div className="flex items-center justify-between text-sm">
+              <span className="font-medium text-gold-100">Saldo a favor</span>
+              <span className="text-white/60">
+                Disponible {money(creditAvailable)}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Input
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="0.01"
+                placeholder="0.00"
+                value={creditStr}
+                onChange={(e) => setCreditStr(e.target.value)}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  setCreditStr(String(Math.min(creditAvailable, total)))
+                }
+              >
+                Usar todo
+              </Button>
+            </div>
+            {creditUsed > 0 && (
+              <p className="text-xs text-white/60">
+                Canje {money(creditUsed)} · resta {money(remainderDue)} en otro
+                medio
+              </p>
+            )}
+          </div>
+        )}
+
+        {remainderDue > 0 ? (
+          <PaymentTargetFields
+            target={target}
+            onDest={setDest}
+            reference={reference}
+            onReference={setReference}
+          />
+        ) : (
+          <p className="rounded-xl border border-success/30 bg-success/10 p-3 text-sm text-success">
+            La venta queda cubierta con el saldo a favor. No entra plata a caja.
+          </p>
+        )}
         {error && <p className="text-xs text-danger">{error}</p>}
 
         <Button

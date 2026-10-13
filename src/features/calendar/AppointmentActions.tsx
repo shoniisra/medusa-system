@@ -29,6 +29,7 @@ import {
   useToast,
 } from '@/components/ui';
 import { useStaff } from '@/features/pos/useCatalog';
+import { CustomerCareNotes } from './CustomerHistoryCard';
 import type { AppointmentStatus } from '@/types';
 import { isNoCharge, isOverdue, ymd } from './appointmentBoard';
 import { invalidateAppointments } from '@/lib/queryClient';
@@ -49,6 +50,9 @@ export interface ApptActionTarget {
   staff_name?: string | null;
   /** Observaciones: identifican una cita cerrada sin cobro (`[Sin cobro]`). */
   notes?: string | null;
+  /** Ficha del cliente: alergias y notas capilares, para avisar al atender. */
+  allergies?: string | null;
+  hair_notes?: string | null;
 }
 
 /** Fila de la cita que necesitan las acciones que sincronizan con Google. */
@@ -266,6 +270,11 @@ export function AppointmentActionsModal({
             {appt.staff_name ? ` · ${appt.staff_name}` : ''}
             {overdue && ' · vencida'}
           </p>
+
+          <CustomerCareNotes
+            allergies={appt.allergies}
+            hairNotes={appt.hair_notes}
+          />
 
           <Button
             variant="ghost"

@@ -51,6 +51,7 @@ import { SaleDetailModal } from '@/features/sales/SaleDetailModal';
 import { searchCustomers } from '@/features/clients/customerSearch';
 import { useOrgId, useBranchId, useSession } from '@/store/session';
 import { useCustomers, useServices, useProducts, useStaff } from '@/features/pos/useCatalog';
+import { useCategorySkills } from '@/features/staff/useCategorySkills';
 import {
   DEFAULT_SERVICE_MINUTES,
   minutesForCategory,
@@ -107,10 +108,17 @@ import {
   SaleItemsEditor,
   commissionByStaff,
 } from '@/features/pos/SaleItemsEditor';
+import {
+  useCustomerCredit,
+  creditBalance,
+  storeCreditMethod,
+  invalidateCredit,
+} from '@/features/clients/customerCredit';
 import { ymd } from '@/lib/date';
 import { isNoCharge, stripNoCharge } from './appointmentBoard';
 import { PaymentsHistoryCard, type PaymentRow } from './PaymentsHistoryCard';
 import {
+  CustomerCareNotes,
   CustomerHistoryCard,
   loadCustomerHistory,
 } from './CustomerHistoryCard';
@@ -312,6 +320,8 @@ function NewAppointment() {
   const [customDeposit, setCustomDeposit] = useState(false);
   // El abono debe elegirse explícitamente (5/10/20/Otro) antes de agendar.
   const [depositChosen, setDepositChosen] = useState(false);
+  // La seña se paga con saldo a favor del cliente (no mueve plata real).
+  const [depositFromCredit, setDepositFromCredit] = useState(false);
   /** Nº de voucher / referencia de la transferencia de la seña (opcional). */
   const [depositRef, setDepositRef] = useState('');
   /** Observaciones de la cita (opcional): pedido del cliente, avisos. */
@@ -335,6 +345,14 @@ function NewAppointment() {
   // título (y el sync lo devolvía como cliente "(abono 00)").
   const clientReady = !!customerId || (newClient && !!firstName.trim());
   const selectedCustomer = customers.data?.find((c) => c.id === customerId);
+  // Clienta de confianza marcada en su ficha: no se le exige abono. Con eso el
+  // paso de pago se da por resuelto (seña en cero) sin obligar a elegir monto.
+  const depositExempt = selectedCustomer?.deposit_exempt === 1;
+  const depositReady = depositChosen || depositExempt;
+  // Saldo a favor del cliente: puede usarse para pagar la seña de la reserva.
+  const creditQ = useCustomerCredit(customerId);
+  const creditAvailable = creditQ.data?.balance ?? 0;
+  const payWithCredit = depositFromCredit && creditAvailable > 0 && !!customerId;
 
   // ── Cliente: buscador con foco automático y creación al vuelo ──
   useEffect(() => {
@@ -451,6 +469,7 @@ function NewAppointment() {
         allergies: null,
         hair_notes: null,
         preferred_staff_id: null,
+        deposit_exempt: 0,
         first_visit_at: null,
         last_visit_at: null,
         active: 1,
@@ -491,53 +510,16 @@ function NewAppointment() {
   }
 
   // ── Categorías ──
-  // Especialidades: qué estilistas atienden cada categoría y con qué prioridad
-  // (1 = primaria, 2 = respaldo). Base del auto-asignado al elegir categoría.
-  const catSkills = useQuery({
-    queryKey: ['staff-category-skills', orgId],
-    enabled: !!orgId,
-    queryFn: () =>
-      query<{ category: string; staff_member_id: string; priority: number }>(
-        `SELECT sc.category, sc.staff_member_id, sc.priority
-           FROM staff_category sc
-           JOIN staff_member sm ON sm.id = sc.staff_member_id
-          WHERE sm.organization_id = ? AND sc.active = 1 AND sm.active = 1
-          ORDER BY sc.category, sc.priority`,
-        [orgId],
-      ),
-  });
-  const eligibleByCat = useMemo(() => {
-    const m = new Map<string, { staffId: string; priority: number }[]>();
-    for (const r of catSkills.data ?? []) {
-      const arr = m.get(r.category) ?? [];
-      arr.push({ staffId: r.staff_member_id, priority: r.priority });
-      m.set(r.category, arr);
-    }
-    return m;
-  }, [catSkills.data]);
-
-  /**
-   * Estilista a preseleccionar al elegir una categoría: si hay una sola primaria
-   * (o una sola candidata), se asigna sola; si hay varias primarias, se deja en
-   * blanco para que la usuaria elija por disponibilidad.
-   */
-  const defaultStaffForCat = useCallback(
-    (category: string): string => {
-      const elig = eligibleByCat.get(category) ?? [];
-      if (elig.length === 0) return '';
-      const primaries = elig.filter((e) => e.priority === 1);
-      if (primaries.length === 1) return primaries[0].staffId;
-      if (elig.length === 1) return elig[0].staffId;
-      return '';
-    },
-    [eligibleByCat],
-  );
+  // Especialidades: qué estilistas atienden cada categoría (hook compartido con
+  // POS). Base del auto-asignado al elegir categoría.
+  const { data: catSkillsData, eligibleByCat, defaultStaffForCategory } =
+    useCategorySkills();
 
   function toggleCat(category: string) {
     setCats((cs) =>
       cs.some((c) => c.category === category)
         ? cs.filter((c) => c.category !== category)
-        : [...cs, { category, staffId: defaultStaffForCat(category) }],
+        : [...cs, { category, staffId: defaultStaffForCategory(category) }],
     );
     setConflicts([]);
   }
@@ -545,18 +527,18 @@ function NewAppointment() {
   // Si las especialidades llegan después de que ya se tocaron categorías (carrera
   // al abrir la pantalla), rellenamos la estilista por defecto una sola vez.
   useEffect(() => {
-    if (!catSkills.data) return;
+    if (!catSkillsData) return;
     // Rellenar el default al llegar los datos es sincronizar estado con una
     // carga async, no un bucle: solo toca las categorías sin estilista.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setCats((cs) =>
       cs.map((c) =>
-        c.staffId ? c : { ...c, staffId: defaultStaffForCat(c.category) },
+        c.staffId ? c : { ...c, staffId: defaultStaffForCategory(c.category) },
       ),
     );
     // Solo al llegar los datos: no se repite al reasignar a mano después.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [catSkills.data]);
+  }, [catSkillsData]);
   function setCatStaff(category: string, staffId: string) {
     setCats((cs) =>
       cs.map((c) => (c.category === category ? { ...c, staffId } : c)),
@@ -599,6 +581,7 @@ function NewAppointment() {
   const hasOpenCashToday = !!todayCash.session;
   const cashMethod = payMethods.data?.find((m) => m.method_type === 'cash');
   const transferMethod = payMethods.data?.find((m) => m.method_type === 'transfer');
+  const creditMethod = storeCreditMethod(payMethods.data);
   const firstBankId = banks.data?.[0]?.id ?? '';
   const effectiveDest = depositDest || firstBankId || 'cash';
   const depositIsCash = effectiveDest === 'cash';
@@ -623,7 +606,9 @@ function NewAppointment() {
     [date],
   );
   const weekFrom = ymd(weekStart);
-  const weekTo = ymd(new Date(weekStart.getTime() + 6 * 86400000));
+  // Cargamos dos semanas (no una) para que "próximo turno libre" pueda mirar
+  // días siguientes cuando hoy ya no queda cupo. Todo lo demás filtra por `date`.
+  const weekTo = ymd(new Date(weekStart.getTime() + 13 * 86400000));
 
   const weekAppts = useQuery({
     queryKey: ['week-availability', branchId, weekFrom],
@@ -853,9 +838,51 @@ function NewAppointment() {
         });
       }
 
-      // Cobro de la seña: ingreso atado a la cita (sale_id NULL). Efectivo entra
-      // a la caja abierta; transferencia va a la cuenta bancaria elegida.
-      if (dep > 0) {
+      // Cobro de la seña: ingreso atado a la cita (sale_id NULL).
+      if (dep > 0 && payWithCredit && customerId) {
+        // Seña pagada con saldo a favor: no mueve plata real (sin cuenta ni
+        // movimiento de caja). Se revalida el disponible contra la base.
+        if (!creditMethod)
+          throw new Error('No está configurado el método "Saldo a favor".');
+        const avail = await creditBalance(customerId);
+        if (dep > avail)
+          throw new Error('El saldo a favor no alcanza para esa seña.');
+        const paymentId = genId();
+        const nowIso = new Date().toISOString();
+        stmts.push({
+          sql: `INSERT INTO payment
+                  (id, organization_id, branch_id, sale_id, appointment_id, payment_method_id,
+                   bank_account_id, paid_at, amount, status, reference)
+                VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, ?, 'confirmed', ?)`,
+          args: [
+            paymentId,
+            orgId,
+            branchId,
+            apptId,
+            creditMethod.id,
+            nowIso,
+            dep,
+            `[Seña · saldo a favor] ${clientLabel}`,
+          ],
+        });
+        stmts.push({
+          sql: `INSERT INTO customer_credit_ledger
+                  (id, organization_id, customer_id, amount, kind, sale_id,
+                   appointment_id, payment_id, note, created_by, created_at)
+                VALUES (?, ?, ?, ?, 'redeem', NULL, ?, ?, '[Seña] reserva', ?, ?)`,
+          args: [
+            genId(),
+            orgId,
+            customerId,
+            -dep,
+            apptId,
+            paymentId,
+            userId,
+            nowIso,
+          ],
+        });
+      } else if (dep > 0) {
+        // Efectivo entra a la caja abierta; transferencia va a la cuenta elegida.
         const method = depositIsCash ? cashMethod : transferMethod;
         if (!method)
           throw new Error(
@@ -947,6 +974,8 @@ function NewAppointment() {
     onSuccess: () => {
       invalidateAppointments(qc);
       invalidateCustomers(qc, orgId);
+      invalidateCredit(qc);
+      invalidateFinance(qc, branchId);
       // El aviso sobrevive al cambio de pantalla: se ve ya en el calendario.
       toast.success(
         'Cita creada',
@@ -1069,19 +1098,46 @@ function NewAppointment() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slots]);
 
-  /** Próxima hora libre de una estilista ese día, dado el largo del servicio. */
+  /** Etiqueta relativa del día: "hoy", "mañana" o "jue 16 oct". */
+  const relDayLabel = (iso: string): string => {
+    const todayISO = todayLocalISO();
+    if (iso === todayISO) return 'hoy';
+    const tomorrowISO = ymd(
+      new Date(new Date(`${todayISO}T00:00:00`).getTime() + 86400000),
+    );
+    if (iso === tomorrowISO) return 'mañana';
+    return format(new Date(`${iso}T00:00:00`), 'EEE d MMM', { locale: es });
+  };
+
+  /**
+   * Próximo turno libre de una estilista, buscando desde `date` hacia adelante
+   * (hasta donde llegan los datos cargados). Devuelve "hoy 14:30",
+   * "mañana 10:00" o "jue 16 oct 12:30"; null si no hay cupo en el rango.
+   */
   const nextFreeLabel = (staffId: string, durMin: number): string | null => {
-    const hours = hoursForDate(date);
-    if (!hours) return null;
-    const openMin = toMinutes(hours.open);
-    const closeMin = toMinutes(hours.close);
+    const todayISO = todayLocalISO();
     const now = new Date();
-    const nowMin =
-      date === todayLocalISO() ? now.getHours() * 60 + now.getMinutes() : -1;
-    const booked = bookedByStaff.get(staffId) ?? [];
-    for (let m = openMin; m + durMin <= closeMin; m += 30) {
-      if (m < nowMin) continue;
-      if (!overlaps(booked, m, m + durMin)) return fromMinutes(m);
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    const base = new Date(`${date}T00:00:00`);
+    for (let i = 0; i < 14; i++) {
+      const iso = ymd(new Date(base.getTime() + i * 86400000));
+      const hours = hoursForDate(iso);
+      if (!hours) continue; // local cerrado ese día
+      const openMin = toMinutes(hours.open);
+      const closeMin = toMinutes(hours.close);
+      const minStart = iso === todayISO ? nowMin : -1;
+      const booked = (weekAppts.data ?? [])
+        .filter((r) => r.staff_id === staffId && r.start_at.slice(0, 10) === iso)
+        .map((r) => ({
+          startMin: naiveToMin(r.start_at),
+          endMin: naiveToMin(r.end_at),
+        }));
+      for (let m = openMin; m + durMin <= closeMin; m += 30) {
+        if (m < minStart) continue;
+        if (!overlaps(booked, m, m + durMin)) {
+          return `${relDayLabel(iso)} ${fromMinutes(m)}`;
+        }
+      }
     }
     return null;
   };
@@ -1190,7 +1246,7 @@ function NewAppointment() {
                                 {staffName(e.staffId)}
                               </span>
                               <span className="opacity-60">
-                                {free ? `· libre ${free}` : '· sin cupo hoy'}
+                                {free ? `· libre ${free}` : '· sin cupo próximo'}
                               </span>
                               {e.priority >= 2 && (
                                 <span className="rounded bg-white/10 px-1 text-[10px] uppercase tracking-wide opacity-70">
@@ -1445,12 +1501,27 @@ function NewAppointment() {
           <Card gold>
             <CardHeader
               title="Pago"
-              subtitle="Elegí el abono para reservar la cita"
+              subtitle={
+                depositExempt
+                  ? 'Clienta de confianza: podés reservar sin abono'
+                  : 'Elegí el abono para reservar la cita'
+              }
             />
             <div className="space-y-4">
+              {depositExempt && (
+                <div className="rounded-xl border border-success/40 bg-success/10 p-3 text-sm text-success">
+                  A esta clienta no se le pide abono. Podés agendar directo; si
+                  igual deja una seña, elegí el monto abajo.
+                </div>
+              )}
               <div>
                 <span className="mb-2 block text-sm font-medium text-white/80">
-                  Abono <span className="text-danger">*</span>
+                  Abono{' '}
+                  {depositExempt ? (
+                    <span className="text-white/40">(opcional)</span>
+                  ) : (
+                    <span className="text-danger">*</span>
+                  )}
                 </span>
                 <div className="grid grid-cols-4 gap-2">
                   {[5, 10, 20].map((v) => {
@@ -1506,14 +1577,49 @@ function NewAppointment() {
                     onChange={(e) => setDeposit(e.target.value)}
                   />
                 )}
-                {!depositChosen && (
+                {!depositChosen && !depositExempt && (
                   <p className="mt-2 text-xs text-white/40">
                     Tocá una opción de abono para poder agendar.
                   </p>
                 )}
               </div>
 
-              {dep > 0 && (
+              {customerId && creditAvailable > 0 && (
+                <label className="flex items-start gap-2 rounded-xl border border-gold/30 bg-gold/[0.06] p-3 text-sm text-white/80">
+                  <input
+                    type="checkbox"
+                    checked={depositFromCredit}
+                    onChange={(e) => setDepositFromCredit(e.target.checked)}
+                    className="mt-0.5 rounded border-white/20 bg-ink-800 text-gold-400 focus:ring-gold/40"
+                  />
+                  <span>
+                    Pagar la seña con saldo a favor
+                    <span className="mt-0.5 block text-xs text-white/40">
+                      Disponible {money(creditAvailable)}. Se descuenta del saldo;
+                      no entra plata a caja.
+                    </span>
+                  </span>
+                </label>
+              )}
+
+              {dep > 0 && payWithCredit && (
+                <div className="space-y-1">
+                  {dep > creditAvailable ? (
+                    <p className="flex items-start gap-2 rounded-xl border border-danger/40 bg-danger/10 p-3 text-xs text-danger">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      El saldo a favor ({money(creditAvailable)}) no alcanza para
+                      esta seña.
+                    </p>
+                  ) : (
+                    <p className="rounded-xl border border-success/30 bg-success/10 p-3 text-xs text-success">
+                      La seña de {money(dep)} se descuenta del saldo a favor.
+                      Quedarían {money(creditAvailable - dep)}.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {dep > 0 && !payWithCredit && (
                 <div className="space-y-1">
                   <span className="block text-xs font-medium text-white/60">
                     Cobrar seña en
@@ -1716,7 +1822,7 @@ function NewAppointment() {
                   ? 'Elegí el cliente'
                   : !clientReady
                     ? 'Escribí el nombre del cliente'
-                    : !depositChosen
+                    : !depositReady
                       ? 'Elegí el abono'
                       : 'Todo listo para agendar'}
               </p>
@@ -1726,8 +1832,11 @@ function NewAppointment() {
                 disabled={
                   cats.length === 0 ||
                   !clientReady ||
-                  !depositChosen ||
-                  (dep > 0 && !hasOpenCashToday)
+                  !depositReady ||
+                  (dep > 0 && !payWithCredit && !hasOpenCashToday) ||
+                  (payWithCredit &&
+                    dep > 0 &&
+                    (!creditMethod || dep > creditAvailable))
                 }
                 loading={save.isPending}
                 onClick={() => attemptSchedule(false)}
@@ -1875,6 +1984,8 @@ interface ApptHead {
   customer_email: string | null;
   customer_birth_date: string | null;
   customer_tax_id: string | null;
+  customer_allergies: string | null;
+  customer_hair_notes: string | null;
   created_at: string | null;
   created_by_name: string | null;
   google_calendar_id: string | null;
@@ -1927,6 +2038,8 @@ function EditAppointment({ id }: { id: string }) {
                 c.email AS customer_email,
                 c.birth_date AS customer_birth_date,
                 c.tax_id AS customer_tax_id,
+                c.allergies AS customer_allergies,
+                c.hair_notes AS customer_hair_notes,
                 u.full_name AS created_by_name
            FROM appointment a
            LEFT JOIN customer c ON c.id = a.customer_id
@@ -2422,6 +2535,11 @@ function EditAppointment({ id }: { id: string }) {
             onAddProduct={({ pid, qty, product }) =>
               addProduct.mutate({ pid, qty, product })
             }
+          />
+
+          <CustomerCareNotes
+            allergies={head.data.customer_allergies}
+            hairNotes={head.data.customer_hair_notes}
           />
 
           {head.data.customer_id && (
@@ -3567,9 +3685,18 @@ function ConfirmSaleModal({
   const [dest, setDest] = useState('');
   const [reference, setReference] = useState('');
   const [error, setError] = useState('');
+  // Saldo a favor a canjear en este cobro (parcial o total del saldo pendiente).
+  const [creditStr, setCreditStr] = useState('');
 
   const target = usePaymentTarget(orgId, branchId, dest);
   const { sessionId, effectiveDest, isCash, method, hasOpenCashToday } = target;
+
+  // Saldo a favor disponible del cliente (solo clientes con ficha lo tienen).
+  const creditQ = useCustomerCredit(customerId);
+  const creditAvailable = creditQ.data?.balance ?? 0;
+  const creditMethod = storeCreditMethod(target.methods.data);
+  const creditUsed = Math.min(Math.max(0, Number(creditStr) || 0), creditAvailable, balance);
+  const dueInMoney = Math.max(0, balance - creditUsed);
 
   // ¿La cita es de un día anterior? → venta retroactiva.
   const now = new Date();
@@ -3595,7 +3722,7 @@ function ConfirmSaleModal({
         throw new Error('Esta cita ya fue atendida y cobrada.');
       }
 
-      if (balance > 0 && !method)
+      if (dueInMoney > 0 && !method)
         throw new Error(
           `No hay un método de pago ${
             isCash ? 'en efectivo' : 'por transferencia'
@@ -3655,8 +3782,16 @@ function ConfirmSaleModal({
         soldAt: serviceDate,
       });
 
+      // Canje de saldo a favor: se revalida el disponible contra la base y se
+      // acota a lo que queda por cobrar (tras la seña ya pagada).
+      let creditToUse = 0;
+      if (customerId && creditUsed > 0) {
+        const avail = await creditBalance(customerId);
+        creditToUse = Math.min(creditUsed, avail, balance);
+      }
+      const payInMoney = Math.max(0, balance - creditToUse);
+
       const now = new Date().toISOString();
-      const pay = balance;
       const stmts: Stmt[] = [];
 
       // La seña ya cobrada se atribuye a esta venta (deja de ser "otro ingreso").
@@ -3666,8 +3801,8 @@ function ConfirmSaleModal({
         args: [saleId, appointmentId],
       });
 
-      // Cobro del saldo (solo si queda algo por cobrar tras la seña).
-      if (pay > 0) {
+      // Cobro del saldo en plata real (solo si queda algo tras seña y canje).
+      if (payInMoney > 0) {
         const paymentId = genId();
         stmts.push({
           sql: `INSERT INTO payment
@@ -3682,7 +3817,7 @@ function ConfirmSaleModal({
             method!.id,
             isCash ? null : effectiveDest,
             now,
-            pay,
+            payInMoney,
             reference || null,
           ],
         });
@@ -3698,7 +3833,7 @@ function ConfirmSaleModal({
               genId(),
               sessionId,
               branchId,
-              pay,
+              payInMoney,
               now,
               saleId,
               paymentId,
@@ -3707,6 +3842,38 @@ function ConfirmSaleModal({
             ],
           });
         }
+      }
+
+      // Parte pagada con saldo a favor: pago que NO mueve plata real + descuento
+      // del saldo en la libreta del cliente.
+      if (creditToUse > 0) {
+        if (!creditMethod)
+          throw new Error('No está configurado el método "Saldo a favor".');
+        const creditPaymentId = genId();
+        stmts.push({
+          sql: `INSERT INTO payment
+                  (id, organization_id, branch_id, sale_id, payment_method_id,
+                   bank_account_id, paid_at, amount, status, reference)
+                VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 'confirmed', '[Saldo a favor]')`,
+          args: [creditPaymentId, orgId, branchId, saleId, creditMethod.id, now, creditToUse],
+        });
+        stmts.push({
+          sql: `INSERT INTO customer_credit_ledger
+                  (id, organization_id, customer_id, amount, kind, sale_id,
+                   appointment_id, payment_id, note, created_by, created_at)
+                VALUES (?, ?, ?, ?, 'redeem', ?, ?, ?, '[Canje] venta de cita', ?, ?)`,
+          args: [
+            genId(),
+            orgId,
+            customerId,
+            -creditToUse,
+            saleId,
+            appointmentId,
+            creditPaymentId,
+            userId,
+            now,
+          ],
+        });
       }
 
       // La cita queda atendida. Si venía de un cierre "sin cobro", se le quita
@@ -3728,6 +3895,7 @@ function ConfirmSaleModal({
     onSuccess: () => {
       invalidateAppointments(qc, appointmentId);
       invalidateSales(qc, branchId);
+      invalidateCredit(qc);
       toast.success('Venta confirmada', `${customerName ?? 'Cliente'} · ${money(total)}`);
       onDone();
     },
@@ -3742,8 +3910,8 @@ function ConfirmSaleModal({
   const canConfirm =
     items.length > 0 &&
     !confirm.isPending &&
-    hasOpenCashToday &&
-    (balance === 0 || (!!method && balance > 0));
+    (creditUsed === 0 || !!creditMethod) &&
+    (dueInMoney === 0 || (!!method && hasOpenCashToday));
 
   return (
     <Modal open onClose={onClose} title="Confirmar venta">
@@ -3761,27 +3929,73 @@ function ConfirmSaleModal({
               </span>
             </div>
           )}
+          {creditUsed > 0 && (
+            <div className="flex items-center justify-between text-white/60">
+              <span>Saldo a favor</span>
+              <span className="kpi-success text-xl leading-none">
+                −{money(creditUsed)}
+              </span>
+            </div>
+          )}
           <div className="flex justify-between border-t border-white/10 pt-1 font-medium text-white">
-            <span>Saldo a cobrar</span>
-            <span className="kpi-gold">{money(balance)}</span>
+            <span>{creditUsed > 0 ? 'Resta en otro medio' : 'Saldo a cobrar'}</span>
+            <span className="kpi-gold">{money(dueInMoney)}</span>
           </div>
         </div>
 
-        <PaymentTargetFields
-          target={target}
-          onDest={setDest}
-          reference={reference}
-          onReference={setReference}
-          extra={
-            isRetroactive ? (
-              <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
-                <AlertTriangle className="h-3.5 w-3.5" /> Venta retroactiva: el
-                servicio se registra con fecha {dateShort(serviceDay)}; el cobro
-                entra a la caja de hoy.
-              </p>
-            ) : undefined
-          }
-        />
+        {customerId && creditAvailable > 0 && balance > 0 && (
+          <div className="space-y-2 rounded-xl border border-gold/30 bg-gold/[0.06] p-3">
+            <div className="flex items-center justify-between text-sm">
+              <span className="font-medium text-gold-100">Saldo a favor</span>
+              <span className="text-white/60">
+                Disponible {money(creditAvailable)}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Input
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="0.01"
+                placeholder="0.00"
+                value={creditStr}
+                onChange={(e) => setCreditStr(e.target.value)}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  setCreditStr(String(Math.min(creditAvailable, balance)))
+                }
+              >
+                Usar todo
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {dueInMoney > 0 ? (
+          <PaymentTargetFields
+            target={target}
+            onDest={setDest}
+            reference={reference}
+            onReference={setReference}
+            extra={
+              isRetroactive ? (
+                <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
+                  <AlertTriangle className="h-3.5 w-3.5" /> Venta retroactiva: el
+                  servicio se registra con fecha {dateShort(serviceDay)}; el
+                  cobro entra a la caja de hoy.
+                </p>
+              ) : undefined
+            }
+          />
+        ) : (
+          <p className="rounded-xl border border-success/30 bg-success/10 p-3 text-sm text-success">
+            La venta queda cubierta con el saldo a favor
+            {depositPaid > 0 ? ' y la seña' : ''}. No entra plata a caja.
+          </p>
+        )}
         {error && <p className="text-xs text-danger">{error}</p>}
 
         <Button

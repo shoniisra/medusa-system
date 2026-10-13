@@ -14,6 +14,7 @@ import { SERVICE_CATEGORIES } from '@/config/constants';
 import { cn } from '@/lib/cn';
 import { Button, Card, CardHeader, Input, Modal, Select } from '@/components/ui';
 import { commissionForItem, type CommissionRule } from './createSale';
+import { useCategorySkills } from '@/features/staff/useCategorySkills';
 import {
   useCreateProduct,
   useCreateService,
@@ -746,6 +747,25 @@ function AddServiceSheet({
   // contenedor todavía tiene en memoria el catálogo anterior.
   const [created, setCreated] = useState<Service | null>(null);
   const createService = useCreateService();
+  const { eligibleByCat, defaultStaffForCategory } = useCategorySkills();
+
+  // Para el paso "¿Quién lo hace?": estilista sugerida por especialidad y
+  // orden que pone a las candidatas de la categoría primero.
+  const staffPick = useMemo(() => {
+    if (!service) {
+      return { ordered: staff, suggestedId: '', priorityById: new Map<string, number>() };
+    }
+    const elig = eligibleByCat.get(service.category ?? '') ?? [];
+    const priorityById = new Map(elig.map((e) => [e.staffId, e.priority]));
+    const suggestedId = defaultStaffForCategory(service.category);
+    const ordered = [
+      ...elig
+        .map((e) => staff.find((s) => s.id === e.staffId))
+        .filter((s): s is StaffMember => !!s),
+      ...staff.filter((s) => !priorityById.has(s.id)),
+    ];
+    return { ordered, suggestedId, priorityById };
+  }, [service, staff, eligibleByCat, defaultStaffForCategory]);
 
   const OTHERS = 'Otros';
   // Solo las categorías que tienen servicios cargados.
@@ -849,26 +869,40 @@ function AddServiceSheet({
             >
               Sin asignar
             </button>
-            {staff.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() =>
-                  onAdd(
-                    service.id,
-                    s.id,
-                    created?.id === service.id ? created : undefined,
-                  )
-                }
-                className={CARD_BASE}
-              >
-                <span
-                  className="h-2.5 w-2.5 rounded-full"
-                  style={{ background: s.color || '#64748b' }}
-                />
-                {fullName(s.first_name, s.last_name)}
-              </button>
-            ))}
+            {staffPick.ordered.map((s) => {
+              const suggested = s.id === staffPick.suggestedId;
+              const backup = (staffPick.priorityById.get(s.id) ?? 1) >= 2;
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() =>
+                    onAdd(
+                      service.id,
+                      s.id,
+                      created?.id === service.id ? created : undefined,
+                    )
+                  }
+                  className={cn(
+                    CARD_BASE,
+                    suggested && 'border-gold-400/70 bg-gold-400/10',
+                  )}
+                >
+                  <span
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ background: s.color || '#64748b' }}
+                  />
+                  {fullName(s.first_name, s.last_name)}
+                  {suggested ? (
+                    <span className="text-[11px] font-medium text-gold-200">
+                      sugerida
+                    </span>
+                  ) : backup ? (
+                    <span className="text-[11px] text-white/40">respaldo</span>
+                  ) : null}
+                </button>
+              );
+            })}
           </div>
         </>
       ) : (

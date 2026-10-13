@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useQuery, type QueryClient } from '@tanstack/react-query';
-import { Check, GripVertical, Play } from 'lucide-react';
+import { Check, GripVertical, Play, TriangleAlert } from 'lucide-react';
 import { execute, query } from '@/lib/db';
 import { useBranchId } from '@/store/session';
 import { APPOINTMENT_STATUS } from '@/config/constants';
@@ -22,6 +22,10 @@ export interface AppointmentRow {
   customer_id: string | null;
   customer_name: string | null;
   phone: string | null;
+  /** Alergias / sensibilidades de la ficha, para avisar antes de atender. */
+  allergies: string | null;
+  /** Notas capilares (condición, historial químico, color). */
+  hair_notes: string | null;
   staff_id: string | null;
   staff_name: string | null;
   staff_color: string | null;
@@ -177,6 +181,8 @@ export function useAppointments(from: string, to: string) {
                 a.google_color_hex,
                 ${customerNameSql()} AS customer_name,
                 c.phone,
+                c.allergies,
+                c.hair_notes,
                 s.id AS staff_id,
                 s.first_name || CASE WHEN s.last_name IS NOT NULL THEN ' ' || s.last_name ELSE '' END AS staff_name,
                 s.color AS staff_color,
@@ -344,6 +350,14 @@ export function ListView({
                     </span>
                   )}
                   <CustomerTenureBadge a={a} />
+                  {a.allergies && (
+                    <span
+                      className="inline-flex items-center gap-1 rounded bg-danger/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-danger"
+                      title={a.allergies}
+                    >
+                      <TriangleAlert className="h-3 w-3" /> Alergia
+                    </span>
+                  )}
                   {/* El estado va junto a la hora en móvil; en escritorio, al final. */}
                   <span className="lg:hidden">
                     <Badge tone={meta.tone}>{meta.label}</Badge>

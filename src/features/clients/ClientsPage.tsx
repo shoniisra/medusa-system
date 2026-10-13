@@ -59,6 +59,7 @@ import { ROUTES } from '@/config/constants';
 import { phoneToWaDigits, validatePhone } from '@/lib/phone';
 import { normalizeEmail, validateEmail } from '@/lib/email';
 import { findCustomerByPhone } from './customerLookup';
+import { CustomerCreditCard } from './CustomerCreditCard';
 import { DuplicatePhoneNotice } from './DuplicatePhoneNotice';
 import type { Customer, CustomerColorRecord } from '@/types';
 import {
@@ -959,6 +960,8 @@ function ClientDetail({ customer }: { customer: Customer }) {
 
           <ColorRecordsCard customerId={id} />
 
+          <CustomerCreditCard customerId={id} customerLabel={customerName(customer)} />
+
           {/* Historial de pagos: todo cobro confirmado del cliente, abierto al
               detalle de la cita (una sola pantalla donde recibir reclamos). */}
           <Card>
@@ -1117,6 +1120,8 @@ interface ClientDraft extends CustomerDraft {
   notes: string;
   allergies: string;
   hairNotes: string;
+  /** Clienta de confianza: no pedirle abono al reservar. */
+  depositExempt: boolean;
 }
 
 function draftFromCustomer(c: Customer): ClientDraft {
@@ -1133,6 +1138,7 @@ function draftFromCustomer(c: Customer): ClientDraft {
     notes: c.notes ?? '',
     allergies: c.allergies ?? '',
     hairNotes: c.hair_notes ?? '',
+    depositExempt: c.deposit_exempt === 1,
   };
 }
 
@@ -1217,7 +1223,7 @@ function useClientDraft(
            first_name = ?, last_name = ?, nickname = ?, imported_name = ?,
            phone = ?, email = ?, birth_date = ?, tax_id = ?,
            preferred_staff_id = ?, notes = ?, allergies = ?, hair_notes = ?,
-           updated_at = ?
+           deposit_exempt = ?, updated_at = ?
          WHERE id = ?`,
         [
           draft.firstName.trim(),
@@ -1232,6 +1238,7 @@ function useClientDraft(
           draft.notes.trim() || null,
           draft.allergies.trim() || null,
           draft.hairNotes.trim() || null,
+          draft.depositExempt ? 1 : 0,
           new Date().toISOString(),
           customer.id,
         ],
@@ -1304,6 +1311,22 @@ function ClientForm({
             </option>
           ))}
         </Select>
+
+        <label className="flex items-start gap-2 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm text-white/80">
+          <input
+            type="checkbox"
+            checked={draft.depositExempt}
+            onChange={(e) => set('depositExempt', e.target.checked)}
+            className="mt-0.5 rounded border-white/20 bg-ink-800 text-gold-400 focus:ring-gold/40"
+          />
+          <span>
+            No pedir abono al reservar
+            <span className="mt-0.5 block text-xs text-white/40">
+              Clienta de confianza: el asistente de citas deja la seña en cero y
+              no la exige.
+            </span>
+          </span>
+        </label>
 
         <TextArea
           label="Alergias / sensibilidades"

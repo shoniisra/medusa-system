@@ -107,6 +107,7 @@ export function QuickCustomerModal({
         allergies: null,
         hair_notes: null,
         preferred_staff_id: null,
+        deposit_exempt: 0,
         first_visit_at: null,
         last_visit_at: null,
         active: 1,
