@@ -5,8 +5,6 @@ import {
   Plus,
   HandCoins,
   Scissors,
-  ChevronLeft,
-  ChevronRight,
   Scale,
 } from 'lucide-react';
 import { query, queryOne, batch, execute, type Stmt } from '@/lib/db';
@@ -18,7 +16,6 @@ import {
   Badge,
   Button,
   Select,
-  DateInput,
   Input,
   Modal,
   EmptyState,
@@ -146,11 +143,9 @@ export function StaffPage() {
         </Button>
       </div>
 
-      <LiquidationSection orgId={orgId} />
-
       <CommissionBalanceSection orgId={orgId} />
 
-      <TeamDailySection orgId={orgId} />
+      <TeamActivitySection orgId={orgId} />
 
       <AdvanceModal open={advanceOpen} onClose={() => setAdvanceOpen(false)} />
     </div>
@@ -166,14 +161,40 @@ interface DailyServiceRow {
   sold_at: string;
 }
 
+type RangeKey = 'today' | 'yesterday' | 'week' | 'month';
+
+const RANGE_LABELS: Record<RangeKey, string> = {
+  today: 'Hoy',
+  yesterday: 'Ayer',
+  week: 'Esta semana',
+  month: 'Este mes',
+};
+
+/** Límites locales (YYYY-MM-DD, inclusivos) del rango elegido. */
+function rangeBounds(key: RangeKey): { from: string; to: string } {
+  const now = new Date();
+  if (key === 'today') return { from: todayISO(), to: todayISO() };
+  if (key === 'yesterday') {
+    const y = new Date(now);
+    y.setDate(now.getDate() - 1);
+    return { from: ymd(y), to: ymd(y) };
+  }
+  if (key === 'week') return weekBounds(now);
+  const first = new Date(now.getFullYear(), now.getMonth(), 1);
+  const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  return { from: ymd(first), to: ymd(last) };
+}
+
 /**
- * Colaboradores del salón en un grid de tarjetas. Cada tarjeta muestra al
- * colaborador y, si tuvo servicios facturados en la fecha elegida, los lista
- * debajo con su total. Fusiona el equipo con los servicios del día.
+ * Actividad del equipo en un rango (hoy, ayer, esta semana, este mes): cada
+ * tarjeta muestra al colaborador y los servicios que facturó en ese rango, con
+ * su total. Fusiona el equipo con los servicios del período.
  */
-function TeamDailySection({ orgId }: { orgId: string }) {
+function TeamActivitySection({ orgId }: { orgId: string }) {
   const branchId = useBranchId();
-  const [day, setDay] = useState(todayISO());
+  const [range, setRange] = useState<RangeKey>('today');
+  const { from, to } = useMemo(() => rangeBounds(range), [range]);
+  const multiDay = from !== to;
 
   const staff = useQuery({
     queryKey: ['staff', orgId],
@@ -186,7 +207,7 @@ function TeamDailySection({ orgId }: { orgId: string }) {
   });
 
   const rows = useQuery({
-    queryKey: ['daily-services', branchId, day],
+    queryKey: ['team-activity', branchId, from, to],
     enabled: !!branchId,
     queryFn: () =>
       query<DailyServiceRow>(
@@ -203,13 +224,13 @@ function TeamDailySection({ orgId }: { orgId: string }) {
            LEFT JOIN customer c ON c.id = s.customer_id
           WHERE s.branch_id = ?
             AND s.status IN ('completed','partially_refunded')
-            AND date(s.sold_at) = ?
+            AND date(s.sold_at) BETWEEN ? AND ?
           ORDER BY sm.first_name, s.sold_at`,
-        [branchId, day],
+        [branchId, from, to],
       ),
   });
 
-  /** Servicios del día agrupados por colaborador. */
+  /** Servicios del rango agrupados por colaborador. */
   const byStaff = useMemo(() => {
     const m = new Map<string, { items: DailyServiceRow[]; total: number }>();
     for (const r of rows.data ?? []) {
@@ -226,16 +247,23 @@ function TeamDailySection({ orgId }: { orgId: string }) {
   return (
     <Card>
       <CardHeader
-        title="Colaboradores"
-        subtitle="Equipo del salón y sus servicios del día"
+        title="Actividad del equipo"
+        subtitle="Servicios facturados por cada colaborador"
         action={
-          <div className="w-44">
-            <DateInput
-              value={day}
-              onChange={(v) => v && setDay(v)}
-              clearable={false}
-              size="sm"
-            />
+          <div className="flex flex-wrap gap-1 rounded-xl bg-white/5 p-1">
+            {(Object.keys(RANGE_LABELS) as RangeKey[]).map((k) => (
+              <button
+                key={k}
+                onClick={() => setRange(k)}
+                className={
+                  range === k
+                    ? 'rounded-lg bg-gradient-to-b from-gold-300 to-gold-500 px-3 py-1.5 text-xs font-semibold text-ink-950 shadow-gold-glow'
+                    : 'rounded-lg px-3 py-1.5 text-xs font-medium text-white/60 hover:bg-white/10 hover:text-white'
+                }
+              >
+                {RANGE_LABELS[k]}
+              </button>
+            ))}
           </div>
         }
       />
@@ -304,6 +332,7 @@ function TeamDailySection({ orgId }: { orgId: string }) {
                           {it.service}
                           <span className="text-white/40">
                             {it.client ? ` · ${it.client}` : ''}
+                            {multiDay ? ` · ${dateShort(it.sold_at)}` : ''}
                           </span>
                         </span>
                         <span className="shrink-0 font-medium text-white">
@@ -314,7 +343,7 @@ function TeamDailySection({ orgId }: { orgId: string }) {
                   </ul>
                 ) : (
                   <p className="mt-3 flex items-center gap-1.5 text-xs text-white/40">
-                    <Scissors className="h-3.5 w-3.5" /> Sin servicios ese día
+                    <Scissors className="h-3.5 w-3.5" /> Sin servicios en el período
                   </p>
                 )}
               </div>
@@ -328,15 +357,6 @@ function TeamDailySection({ orgId }: { orgId: string }) {
   );
 }
 
-interface LiquidationRow {
-  staff_member_id: string;
-  staff_name: string;
-  color: string | null;
-  commission_total: number;
-  advances_total: number;
-  net_payable: number;
-}
-
 /** Límites (lunes–domingo) de la semana que contiene a `ref`. */
 function weekBounds(ref: Date): { from: string; to: string } {
   const diffToMon = (ref.getDay() + 6) % 7; // 0 = lunes
@@ -345,171 +365,6 @@ function weekBounds(ref: Date): { from: string; to: string } {
   const sun = new Date(mon);
   sun.setDate(mon.getDate() + 6);
   return { from: ymd(mon), to: ymd(sun) };
-}
-
-/**
- * Liquidación por semana: comisiones − adelantos = neto a pagar.
- * Se calcula al vuelo desde las ventas y adelantos reales del rango (no depende
- * de periodos pre-creados). Por defecto muestra la semana actual.
- */
-function LiquidationSection({ orgId }: { orgId: string }) {
-  const branchId = useBranchId();
-  const [weekRef, setWeekRef] = useState(() => new Date());
-  const { from, to } = useMemo(() => weekBounds(weekRef), [weekRef]);
-
-  const shiftWeek = (days: number) =>
-    setWeekRef((d) => {
-      const n = new Date(d);
-      n.setDate(n.getDate() + days);
-      return n;
-    });
-
-  const liq = useQuery({
-    queryKey: ['liquidation', branchId, from, to],
-    enabled: !!branchId && !!orgId,
-    queryFn: async (): Promise<LiquidationRow[]> => {
-      const [staff, commissions, advances] = await Promise.all([
-        query<{ id: string; name: string; color: string | null }>(
-          `SELECT id,
-                  first_name || CASE WHEN last_name IS NOT NULL THEN ' ' || last_name ELSE '' END AS name,
-                  color
-             FROM staff_member
-            WHERE organization_id = ? AND active = 1
-            ORDER BY first_name`,
-          [orgId],
-        ),
-        query<{ staff_member_id: string; total: number }>(
-          `SELECT sss.staff_member_id AS staff_member_id,
-                  ROUND(SUM(sss.commission_amount), 2) AS total
-             FROM sale_service_staff sss
-             JOIN sale_item si ON si.id = sss.sale_item_id
-             JOIN sale s ON s.id = si.sale_id
-            WHERE s.branch_id = ?
-              AND s.status IN ('completed', 'partially_refunded')
-              AND date(s.sold_at) BETWEEN ? AND ?
-            GROUP BY sss.staff_member_id`,
-          [branchId, from, to],
-        ),
-        query<{ staff_member_id: string; total: number }>(
-          `SELECT staff_member_id, ROUND(SUM(amount), 2) AS total
-             FROM staff_advance
-            WHERE branch_id = ? AND status = 'confirmed'
-              AND date(advance_date) BETWEEN ? AND ?
-              AND COALESCE(notes,'') NOT LIKE '${ADJUST_COMMISSION_MARK}%'
-            GROUP BY staff_member_id`,
-          [branchId, from, to],
-        ),
-      ]);
-      const cMap = new Map(commissions.map((c) => [c.staff_member_id, c.total]));
-      const aMap = new Map(advances.map((a) => [a.staff_member_id, a.total]));
-      return staff.map((s) => {
-        const commission_total = cMap.get(s.id) ?? 0;
-        const advances_total = aMap.get(s.id) ?? 0;
-        return {
-          staff_member_id: s.id,
-          staff_name: s.name,
-          color: s.color,
-          commission_total,
-          advances_total,
-          net_payable:
-            Math.round((commission_total - advances_total) * 100) / 100,
-        };
-      });
-    },
-  });
-
-  const rows = liq.data ?? [];
-  const totals = rows.reduce(
-    (acc, r) => ({
-      c: acc.c + r.commission_total,
-      a: acc.a + r.advances_total,
-      n: acc.n + r.net_payable,
-    }),
-    { c: 0, a: 0, n: 0 },
-  );
-  const isCurrentWeek = weekBounds(new Date()).from === from;
-
-  return (
-    <Card gold>
-      <CardHeader
-        title="Liquidación de comisiones"
-        subtitle="Comisiones − adelantos = neto a pagar"
-        action={
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => shiftWeek(-7)}
-              title="Semana anterior"
-              className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-            <span className="min-w-[9rem] text-center text-xs font-medium text-white/70">
-              {dateShort(from)} – {dateShort(to)}
-            </span>
-            <button
-              onClick={() => shiftWeek(7)}
-              title="Semana siguiente"
-              className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
-            {!isCurrentWeek && (
-              <Button size="sm" variant="ghost" onClick={() => setWeekRef(new Date())}>
-                Hoy
-              </Button>
-            )}
-          </div>
-        }
-      />
-
-      {rows.length > 0 ? (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs uppercase text-white/40">
-                <th className="pb-2">Colaborador</th>
-                <th className="pb-2 text-right">Comisiones</th>
-                <th className="pb-2 text-right">Adelantos</th>
-                <th className="pb-2 text-right">Neto</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {rows.map((r) => (
-                <tr key={r.staff_member_id} style={staffRowStyle(r.color)}>
-                  <StaffNameCell color={r.color} name={r.staff_name} />
-                  <td className="py-2 text-right text-white/70">
-                    {money(r.commission_total)}
-                  </td>
-                  <td className="py-2 text-right text-danger">
-                    {r.advances_total > 0 ? `−${money(r.advances_total)}` : money(0)}
-                  </td>
-                  <td className="py-2 text-right font-semibold text-gold-200">
-                    {money(r.net_payable)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="border-t border-white/10 text-sm font-semibold">
-                <td className="pt-2 text-white/70">Total</td>
-                <td className="pt-2 text-right text-white/70">{money(totals.c)}</td>
-                <td className="pt-2 text-right text-danger">
-                  {totals.a > 0 ? `−${money(totals.a)}` : money(0)}
-                </td>
-                <td className="pt-2 text-right text-gold-200">{money(totals.n)}</td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-      ) : (
-        <EmptyState
-          icon={Users}
-          title="Sin colaboradores activos"
-          description="Agregá colaboradores para ver su liquidación semanal."
-        />
-      )}
-    </Card>
-  );
 }
 
 interface CommissionBalanceRow {
@@ -537,7 +392,12 @@ function CommissionBalanceSection({ orgId }: { orgId: string }) {
     queryKey: ['commission-balance', branchId, orgId],
     enabled: !!branchId && !!orgId,
     queryFn: async (): Promise<CommissionBalanceRow[]> => {
-      const today = todayISO();
+      // "A la fecha" = hasta este instante. Se compara contra el timestamp UTC
+      // actual (no contra date(...) con el día local): sold_at y paid_at se
+      // guardan con toISOString() en UTC, así que un pago o venta de la noche
+      // en UTC−5 ya cae en el día siguiente en UTC y date(x) <= hoy-local lo
+      // dejaba fuera. Por eso un pago recién registrado no bajaba el pendiente.
+      const nowIso = new Date().toISOString();
       const [staff, accrued, advances, payments] = await Promise.all([
         query<{ id: string; name: string; color: string | null }>(
           `SELECT id,
@@ -556,27 +416,27 @@ function CommissionBalanceSection({ orgId }: { orgId: string }) {
              JOIN sale s ON s.id = si.sale_id
             WHERE s.branch_id = ?
               AND s.status IN ('completed', 'partially_refunded')
-              AND date(s.sold_at) <= ?
+              AND s.sold_at <= ?
             GROUP BY sss.staff_member_id`,
-          [branchId, today],
+          [branchId, nowIso],
         ),
         // incluye ajustes (marca [Ajuste de comisión]) para el acumulado
         query<{ staff_member_id: string; total: number }>(
           `SELECT staff_member_id, ROUND(SUM(amount), 2) AS total
              FROM staff_advance
             WHERE branch_id = ? AND status = 'confirmed'
-              AND date(advance_date) <= ?
+              AND advance_date <= ?
             GROUP BY staff_member_id`,
-          [branchId, today],
+          [branchId, nowIso],
         ),
         // pagos de comisiones ya liquidados
         query<{ staff_member_id: string; total: number }>(
           `SELECT staff_member_id, ROUND(SUM(net_paid), 2) AS total
              FROM staff_payment
             WHERE branch_id = ? AND status = 'confirmed'
-              AND date(paid_at) <= ?
+              AND paid_at <= ?
             GROUP BY staff_member_id`,
-          [branchId, today],
+          [branchId, nowIso],
         ),
       ]);
       const accMap = new Map(accrued.map((c) => [c.staff_member_id, c.total]));
@@ -642,21 +502,18 @@ function CommissionBalanceSection({ orgId }: { orgId: string }) {
                     {money(r.pending)}
                   </td>
                   <td className="py-2">
-                    <div className="flex items-center justify-end gap-1">
+                    <div className="flex items-center justify-end gap-2">
+                      {r.pending > 0.001 && (
+                        <Button size="sm" onClick={() => setPay(r)}>
+                          <HandCoins className="h-4 w-4" /> Pagar
+                        </Button>
+                      )}
                       <button
-                        title="Pagar / liquidar comisiones"
-                        disabled={r.pending <= 0.001}
-                        onClick={() => setPay(r)}
-                        className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-emerald-300 disabled:cursor-not-allowed disabled:opacity-30"
-                      >
-                        <HandCoins className="h-4 w-4" />
-                      </button>
-                      <button
-                        title="Cuadrar saldo"
+                        title="Cuadrar saldo (ajustar pendiente real)"
                         onClick={() => setAdjust(r)}
-                        className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-gold-300"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-medium text-white/60 hover:border-white/25 hover:bg-white/5 hover:text-gold-300"
                       >
-                        <Scale className="h-4 w-4" />
+                        <Scale className="h-3.5 w-3.5" /> Cuadrar
                       </button>
                     </div>
                   </td>
