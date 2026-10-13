@@ -7,6 +7,7 @@ import {
   Contact,
   CalendarDays,
   CalendarRange,
+  CalendarOff,
   ClipboardList,
   FileText,
   Settings,
@@ -63,7 +64,19 @@ const NAV_SECTIONS: {
   {
     items: [
       { to: ROUTES.cashflow, label: "Finanzas", icon: Wallet },
-      { to: ROUTES.staff, label: "Personal", icon: Users },
+      {
+        to: ROUTES.staff,
+        label: "Personal",
+        icon: Users,
+        children: [
+          { to: ROUTES.staff, label: "Nómina", icon: Users, end: true },
+          {
+            to: ROUTES.staffAbsences,
+            label: "Ausencias y cierres",
+            icon: CalendarOff,
+          },
+        ],
+      },
       { to: ROUTES.clients, label: "Clientes", icon: Contact },
       { to: ROUTES.invoices, label: "Facturación", icon: FileText },
       { to: ROUTES.settings, label: "Configuración", icon: Settings },

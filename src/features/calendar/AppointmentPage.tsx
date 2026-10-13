@@ -58,6 +58,7 @@ import {
   useAssistTypes,
 } from '@/features/pos/useCatalog';
 import { useCategorySkills } from '@/features/staff/useCategorySkills';
+import { useTimeOff } from '@/features/staff/useTimeOff';
 import {
   DEFAULT_SERVICE_MINUTES,
   minutesForCategory,
@@ -65,6 +66,8 @@ import {
   fromMinutes,
   hoursForDate,
   overlaps,
+  salonClosedOn,
+  staffOffOn,
   type Interval,
 } from '@/config/schedule';
 import { cn } from '@/lib/cn';
@@ -288,6 +291,8 @@ function NewAppointment() {
 
   const customers = useCustomers();
   const staff = useStaff();
+  // Ausencias/cierres para respetar vacaciones, permisos y días cerrados.
+  const timeOff = useTimeOff();
 
   // Paso del asistente: 1) qué · 2) cuándo · 3) cliente y abono.
   const [step, setStep] = useState<1 | 2 | 3>(1);
@@ -318,6 +323,9 @@ function NewAppointment() {
    */
   const timePicked = useRef(false);
   const [conflicts, setConflicts] = useState<string[]>([]);
+  // Bloqueos duros (ausencia/cierre): no se pueden forzar, a diferencia de
+  // `conflicts` (solapes/fuera de horario, que sí dejan "Agendar igual").
+  const [blockers, setBlockers] = useState<string[]>([]);
   const pickTime = useCallback((v: string) => {
     timePicked.current = true;
     setTime(v);
@@ -606,6 +614,13 @@ function NewAppointment() {
   }, [cats]);
   const reservedMinutes = cats.length ? Math.max(...staffBlocks.values()) : 0;
 
+  // El cuadro rojo de bloqueo deja de aplicar apenas cambia el día, la hora o
+  // las colaboradoras: lo limpiamos para no mostrar un motivo que ya no corre.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setBlockers([]);
+  }, [date, time, staffBlocks]);
+
   // Citas de la semana visible (para pintar disponibilidad en el calendario y
   // chequear solapes del día elegido). Una sola consulta por semana.
   const weekStart = useMemo(
@@ -732,9 +747,43 @@ function NewAppointment() {
     return warnings;
   }
 
+  /**
+   * Bloqueos duros: cierre del local o ausencia de una colaboradora en la fecha
+   * elegida. A diferencia de los avisos de `checkAvailability`, estos NO se
+   * pueden forzar (no hay "Agendar igual"): hay que cambiar día o colaboradora.
+   */
+  function hardBlockers(): string[] {
+    const rows = timeOff.data;
+    const out: string[] = [];
+    const closed = salonClosedOn(rows, date);
+    if (closed) {
+      out.push(
+        closed.reason
+          ? `El local está cerrado ese día (${closed.reason}).`
+          : 'El local está cerrado ese día (cierre registrado).',
+      );
+    }
+    for (const [key] of staffBlocks) {
+      if (key === '__none') continue;
+      const off = staffOffOn(rows, key, date);
+      // El cierre del local ya quedó avisado arriba; acá solo la ausencia propia.
+      if (off && off.staff_member_id === key) {
+        out.push(
+          off.reason
+            ? `${staffName(key)} está de ausencia ese día (${off.reason}).`
+            : `${staffName(key)} está de ausencia ese día.`,
+        );
+      }
+    }
+    return out;
+  }
+
   const save = useMutation({
     mutationFn: async () => {
       if (cats.length === 0) throw new Error('Elegí al menos una categoría.');
+      // Red de seguridad: nunca persistir una cita sobre un cierre/ausencia.
+      const hard = hardBlockers();
+      if (hard.length) throw new Error(hard.join(' '));
       if (!newClient && !customerId)
         throw new Error('Elegí un cliente o creá uno nuevo.');
       if (newClient && !firstName.trim())
@@ -1006,6 +1055,15 @@ function NewAppointment() {
   function attemptSchedule(force: boolean) {
     setError('');
     if (cats.length === 0) return;
+    // Los bloqueos duros se revisan siempre, incluso con `force`: no se agenda
+    // sobre un cierre del local ni sobre la ausencia de una colaboradora.
+    const hard = hardBlockers();
+    if (hard.length) {
+      setBlockers(hard);
+      setConflicts([]);
+      return;
+    }
+    setBlockers([]);
     if (!force) {
       const warnings = checkAvailability();
       if (warnings.length) {
@@ -1050,6 +1108,8 @@ function NewAppointment() {
   const slots = useMemo(() => {
     const hours = hoursForDate(date);
     if (!hours) return [];
+    // Cierre del local registrado (feriado/evento): ese día no hay horarios.
+    if (salonClosedOn(timeOff.data, date)) return [];
     const openMin = toMinutes(hours.open);
     const closeMin = toMinutes(hours.close);
     const dur = reservedMinutes || DEFAULT_SERVICE_MINUTES;
@@ -1068,6 +1128,8 @@ function NewAppointment() {
       let taken = false;
       for (const [key, d] of staffBlocks) {
         if (key === '__none') continue;
+        // Colaboradora ausente ese día o solape con una cita suya.
+        if (staffOffOn(timeOff.data, key, date)) taken = true;
         if (overlaps(bookedByStaff.get(key) ?? [], m, m + d)) taken = true;
       }
       const load = dayAppts.filter(
@@ -1082,7 +1144,7 @@ function NewAppointment() {
       });
     }
     return out;
-  }, [date, reservedMinutes, staffBlocks, bookedByStaff, dayAppts]);
+  }, [date, reservedMinutes, staffBlocks, bookedByStaff, dayAppts, timeOff.data]);
 
   /**
    * Si la hora elegida ya pasó o quedó ocupada (por cambio de día, de estilista
@@ -1129,7 +1191,9 @@ function NewAppointment() {
     for (let i = 0; i < 14; i++) {
       const iso = ymd(new Date(base.getTime() + i * 86400000));
       const hours = hoursForDate(iso);
-      if (!hours) continue; // local cerrado ese día
+      if (!hours) continue; // local cerrado ese día (día de semana sin horario)
+      // Cierre registrado o ausencia de esta colaboradora: salta al día siguiente.
+      if (staffOffOn(timeOff.data, staffId, iso)) continue;
       const openMin = toMinutes(hours.open);
       const closeMin = toMinutes(hours.close);
       const minStart = iso === todayISO ? nowMin : -1;
@@ -1149,7 +1213,7 @@ function NewAppointment() {
     return null;
   };
 
-  const closedDay = !hoursForDate(date);
+  const closedDay = !hoursForDate(date) || !!salonClosedOn(timeOff.data, date);
   const durationLabel = fmtDuration(reservedMinutes || DEFAULT_SERVICE_MINUTES);
 
   return (
@@ -1316,7 +1380,8 @@ function NewAppointment() {
               {dayStrip.map((iso) => {
                 const { wd, dm } = dayLabel(iso);
                 const on = iso === date;
-                const closed = !hoursForDate(iso);
+                const closed =
+                  !hoursForDate(iso) || !!salonClosedOn(timeOff.data, iso);
                 return (
                   <button
                     key={iso}
@@ -1734,6 +1799,32 @@ function NewAppointment() {
 
               {error && <p className="text-sm text-danger">{error}</p>}
 
+              {blockers.length > 0 && (
+                <div className="rounded-xl border border-danger/40 bg-danger/10 p-3 text-sm">
+                  <p className="mb-1 flex items-center gap-1.5 font-medium text-danger">
+                    <AlertTriangle className="h-4 w-4" /> No se puede agendar
+                  </p>
+                  <ul className="list-disc space-y-0.5 pl-5 text-red-100/80">
+                    {blockers.map((b, i) => (
+                      <li key={i}>{b}</li>
+                    ))}
+                  </ul>
+                  <div className="mt-3">
+                    <Button
+                      variant="outline"
+                      size="lg"
+                      className="w-full"
+                      onClick={() => {
+                        setBlockers([]);
+                        setStep(2);
+                      }}
+                    >
+                      Cambiar día u horario
+                    </Button>
+                  </div>
+                </div>
+              )}
+
               {conflicts.length > 0 && (
                 <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-sm">
                   <p className="mb-1 flex items-center gap-1.5 font-medium text-amber-200">
@@ -1822,7 +1913,7 @@ function NewAppointment() {
             </>
           )}
 
-          {step === 3 && conflicts.length === 0 && (
+          {step === 3 && conflicts.length === 0 && blockers.length === 0 && (
             <>
               <p className="hidden flex-1 text-sm text-white/50 sm:block">
                 {!hasClient

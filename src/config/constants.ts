@@ -73,6 +73,7 @@ export const ROUTES = {
   pos: '/pos',
   cashflow: '/finanzas',
   staff: '/personal',
+  staffAbsences: '/personal/ausencias',
   clients: '/clientes',
   client: '/clientes', // + /:id
   calendar: '/agenda',

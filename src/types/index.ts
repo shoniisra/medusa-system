@@ -267,6 +267,25 @@ export interface StaffServiceExclusion {
   updated_at: ISODateTime | null;
 }
 
+/**
+ * Ausencia de una colaboradora o cierre del local: rango [start_date, end_date]
+ * inclusivo en el que no se agenda. `staff_member_id` NULL = cierre del local
+ * (nadie trabaja); con valor = ausencia de esa colaboradora.
+ */
+export interface TimeOff {
+  id: ID;
+  organization_id: ID;
+  branch_id: ID | null;
+  staff_member_id: ID | null;
+  start_date: ISODate;
+  end_date: ISODate;
+  reason: string | null;
+  note: string | null;
+  active: BoolInt;
+  created_at: ISODateTime;
+  updated_at: ISODateTime | null;
+}
+
 /* ─────────────────────────── Ventas y comisiones ─────────────────────────── */
 
 export type SaleStatus =

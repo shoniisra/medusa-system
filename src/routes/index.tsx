@@ -22,6 +22,11 @@ const CashflowPage = lazyPage(() =>
 const StaffPage = lazyPage(() =>
   import('@/features/staff/StaffPage').then((m) => ({ default: m.StaffPage })),
 );
+const AbsencesPage = lazyPage(() =>
+  import('@/features/staff/AbsencesPage').then((m) => ({
+    default: m.AbsencesPage,
+  })),
+);
 const ClientsPage = lazyPage(() =>
   import('@/features/clients/ClientsPage').then((m) => ({
     default: m.ClientsPage,
@@ -114,6 +119,7 @@ export const router = createBrowserRouter([
             element: lazyRoute(<AppointmentPage />),
           },
           { path: ROUTES.staff, element: lazyRoute(<StaffPage />) },
+          { path: ROUTES.staffAbsences, element: lazyRoute(<AbsencesPage />) },
           { path: ROUTES.clients, element: lazyRoute(<ClientsPage />) },
           {
             path: `${ROUTES.client}/:id`,

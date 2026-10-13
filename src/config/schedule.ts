@@ -123,3 +123,51 @@ export function overlaps(booked: Interval[], s: number, e: number): boolean {
   return booked.some((b) => s < b.endMin && e > b.startMin);
 }
 
+/* ─────────────────── Ausencias y cierres (time_off) ─────────────────── */
+
+/**
+ * Fila de ausencia/cierre, reducida a lo que mira la disponibilidad.
+ * `staff_member_id` null = cierre del local (nadie trabaja ese rango).
+ */
+export interface TimeOffRange {
+  staff_member_id: string | null;
+  start_date: string; // "YYYY-MM-DD" inclusive
+  end_date: string; // "YYYY-MM-DD" inclusive
+  reason?: string | null;
+}
+
+/** ¿La fecha "YYYY-MM-DD" cae dentro del rango [start, end] (inclusivo)? */
+const inRange = (iso: string, r: TimeOffRange): boolean =>
+  iso >= r.start_date && iso <= r.end_date;
+
+/**
+ * Cierre del local que cubre esa fecha (staff_member_id null), o null.
+ * Un cierre tapa a todo el equipo: ese día no se agenda a nadie.
+ */
+export function salonClosedOn(
+  rows: TimeOffRange[] | undefined,
+  iso: string,
+): TimeOffRange | null {
+  return (
+    rows?.find((r) => r.staff_member_id == null && inRange(iso, r)) ?? null
+  );
+}
+
+/**
+ * Ausencia que impide agendar a `staffId` en esa fecha: su propia ausencia o un
+ * cierre del local (que la alcanza igual). Devuelve la fila o null.
+ */
+export function staffOffOn(
+  rows: TimeOffRange[] | undefined,
+  staffId: string,
+  iso: string,
+): TimeOffRange | null {
+  return (
+    rows?.find(
+      (r) =>
+        inRange(iso, r) &&
+        (r.staff_member_id == null || r.staff_member_id === staffId),
+    ) ?? null
+  );
+}
+

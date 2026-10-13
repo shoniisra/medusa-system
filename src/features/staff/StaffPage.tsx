@@ -1,4 +1,5 @@
 import { useState, useMemo, type CSSProperties } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Users,
@@ -6,6 +7,8 @@ import {
   HandCoins,
   Scissors,
   Scale,
+  CalendarOff,
+  ChevronRight,
 } from 'lucide-react';
 import { query, queryOne, batch, execute, type Stmt } from '@/lib/db';
 import { genId, money, dateShort, fullName, todayISO } from '@/lib/format';
@@ -22,6 +25,8 @@ import {
   useToast,
 } from '@/components/ui';
 import { ymd } from '@/lib/date';
+import { ROUTES } from '@/config/constants';
+import { useTimeOff } from './useTimeOff';
 import { invalidateFinance } from '@/lib/queryClient';
 import {
   AccountSelect,
@@ -146,6 +151,8 @@ export function StaffPage() {
       <CommissionBalanceSection orgId={orgId} />
 
       <TeamActivitySection orgId={orgId} />
+
+      <AbsencesSummaryCard />
 
       <AdvanceModal open={advanceOpen} onClose={() => setAdvanceOpen(false)} />
     </div>
@@ -1050,3 +1057,114 @@ function AdvanceModal({
     </Modal>
   );
 }
+
+/* ──────────────────── Resumen de ausencias y cierres ──────────────────── */
+
+/** "24 sep 2026" o "24 sep – 3 dic 2026" según el rango. */
+function rangeLabel(a: string, b: string): string {
+  return a === b ? dateShort(a) : `${dateShort(a)} – ${dateShort(b)}`;
+}
+
+/**
+ * Tarjeta resumen que vive en /personal: muestra qué hay vigente hoy y lo más
+ * próximo, con un botón que lleva a la pantalla completa (/personal/ausencias)
+ * para registrar, ver conflictos y la línea de tiempo.
+ */
+function AbsencesSummaryCard() {
+  const orgId = useOrgId();
+  const timeOff = useTimeOff();
+  const staff = useQuery({
+    queryKey: ['staff-all', orgId],
+    enabled: !!orgId,
+    queryFn: () =>
+      query<StaffMember>(
+        'SELECT * FROM staff_member WHERE organization_id = ? ORDER BY first_name',
+        [orgId],
+      ),
+  });
+  const nameOf = (id: string | null): string => {
+    if (!id) return 'Todo el local';
+    const s = staff.data?.find((x) => x.id === id);
+    return s ? fullName(s.first_name, s.last_name) : '—';
+  };
+
+  const today = todayISO();
+  const rows = timeOff.data ?? [];
+  const current = rows.filter((r) => r.start_date <= today && r.end_date >= today);
+  const upcoming = rows
+    .filter((r) => r.start_date > today)
+    .slice(0, 3);
+
+  return (
+    <Card>
+      <CardHeader
+        title="Ausencias y cierres"
+        subtitle="Vacaciones del equipo y días cerrados. El agendado respeta estas fechas."
+        action={
+          <Link to={ROUTES.staffAbsences}>
+            <Button size="sm" variant="outline">
+              Gestionar <ChevronRight className="h-4 w-4" />
+            </Button>
+          </Link>
+        }
+      />
+
+      {rows.length === 0 ? (
+        <EmptyState
+          icon={CalendarOff}
+          title="Sin ausencias ni cierres"
+          description="Registrá una vacación, un permiso o un día de cierre para que el agendado lo respete."
+          action={
+            <Link to={ROUTES.staffAbsences}>
+              <Button size="sm">
+                <Plus className="h-4 w-4" /> Registrar
+              </Button>
+            </Link>
+          }
+        />
+      ) : (
+        <div className="space-y-3 text-sm">
+          <div>
+            <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-white/50">
+              Hoy
+            </p>
+            {current.length === 0 ? (
+              <p className="text-white/50">Todo el equipo disponible.</p>
+            ) : (
+              <ul className="space-y-1">
+                {current.map((r) => (
+                  <li key={r.id} className="text-white/80">
+                    {nameOf(r.staff_member_id)} ·{' '}
+                    <span className="text-white/50">
+                      hasta {dateShort(r.end_date)}
+                      {r.reason ? ` · ${r.reason}` : ''}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          {upcoming.length > 0 && (
+            <div>
+              <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-white/50">
+                Próximas
+              </p>
+              <ul className="space-y-1">
+                {upcoming.map((r) => (
+                  <li key={r.id} className="text-white/80">
+                    {nameOf(r.staff_member_id)} ·{' '}
+                    <span className="text-white/50">
+                      {rangeLabel(r.start_date, r.end_date)}
+                      {r.reason ? ` · ${r.reason}` : ''}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
