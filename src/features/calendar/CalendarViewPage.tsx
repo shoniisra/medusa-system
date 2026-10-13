@@ -8,6 +8,7 @@ import {
   Download,
   Check,
   PlugZap,
+  Loader2,
 } from 'lucide-react';
 import { execute } from '@/lib/db';
 import { dateShort, timeShort, toLocalNaive } from '@/lib/format';
@@ -266,6 +267,20 @@ export function CalendarViewPage() {
           <span className="truncate first-letter:uppercase">{title}</span>
           <ChevronDown className="h-4 w-4 shrink-0 text-white/50" />
         </button>
+
+        {/* Estado de la consulta: visible al lado del título, no tapando el
+            calendario. Usamos pastilla porque "appears vacío" fue el síntoma
+            original — queremos que se vea de lejos que algo se está cargando. */}
+        {source === 'medusa' && (appts.isLoading || appts.isFetching) && (
+          <span
+            className="ml-1 flex items-center gap-1.5 rounded-full border border-gold/40 bg-gold/15 px-2.5 py-1 text-xs font-medium text-gold-100"
+            role="status"
+            aria-live="polite"
+          >
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            {appts.isLoading ? 'Cargando citas…' : 'Actualizando…'}
+          </span>
+        )}
 
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
           <button

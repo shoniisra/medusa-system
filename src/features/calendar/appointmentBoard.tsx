@@ -1,5 +1,9 @@
 import { useMemo, useState } from 'react';
-import { useQuery, type QueryClient } from '@tanstack/react-query';
+import {
+  keepPreviousData,
+  useQuery,
+  type QueryClient,
+} from '@tanstack/react-query';
 import { Check, GripVertical, Play, TriangleAlert } from 'lucide-react';
 import { execute, query } from '@/lib/db';
 import { useBranchId } from '@/store/session';
@@ -173,6 +177,11 @@ export function useAppointments(from: string, to: string) {
   return useQuery({
     queryKey: ['appointments', branchId, from, to],
     enabled: !!branchId,
+    // Al navegar entre meses/semanas, conservamos los datos anteriores mientras
+    // llega el nuevo rango. Sin esto el calendario parpadea "vacío" durante el
+    // fetch (una fracción de segundo con red rápida; mucho más visible si la
+    // consulta tarda — tiene un subquery de past_visits por fila).
+    placeholderData: keepPreviousData,
     queryFn: () =>
       query<AppointmentRow>(
         `SELECT a.id, a.start_at, a.end_at, a.status, a.notes,
