@@ -86,8 +86,8 @@ export async function createSale(input: CreateSaleInput): Promise<string> {
         sql: `INSERT INTO sale_service_staff
                 (id, sale_item_id, staff_member_id, participation_role, commission_basis,
                  basis_amount, commission_type, commission_rate, commission_amount,
-                 reduces_primary_amount)
-              VALUES (?, ?, ?, ?, 'final_service_value', ?, ?, ?, ?, ?)`,
+                 reduces_primary_amount, assist_label)
+              VALUES (?, ?, ?, ?, 'final_service_value', ?, ?, ?, ?, ?, ?)`,
         args: [
           genId(),
           itemId,
@@ -98,6 +98,7 @@ export async function createSale(input: CreateSaleInput): Promise<string> {
           c.commission_rate,
           c.commission_amount,
           c.reduces_primary_amount ? 1 : 0,
+          c.assist_label ?? null,
         ],
       });
     }

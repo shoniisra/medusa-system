@@ -22,7 +22,13 @@ import {
 import { genId, money, customerName, fullName } from '@/lib/format';
 import { useSession, useBranchId, useOrgId } from '@/store/session';
 import { usePosDraft } from '@/store/posDraft';
-import { useCustomers, useServices, useProducts, useStaff } from './useCatalog';
+import {
+  useCustomers,
+  useServices,
+  useProducts,
+  useStaff,
+  useAssistTypes,
+} from './useCatalog';
 import { useCategorySkills } from '@/features/staff/useCategorySkills';
 import {
   SaleItemsEditor,
@@ -82,6 +88,7 @@ export function NewSaleTab() {
   const products = useProducts();
   const customers = useCustomers();
   const staff = useStaff();
+  const assistTypes = useAssistTypes();
 
   // Cliente (mostrador por defecto): buscar existente o crear al vuelo.
   const [customerId, setCustomerId] = useState('');
@@ -208,6 +215,7 @@ export function NewSaleTab() {
           assigned_staff_id: i.assigned_staff_id,
           staff_name: s ? fullName(s.first_name, s.last_name) : null,
           staff_color: s?.color ?? null,
+          assists: i.assists,
         };
       }),
     [draft.items, staffById],
@@ -349,6 +357,12 @@ export function NewSaleTab() {
           onRemoveItem={(id) => draft.removeItem(id)}
           onAddService={onAddService}
           onAddProduct={onAddProduct}
+          assistTypes={(assistTypes.data ?? []).map((t) => t.name)}
+          onAddAssist={(id, assist) => draft.addAssist(id, assist)}
+          onRemoveAssist={(id, assistId) => draft.removeAssist(id, assistId)}
+          onUpdateAssist={(id, assistId, patch) =>
+            draft.updateAssist(id, assistId, patch)
+          }
         />
       </div>
 
@@ -581,8 +595,10 @@ function ConfirmSalePosModal({
 
       // Comisiones vigentes por colaborador+servicio (config o % por defecto).
       const rules = await loadCommissionRules();
+      const round2 = (n: number) => Math.round(n * 100) / 100;
       const draftItems: DraftSaleItem[] = items.map((it) => {
         const commissions: DraftCommission[] = [];
+        const assists = it.assists ?? [];
         if (it.service_id && it.assigned_staff_id) {
           const basis = it.final_unit_price * it.quantity;
           const c = commissionForItem(
@@ -591,15 +607,32 @@ function ConfirmSalePosModal({
             basis,
             rules,
           );
+          // Las ayudas se descuentan del principal: su comisión queda neta.
+          const assistSum = round2(
+            assists.reduce((a, x) => a + x.commission_amount, 0),
+          );
           commissions.push({
             tempId: genId(),
             staff_member_id: it.assigned_staff_id,
             participation_role: 'primary',
             commission_type: c.commission_type,
             commission_rate: c.commission_rate,
-            commission_amount: c.commission_amount,
+            commission_amount: round2(c.commission_amount - assistSum),
             reduces_primary_amount: false,
           });
+          // Una fila `assistant` por ayuda: monto fijo ya restado del principal.
+          for (const a of assists) {
+            commissions.push({
+              tempId: genId(),
+              staff_member_id: a.staff_member_id,
+              participation_role: 'assistant',
+              commission_type: 'fixed',
+              commission_rate: a.commission_amount,
+              commission_amount: a.commission_amount,
+              reduces_primary_amount: true,
+              assist_label: a.label,
+            });
+          }
         }
         return { ...it, commissions };
       });

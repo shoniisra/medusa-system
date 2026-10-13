@@ -161,6 +161,10 @@ interface DailyServiceRow {
   amount: number;
   /** La comisión que le corresponde al colaborador por ese servicio. */
   commission: number;
+  /** 'primary' = responsable; 'assistant' = ayuda interna (no facturó). */
+  role: string;
+  /** Qué ayuda fue, cuando `role` es 'assistant'. */
+  assist_label: string | null;
   sold_at: string;
 }
 
@@ -220,6 +224,8 @@ function TeamActivitySection({ orgId }: { orgId: string }) {
                 c.first_name || CASE WHEN c.last_name IS NOT NULL THEN ' ' || c.last_name ELSE '' END AS client,
                 sss.basis_amount AS amount,
                 sss.commission_amount AS commission,
+                sss.participation_role AS role,
+                sss.assist_label AS assist_label,
                 s.sold_at AS sold_at
            FROM sale s
            JOIN sale_item si ON si.sale_id = s.id
@@ -243,7 +249,8 @@ function TeamActivitySection({ orgId }: { orgId: string }) {
     for (const r of rows.data ?? []) {
       const g = m.get(r.staff_id) ?? { items: [], billed: 0, commission: 0 };
       g.items.push(r);
-      g.billed += r.amount ?? 0;
+      // Una ayuda no facturó nada: solo reparte comisión, no suma a "Cobrado".
+      g.billed += r.role === 'assistant' ? 0 : (r.amount ?? 0);
       g.commission += r.commission ?? 0;
       m.set(r.staff_id, g);
     }
@@ -336,7 +343,9 @@ function TeamActivitySection({ orgId }: { orgId: string }) {
                               style={{ backgroundColor: c }}
                             />
                             <span className="min-w-0 truncate text-white/80">
-                              {it.service}
+                              {it.role === 'assistant'
+                                ? `Ayuda: ${it.assist_label ?? 'asistencia'}`
+                                : it.service}
                               <span className="text-white/40">
                                 {it.client ? ` · ${it.client}` : ''}
                                 {multiDay ? ` · ${dateShort(it.sold_at)}` : ''}
@@ -344,7 +353,7 @@ function TeamActivitySection({ orgId }: { orgId: string }) {
                             </span>
                           </span>
                           <span className="w-20 shrink-0 text-right text-white/70">
-                            {money(it.amount)}
+                            {it.role === 'assistant' ? '—' : money(it.amount)}
                           </span>
                           <span
                             className="w-20 shrink-0 text-right font-medium"

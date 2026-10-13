@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { execute, query } from '@/lib/db';
 import { genId } from '@/lib/format';
 import { useOrgId } from '@/store/session';
-import type { Customer, Product, Service, StaffMember } from '@/types';
+import type { AssistType, Customer, Product, Service, StaffMember } from '@/types';
 
 /** Catálogo compartido del POS: servicios, productos, clientes y personal. */
 export function useServices() {
@@ -52,6 +52,25 @@ export function useStaff() {
     queryFn: () =>
       query<StaffMember>(
         'SELECT * FROM staff_member WHERE organization_id = ? AND active = 1 ORDER BY first_name',
+        [orgId],
+      ),
+  });
+}
+
+/**
+ * Catálogo de tipos de ayuda (lavar cabello, sujetar, secar...). Alimenta el
+ * selector al registrar una ayuda en una línea de servicio.
+ */
+export function useAssistTypes() {
+  const orgId = useOrgId();
+  return useQuery({
+    queryKey: ['assist-types', orgId],
+    enabled: !!orgId,
+    queryFn: () =>
+      query<AssistType>(
+        `SELECT * FROM assist_type
+          WHERE organization_id = ? AND active = 1
+          ORDER BY sort_order, name`,
         [orgId],
       ),
   });

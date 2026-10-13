@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { DraftCommission, DraftSaleItem } from '@/types';
+import type { DraftCommission, DraftSaleItem, LineAssist } from '@/types';
 import { genId } from '@/lib/format';
 
 /**
@@ -14,7 +14,9 @@ interface PosDraftState {
 
   setCustomer: (id: string | null) => void;
   setRequiresInvoice: (v: boolean) => void;
-  addItem: (item: Omit<DraftSaleItem, 'tempId' | 'commissions'>) => void;
+  addItem: (
+    item: Omit<DraftSaleItem, 'tempId' | 'commissions' | 'assists'>,
+  ) => void;
   removeItem: (tempId: string) => void;
   updateItem: (tempId: string, patch: Partial<DraftSaleItem>) => void;
   addCommission: (
@@ -22,6 +24,14 @@ interface PosDraftState {
     commission: Omit<DraftCommission, 'tempId'>,
   ) => void;
   removeCommission: (itemTempId: string, commissionTempId: string) => void;
+  /** Ayudas (asistencias) de una línea: restan de la comisión del principal. */
+  addAssist: (itemTempId: string, assist: Omit<LineAssist, 'id'>) => void;
+  removeAssist: (itemTempId: string, assistId: string) => void;
+  updateAssist: (
+    itemTempId: string,
+    assistId: string,
+    patch: { label?: string; commission_amount?: number },
+  ) => void;
   reset: () => void;
 
   subtotal: () => number;
@@ -39,7 +49,10 @@ export const usePosDraft = create<PosDraftState>((set, get) => ({
 
   addItem: (item) =>
     set((s) => ({
-      items: [...s.items, { ...item, tempId: genId(), commissions: [] }],
+      items: [
+        ...s.items,
+        { ...item, tempId: genId(), commissions: [], assists: [] },
+      ],
     })),
 
   removeItem: (tempId) =>
@@ -73,6 +86,38 @@ export const usePosDraft = create<PosDraftState>((set, get) => ({
               ...i,
               commissions: i.commissions.filter(
                 (c) => c.tempId !== commissionTempId,
+              ),
+            }
+          : i,
+      ),
+    })),
+
+  addAssist: (itemTempId, assist) =>
+    set((s) => ({
+      items: s.items.map((i) =>
+        i.tempId === itemTempId
+          ? { ...i, assists: [...i.assists, { ...assist, id: genId() }] }
+          : i,
+      ),
+    })),
+
+  removeAssist: (itemTempId, assistId) =>
+    set((s) => ({
+      items: s.items.map((i) =>
+        i.tempId === itemTempId
+          ? { ...i, assists: i.assists.filter((a) => a.id !== assistId) }
+          : i,
+      ),
+    })),
+
+  updateAssist: (itemTempId, assistId, patch) =>
+    set((s) => ({
+      items: s.items.map((i) =>
+        i.tempId === itemTempId
+          ? {
+              ...i,
+              assists: i.assists.map((a) =>
+                a.id === assistId ? { ...a, ...patch } : a,
               ),
             }
           : i,

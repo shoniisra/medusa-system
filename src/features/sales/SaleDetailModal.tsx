@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, HandHelping } from 'lucide-react';
 import { execute, query, queryOne } from '@/lib/db';
 import { dateShort, genId, money, timeShort } from '@/lib/format';
 import { invalidateFinance } from '@/lib/queryClient';
@@ -43,6 +43,8 @@ interface SaleStaffRow {
   staff_member_id: string;
   participation_role: ParticipationRole;
   commission_amount: number;
+  /** Qué ayuda fue, cuando el rol es `assistant`. */
+  assist_label: string | null;
 }
 
 interface SalePaymentRow {
@@ -105,7 +107,7 @@ async function loadSale(saleId: string | null, appointmentId: string | null) {
     ),
     query<SaleStaffRow>(
       `SELECT sss.id, sss.sale_item_id, sss.staff_member_id, sss.participation_role,
-              sss.commission_amount
+              sss.commission_amount, sss.assist_label
          FROM sale_service_staff sss
          JOIN sale_item si ON si.id = sss.sale_item_id
         WHERE si.sale_id = ?
@@ -274,6 +276,12 @@ export function SaleDetailModal({
             <ul className="divide-y divide-white/5 rounded-2xl border border-white/5 bg-white/[0.02]">
               {sale.items.map((it) => {
                 const rows = sale.staff.filter((r) => r.sale_item_id === it.id);
+                const primaryRows = rows.filter(
+                  (r) => r.participation_role === 'primary',
+                );
+                const assistRows = rows.filter(
+                  (r) => r.participation_role === 'assistant',
+                );
                 const isService = !!it.service_id;
                 return (
                   <li key={it.id} className="space-y-2 px-3 py-2.5 text-sm">
@@ -290,33 +298,57 @@ export function SaleDetailModal({
                       </span>
                     </div>
 
-                    {isService &&
-                      (rows.length === 0 ? (
-                        <StaffPicker
-                          label="Sin colaboradora"
-                          value=""
-                          disabled={!editable || changeStaff.isPending}
-                          staff={staffList.data ?? []}
-                          onChange={(staffId) =>
-                            changeStaff.mutate({ item: it, row: null, staffId })
-                          }
-                        />
-                      ) : (
-                        rows.map((r) => (
+                    {isService && (
+                      <>
+                        {primaryRows.length === 0 ? (
                           <StaffPicker
-                            key={r.id}
-                            label={ROLE_LABEL[r.participation_role]}
-                            value={r.staff_member_id}
-                            hint={`Comisión ${money(r.commission_amount)}`}
+                            label="Sin colaboradora"
+                            value=""
                             disabled={!editable || changeStaff.isPending}
                             staff={staffList.data ?? []}
-                            fallbackName={staffName(r.staff_member_id)}
                             onChange={(staffId) =>
-                              changeStaff.mutate({ item: it, row: r, staffId })
+                              changeStaff.mutate({ item: it, row: null, staffId })
                             }
                           />
-                        ))
-                      ))}
+                        ) : (
+                          primaryRows.map((r) => (
+                            <StaffPicker
+                              key={r.id}
+                              label={ROLE_LABEL[r.participation_role]}
+                              value={r.staff_member_id}
+                              hint={`Comisión ${money(r.commission_amount)}`}
+                              disabled={!editable || changeStaff.isPending}
+                              staff={staffList.data ?? []}
+                              fallbackName={staffName(r.staff_member_id)}
+                              onChange={(staffId) =>
+                                changeStaff.mutate({ item: it, row: r, staffId })
+                              }
+                            />
+                          ))
+                        )}
+                        {/* Ayudas: solo lectura (se registran al vender; su monto
+                            ya se restó del principal). */}
+                        {assistRows.map((r) => (
+                          <div
+                            key={r.id}
+                            className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl bg-white/[0.03] px-2.5 py-1.5 text-sm"
+                          >
+                            <span className="inline-flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-gold-200/70">
+                              <HandHelping className="h-3.5 w-3.5" /> Ayuda
+                            </span>
+                            <span className="text-white/80">
+                              {r.assist_label ?? 'Asistencia'}
+                            </span>
+                            <span className="text-white/50">
+                              {staffName(r.staff_member_id)}
+                            </span>
+                            <span className="ml-auto text-white/60">
+                              Comisión {money(r.commission_amount)}
+                            </span>
+                          </div>
+                        ))}
+                      </>
+                    )}
                   </li>
                 );
               })}

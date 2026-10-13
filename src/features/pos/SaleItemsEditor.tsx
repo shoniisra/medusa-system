@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import {
   Plus,
   Minus,
@@ -8,6 +8,7 @@ import {
   Search,
   ChevronLeft,
   AlertTriangle,
+  HandHelping,
 } from 'lucide-react';
 import { money, num, fullName } from '@/lib/format';
 import { SERVICE_CATEGORIES } from '@/config/constants';
@@ -21,7 +22,13 @@ import {
   type NewProductDraft,
   type NewServiceDraft,
 } from './useCatalog';
-import type { CommissionType, Product, Service, StaffMember } from '@/types';
+import type {
+  CommissionType,
+  LineAssist,
+  Product,
+  Service,
+  StaffMember,
+} from '@/types';
 import { normalizeText } from '@/lib/text';
 
 /**
@@ -42,6 +49,8 @@ export interface EditorItem {
   assigned_staff_id: string | null;
   staff_name: string | null;
   staff_color: string | null;
+  /** Ayudas de otras colaboradoras en esta línea (restan del principal). */
+  assists?: LineAssist[];
 }
 
 export interface LineCommission {
@@ -104,7 +113,29 @@ function lineCommission(
   );
 }
 
-/** Comisiones agrupadas por estilista, para el resumen. */
+/** Suma de las ayudas de una línea (lo que se reparte fuera del principal). */
+export function lineAssistsTotal(i: EditorItem): number {
+  return round2((i.assists ?? []).reduce((a, x) => a + x.commission_amount, 0));
+}
+
+/**
+ * Comisión del principal YA NETA de las ayudas: lo que cobra la estilista
+ * responsable después de repartir a las ayudantes de la línea.
+ */
+export function linePrimaryNet(
+  i: EditorItem,
+  rules: Map<string, CommissionRule> | undefined,
+): number | null {
+  const c = lineCommission(i, rules);
+  if (!c) return null;
+  return round2(c.commission_amount - lineAssistsTotal(i));
+}
+
+/**
+ * Comisiones agrupadas por colaborador para el resumen: el principal con su
+ * monto YA NETO de ayudas, y cada ayudante con lo suyo. La suma total de la
+ * línea no cambia (solo se reparte), así los totales de abajo cuadran.
+ */
 export function commissionByStaff(
   items: EditorItem[],
   rules: Map<string, CommissionRule> | undefined,
@@ -113,18 +144,29 @@ export function commissionByStaff(
     string,
     { id: string; name: string; color: string | null; amount: number }
   >();
+  const add = (
+    id: string,
+    name: string,
+    color: string | null,
+    amount: number,
+  ) => {
+    const prev = m.get(id);
+    if (prev) prev.amount = round2(prev.amount + amount);
+    else m.set(id, { id, name, color, amount: round2(amount) });
+  };
   for (const i of items) {
     const c = lineCommission(i, rules);
-    if (!c || !i.assigned_staff_id) continue;
-    const prev = m.get(i.assigned_staff_id);
-    if (prev) prev.amount += c.commission_amount;
-    else
-      m.set(i.assigned_staff_id, {
-        id: i.assigned_staff_id,
-        name: i.staff_name ?? 'Sin nombre',
-        color: i.staff_color,
-        amount: c.commission_amount,
-      });
+    if (c && i.assigned_staff_id) {
+      add(
+        i.assigned_staff_id,
+        i.staff_name ?? 'Sin nombre',
+        i.staff_color,
+        c.commission_amount - lineAssistsTotal(i),
+      );
+    }
+    for (const a of i.assists ?? []) {
+      add(a.staff_member_id, a.staff_name ?? 'Sin nombre', a.staff_color, a.commission_amount);
+    }
   }
   return [...m.values()];
 }
@@ -145,6 +187,10 @@ export function SaleItemsEditor({
   onRemoveItem,
   onAddService,
   onAddProduct,
+  assistTypes = [],
+  onAddAssist,
+  onRemoveAssist,
+  onUpdateAssist,
 }: {
   items: EditorItem[];
   staff: StaffMember[];
@@ -154,6 +200,16 @@ export function SaleItemsEditor({
   onUpdateItem: (id: string, patch: Record<string, number | string>) => void;
   onReassign: (id: string, staffId: string | null) => void;
   onRemoveItem: (id: string) => void;
+  /** Catálogo de tipos de ayuda (nombres) para el selector. */
+  assistTypes?: string[];
+  /** Registrar una ayuda en una línea. Si falta, no se muestra la UI de ayudas. */
+  onAddAssist?: (itemId: string, assist: Omit<LineAssist, 'id'>) => void;
+  onRemoveAssist?: (itemId: string, assistId: string) => void;
+  onUpdateAssist?: (
+    itemId: string,
+    assistId: string,
+    patch: { label?: string; commission_amount?: number },
+  ) => void;
   /** `service` viene solo en el alta al vuelo: aún no está en el catálogo cargado. */
   onAddService: (args: {
     sid: string;
@@ -192,6 +248,8 @@ export function SaleItemsEditor({
           const c = lineCommission(i, rules);
           const assignable = !!(i.service_id || i.category);
           const placeholder = !i.service_id && !i.product_id;
+          const assistSum = lineAssistsTotal(i);
+          const net = c ? round2(c.commission_amount - assistSum) : 0;
           return (
             <div
               key={i.id}
@@ -322,11 +380,30 @@ export function SaleItemsEditor({
                 <p className="mt-2 text-xs text-white/40">
                   Comisión estilista:{' '}
                   <span className="text-white/70">
-                    {c.commission_type === 'percentage'
-                      ? `${num(c.commission_rate)}% · ${money(c.commission_amount)}`
-                      : money(c.commission_amount)}
+                    {assistSum > 0
+                      ? money(net)
+                      : c.commission_type === 'percentage'
+                        ? `${num(c.commission_rate)}% · ${money(c.commission_amount)}`
+                        : money(c.commission_amount)}
                   </span>
+                  {assistSum > 0 && (
+                    <span className="text-white/35">
+                      {' '}
+                      · −{money(assistSum)} en ayudas
+                    </span>
+                  )}
                 </p>
+              )}
+
+              {assignable && onAddAssist && (
+                <AssistsBlock
+                  item={i}
+                  staff={staff}
+                  assistTypes={assistTypes}
+                  onAddAssist={onAddAssist}
+                  onRemoveAssist={onRemoveAssist}
+                  onUpdateAssist={onUpdateAssist}
+                />
               )}
             </div>
           );
@@ -367,9 +444,12 @@ export function SaleItemsEditor({
             {items.map((i) => {
               const c = lineCommission(i, rules);
               const placeholder = !i.service_id && !i.product_id;
+              const assignable = !!(i.service_id || i.category);
+              const assistSum = lineAssistsTotal(i);
+              const net = c ? round2(c.commission_amount - assistSum) : 0;
               return (
+                <Fragment key={i.id}>
                 <tr
-                  key={i.id}
                   className={cn('align-middle', placeholder && 'bg-amber-400/[0.07]')}
                 >
                   <td className="py-1 pr-1">
@@ -425,11 +505,20 @@ export function SaleItemsEditor({
                     )}
                   </td>
                   <td className="whitespace-nowrap py-1 text-right text-white/70">
-                    {c
-                      ? c.commission_type === 'percentage'
-                        ? `${num(c.commission_rate)}% · ${money(c.commission_amount)}`
-                        : money(c.commission_amount)
-                      : '—'}
+                    {!c ? (
+                      '—'
+                    ) : assistSum > 0 ? (
+                      <>
+                        {money(net)}
+                        <span className="block text-[10px] text-white/35">
+                          −{money(assistSum)} ayudas
+                        </span>
+                      </>
+                    ) : c.commission_type === 'percentage' ? (
+                      `${num(c.commission_rate)}% · ${money(c.commission_amount)}`
+                    ) : (
+                      money(c.commission_amount)
+                    )}
                   </td>
                   <td className="py-1 text-right">
                     {i.product_id ? (
@@ -482,6 +571,22 @@ export function SaleItemsEditor({
                     </button>
                   </td>
                 </tr>
+                {assignable && onAddAssist && (
+                  <tr className={cn(placeholder && 'bg-amber-400/[0.07]')}>
+                    <td />
+                    <td colSpan={8} className="pb-2 pr-2">
+                      <AssistsBlock
+                        item={i}
+                        staff={staff}
+                        assistTypes={assistTypes}
+                        onAddAssist={onAddAssist}
+                        onRemoveAssist={onRemoveAssist}
+                        onUpdateAssist={onUpdateAssist}
+                      />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               );
             })}
           </tbody>
@@ -546,6 +651,267 @@ export function SaleItemsEditor({
         />
       )}
     </Card>
+  );
+}
+
+/** Valor centinela para "otra ayuda" (texto libre) en el selector. */
+const CUSTOM_ASSIST = '__custom__';
+
+/**
+ * Ayudas de una línea: otras colaboradoras que asistieron un paso del servicio
+ * (lavar, sujetar, secar...). Cada una lleva un monto editable que se resta de
+ * la comisión de la estilista responsable. Solo se registran si la línea ya
+ * tiene estilista (hay de quién descontar).
+ */
+function AssistsBlock({
+  item,
+  staff,
+  assistTypes,
+  onAddAssist,
+  onRemoveAssist,
+  onUpdateAssist,
+}: {
+  item: EditorItem;
+  staff: StaffMember[];
+  assistTypes: string[];
+  onAddAssist: (itemId: string, assist: Omit<LineAssist, 'id'>) => void;
+  onRemoveAssist?: (itemId: string, assistId: string) => void;
+  onUpdateAssist?: (
+    itemId: string,
+    assistId: string,
+    patch: { label?: string; commission_amount?: number },
+  ) => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const assists = item.assists ?? [];
+  const canAssist = !!item.assigned_staff_id;
+
+  if (!canAssist && assists.length === 0) {
+    return (
+      <p className="mt-2 text-[11px] text-white/35">
+        Asigná la estilista responsable para registrar ayudas.
+      </p>
+    );
+  }
+
+  return (
+    <div className="mt-2 space-y-1">
+      {assists.map((a) => (
+        <div
+          key={a.id}
+          className="flex items-center gap-2 rounded-lg bg-white/[0.03] px-2 py-1 text-xs"
+        >
+          <HandHelping className="h-3.5 w-3.5 shrink-0 text-gold-300" />
+          <span className="truncate text-white/80">{a.label}</span>
+          <span className="inline-flex items-center gap-1 text-white/50">
+            <span
+              className="h-1.5 w-1.5 rounded-full"
+              style={{ background: a.staff_color || '#64748b' }}
+            />
+            {a.staff_name ?? 'Sin nombre'}
+          </span>
+          <span className="ml-auto whitespace-nowrap font-medium text-white/80">
+            {onUpdateAssist ? (
+              <InlineEdit
+                value={a.commission_amount}
+                type="number"
+                align="left"
+                display={money(a.commission_amount)}
+                onCommit={(v) =>
+                  onUpdateAssist(item.id, a.id, {
+                    commission_amount: Math.max(0, round2(Number(v) || 0)),
+                  })
+                }
+              />
+            ) : (
+              money(a.commission_amount)
+            )}
+          </span>
+          {onRemoveAssist && (
+            <button
+              type="button"
+              onClick={() => onRemoveAssist(item.id, a.id)}
+              className="shrink-0 text-white/40 hover:text-danger"
+              title="Quitar ayuda"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      ))}
+
+      {canAssist && (
+        <button
+          type="button"
+          onClick={() => setAdding(true)}
+          className="inline-flex items-center gap-1 rounded-lg border border-dashed border-white/15 px-2 py-1 text-xs font-medium text-white/55 hover:border-gold/40 hover:text-gold-200"
+        >
+          <HandHelping className="h-3.5 w-3.5" /> Ayuda
+        </button>
+      )}
+
+      {adding && (
+        <AddAssistSheet
+          open
+          staff={staff}
+          assistTypes={assistTypes}
+          excludeStaffId={item.assigned_staff_id}
+          onClose={() => setAdding(false)}
+          onAdd={(assist) => {
+            onAddAssist(item.id, assist);
+            setAdding(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Alta de una ayuda: quién ayudó, qué ayuda fue y cuánto se le reparte. */
+function AddAssistSheet({
+  open,
+  onClose,
+  staff,
+  assistTypes,
+  excludeStaffId,
+  onAdd,
+}: {
+  open: boolean;
+  onClose: () => void;
+  staff: StaffMember[];
+  assistTypes: string[];
+  excludeStaffId: string | null;
+  onAdd: (assist: Omit<LineAssist, 'id'>) => void;
+}) {
+  const [staffId, setStaffId] = useState('');
+  const [label, setLabel] = useState('');
+  const [custom, setCustom] = useState('');
+  const [amount, setAmount] = useState('');
+
+  const useCustom = label === CUSTOM_ASSIST;
+  const chosenLabel = (useCustom ? custom : label).trim();
+  const amountNum = Math.max(0, round2(Number(amount) || 0));
+  const options = staff.filter((s) => s.id !== excludeStaffId);
+  const ready = !!staffId && !!chosenLabel && amountNum > 0;
+
+  const submit = () => {
+    const s = staff.find((x) => x.id === staffId);
+    if (!s || !chosenLabel || amountNum <= 0) return;
+    onAdd({
+      staff_member_id: s.id,
+      staff_name: fullName(s.first_name, s.last_name),
+      staff_color: s.color ?? null,
+      label: chosenLabel,
+      commission_amount: amountNum,
+    });
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Agregar ayuda" className="sm:max-w-lg">
+      <div className="space-y-4">
+        <div>
+          <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-white/40">
+            ¿Quién ayudó?
+          </p>
+          {options.length === 0 ? (
+            <p className="text-xs text-white/40">
+              No hay otras colaboradoras para asignar.
+            </p>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {options.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => setStaffId(s.id)}
+                  className={cn(
+                    CARD_BASE,
+                    staffId === s.id && 'border-gold-400/70 bg-gold-400/10',
+                  )}
+                >
+                  <span
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ background: s.color || '#64748b' }}
+                  />
+                  {fullName(s.first_name, s.last_name)}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div>
+          <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-white/40">
+            ¿Qué ayuda?
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {assistTypes.map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setLabel(t)}
+                className={cn(
+                  'rounded-full border px-3 py-1.5 text-sm',
+                  label === t
+                    ? 'border-gold-400/70 bg-gold-400/10 text-gold-100'
+                    : 'border-white/10 bg-white/[0.03] text-white/70 hover:bg-white/[0.06]',
+                )}
+              >
+                {t}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => setLabel(CUSTOM_ASSIST)}
+              className={cn(
+                'rounded-full border px-3 py-1.5 text-sm',
+                useCustom
+                  ? 'border-gold-400/70 bg-gold-400/10 text-gold-100'
+                  : 'border-white/10 bg-white/[0.03] text-white/70 hover:bg-white/[0.06]',
+              )}
+            >
+              Otra…
+            </button>
+          </div>
+          {useCustom && (
+            <Input
+              className="mt-2"
+              autoFocus
+              placeholder="Describí la ayuda"
+              value={custom}
+              onChange={(e) => setCustom(e.target.value)}
+            />
+          )}
+        </div>
+
+        <div>
+          <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-white/40">
+            Comisión de la ayuda
+          </p>
+          <Input
+            type="number"
+            inputMode="decimal"
+            min={0}
+            step="0.01"
+            placeholder="0.00"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+          />
+          <p className="mt-1 text-[11px] text-white/35">
+            Se resta de la comisión de la estilista responsable.
+          </p>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-1">
+          <Button variant="outline" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button disabled={!ready} onClick={submit}>
+            Agregar ayuda
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

@@ -319,6 +319,8 @@ export type CommissionBasis = 'list_price' | 'final_service_value' | 'custom';
  * Ej: Color $80 → primary (colaborador) + opcional assistant (ayudante),
  * cada uno con su monto/porcentaje. `reduces_primary_amount = 1` indica que
  * lo del ayudante se descuenta de lo del principal (no suma extra al costo).
+ * `assist_label` nombra la ayuda del `assistant` (ej. "Lavar cabello"): se
+ * denormaliza acá para auditarla en /personal aunque el catálogo cambie.
  */
 export interface SaleServiceStaff {
   id: ID;
@@ -331,7 +333,19 @@ export interface SaleServiceStaff {
   commission_rate: number;
   commission_amount: number;
   reduces_primary_amount: BoolInt;
+  /** Qué ayuda fue, cuando el rol es `assistant`. NULL en el principal. */
+  assist_label: string | null;
   notes: string | null;
+}
+
+/** Tipo de ayuda del catálogo configurable (alimenta el selector de ayudas). */
+export interface AssistType {
+  id: ID;
+  organization_id: ID;
+  name: string;
+  sort_order: number;
+  active: BoolInt;
+  created_at: ISODateTime;
 }
 
 /* ─────────────────────────────────── Pagos ───────────────────────────────── */
@@ -722,6 +736,22 @@ export interface VStaffPayableSummary {
 
 /* ───────────────────────── Tipos compuestos de UI ────────────────────────── */
 
+/**
+ * Ayuda de una línea de servicio en memoria (editor compartido POS/Atención):
+ * otra colaboradora que asistió un paso del servicio. Su `commission_amount`
+ * se tipea a mano y se resta de la comisión del principal al confirmar.
+ */
+export interface LineAssist {
+  /** Id local de la ayuda dentro de la línea (no se persiste). */
+  id: string;
+  staff_member_id: ID;
+  staff_name: string | null;
+  staff_color: string | null;
+  /** Tipo de ayuda elegido del catálogo o escrito a mano. */
+  label: string;
+  commission_amount: number;
+}
+
 /** Línea de venta en construcción en el POS, con su distribución de comisión. */
 export interface DraftSaleItem {
   tempId: string;
@@ -735,6 +765,8 @@ export interface DraftSaleItem {
   /** Estilista responsable de la línea (solo servicios); define la comisión. */
   assigned_staff_id: ID | null;
   commissions: DraftCommission[];
+  /** Ayudas de otras colaboradoras en esta línea (restan del principal). */
+  assists: LineAssist[];
 }
 
 export interface DraftCommission {
@@ -745,6 +777,8 @@ export interface DraftCommission {
   commission_rate: number; // % o monto fijo según type
   commission_amount: number; // resuelto
   reduces_primary_amount: boolean;
+  /** Nombre de la ayuda, solo en filas `assistant`. */
+  assist_label?: string | null;
 }
 
 /** Venta con saldo calculado (venta - pagos confirmados). */

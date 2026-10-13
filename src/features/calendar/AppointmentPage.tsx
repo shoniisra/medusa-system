@@ -50,7 +50,13 @@ import { useBranchCashSession } from '@/features/cashflow/cashSessionActions';
 import { SaleDetailModal } from '@/features/sales/SaleDetailModal';
 import { searchCustomers } from '@/features/clients/customerSearch';
 import { useOrgId, useBranchId, useSession } from '@/store/session';
-import { useCustomers, useServices, useProducts, useStaff } from '@/features/pos/useCatalog';
+import {
+  useCustomers,
+  useServices,
+  useProducts,
+  useStaff,
+  useAssistTypes,
+} from '@/features/pos/useCatalog';
 import { useCategorySkills } from '@/features/staff/useCategorySkills';
 import {
   DEFAULT_SERVICE_MINUTES,
@@ -128,6 +134,7 @@ import type {
   Customer,
   DraftCommission,
   DraftSaleItem,
+  LineAssist,
   PaymentMethod,
   Product,
   Service,
@@ -2016,6 +2023,7 @@ function EditAppointment({ id }: { id: string }) {
   const services = useServices();
   const products = useProducts();
   const staff = useStaff();
+  const assistTypes = useAssistTypes();
 
   // Volver a la pantalla de origen (tareas, agenda, dashboard, clientes…). Si se
   // entró por link directo (sin historial) cae a la agenda.
@@ -2142,6 +2150,34 @@ function EditAppointment({ id }: { id: string }) {
   const [customerOpen, setCustomerOpen] = useState(false);
   const [depositOpen, setDepositOpen] = useState(false);
   const [voidDeposit, setVoidDeposit] = useState<DepositRow | null>(null);
+
+  // Ayudas (asistencias) por línea de servicio, en memoria durante la atención.
+  // Se persisten al confirmar la venta (como filas de sale_service_staff que
+  // restan de la comisión del principal). Clave = id del appointment_item.
+  const [assistsByItem, setAssistsByItem] = useState<
+    Record<string, LineAssist[]>
+  >({});
+  const addAssist = (itemId: string, assist: Omit<LineAssist, 'id'>) =>
+    setAssistsByItem((m) => ({
+      ...m,
+      [itemId]: [...(m[itemId] ?? []), { ...assist, id: genId() }],
+    }));
+  const removeAssist = (itemId: string, assistId: string) =>
+    setAssistsByItem((m) => ({
+      ...m,
+      [itemId]: (m[itemId] ?? []).filter((a) => a.id !== assistId),
+    }));
+  const updateAssist = (
+    itemId: string,
+    assistId: string,
+    patch: { label?: string; commission_amount?: number },
+  ) =>
+    setAssistsByItem((m) => ({
+      ...m,
+      [itemId]: (m[itemId] ?? []).map((a) =>
+        a.id === assistId ? { ...a, ...patch } : a,
+      ),
+    }));
 
   /**
    * Cualquier cambio de la cita refresca lo mismo: sus ítems, su cabecera, la
@@ -2321,6 +2357,12 @@ function EditAppointment({ id }: { id: string }) {
   });
 
   const all = items.data ?? [];
+  // Ítems con sus ayudas (en memoria) para el editor y el resumen de comisiones.
+  const withAssists = all.map((i) => ({
+    ...i,
+    assists: assistsByItem[i.id] ?? [],
+  }));
+  const serviceItemsWithAssists = withAssists.filter((i) => i.service_id);
   // Vendibles: solo servicios/productos reales. Las filas de categoría (sin
   // servicio ni producto) son la intención de la reserva y no van a la venta
   // (violarían el CHECK de sale_item y sumarían líneas en $0).
@@ -2385,7 +2427,7 @@ function EditAppointment({ id }: { id: string }) {
     : null;
 
   const rules = commissionRules.data;
-  const staffCommissions = commissionByStaff(serviceItems, rules);
+  const staffCommissions = commissionByStaff(serviceItemsWithAssists, rules);
   const totalCommission = staffCommissions.reduce((a, s) => a + s.amount, 0);
 
   const totalServicios = serviceItems.reduce(
@@ -2519,7 +2561,7 @@ function EditAppointment({ id }: { id: string }) {
 
           {/* Detalle de venta */}
           <SaleItemsEditor
-            items={all}
+            items={withAssists}
             staff={staff.data ?? []}
             services={services.data ?? []}
             products={products.data ?? []}
@@ -2535,6 +2577,10 @@ function EditAppointment({ id }: { id: string }) {
             onAddProduct={({ pid, qty, product }) =>
               addProduct.mutate({ pid, qty, product })
             }
+            assistTypes={(assistTypes.data ?? []).map((t) => t.name)}
+            onAddAssist={addAssist}
+            onRemoveAssist={removeAssist}
+            onUpdateAssist={updateAssist}
           />
 
           <CustomerCareNotes
@@ -2794,6 +2840,7 @@ function EditAppointment({ id }: { id: string }) {
           customerName={head.data.customer_name}
           serviceDate={head.data.start_at}
           items={sellableItems}
+          assistsByItem={assistsByItem}
           subtotal={subtotal}
           discountTotal={discountTotal}
           total={total}
@@ -3653,6 +3700,7 @@ function ConfirmSaleModal({
   customerName,
   serviceDate,
   items,
+  assistsByItem,
   subtotal,
   discountTotal,
   total,
@@ -3668,6 +3716,7 @@ function ConfirmSaleModal({
   customerName: string | null;
   serviceDate: string;
   items: ItemRow[];
+  assistsByItem: Record<string, LineAssist[]>;
   subtotal: number;
   discountTotal: number;
   total: number;
@@ -3732,9 +3781,12 @@ function ConfirmSaleModal({
       // Comisiones vigentes por colaborador+servicio (config o % por defecto).
       const rules = await loadCommissionRules();
 
-      // Ítems → líneas de venta con comisión del colaborador asignado.
+      // Ítems → líneas de venta con comisión del colaborador asignado y sus
+      // ayudas (que se restan del principal y quedan como filas `assistant`).
+      const round2 = (n: number) => Math.round(n * 100) / 100;
       const draftItems: DraftSaleItem[] = items.map((it) => {
         const commissions: DraftCommission[] = [];
+        const assists = assistsByItem[it.id] ?? [];
         if (it.service_id && it.assigned_staff_id) {
           const basis = it.final_unit_price * it.quantity;
           const c = commissionForItem(
@@ -3743,15 +3795,30 @@ function ConfirmSaleModal({
             basis,
             rules,
           );
+          const assistSum = round2(
+            assists.reduce((a, x) => a + x.commission_amount, 0),
+          );
           commissions.push({
             tempId: genId(),
             staff_member_id: it.assigned_staff_id,
             participation_role: 'primary',
             commission_type: c.commission_type,
             commission_rate: c.commission_rate,
-            commission_amount: c.commission_amount,
+            commission_amount: round2(c.commission_amount - assistSum),
             reduces_primary_amount: false,
           });
+          for (const a of assists) {
+            commissions.push({
+              tempId: genId(),
+              staff_member_id: a.staff_member_id,
+              participation_role: 'assistant',
+              commission_type: 'fixed',
+              commission_rate: a.commission_amount,
+              commission_amount: a.commission_amount,
+              reduces_primary_amount: true,
+              assist_label: a.label,
+            });
+          }
         }
         return {
           tempId: genId(),
@@ -3764,6 +3831,7 @@ function ConfirmSaleModal({
           final_unit_price: it.final_unit_price,
           assigned_staff_id: it.assigned_staff_id,
           commissions,
+          assists,
         };
       });
 
