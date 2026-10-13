@@ -6,6 +6,7 @@ import {
   Users,
   Contact,
   CalendarDays,
+  CalendarPlus,
   CalendarRange,
   CalendarOff,
   ClipboardList,
@@ -14,6 +15,7 @@ import {
   BellRing,
   ShoppingCart,
   History,
+  Receipt,
 } from "lucide-react";
 import { ROUTES, APP_NAME } from "@/config/constants";
 import { query } from "@/lib/db";
@@ -140,6 +142,27 @@ export function Sidebar() {
           className="h-16 w-16 rounded-lg"
         />
         <span className="brand-script text-2xl leading-none">{APP_NAME}</span>
+      </div>
+
+      {/* Accesos rápidos: las dos acciones más repetidas del día — crear cita
+          y registrar un gasto — a un click, sin tener que pasar por la
+          sección correspondiente. El gasto llega a Finanzas con ?nuevo=gasto
+          y abre el modal apenas monta la pestaña General. */}
+      <div className="mb-2 space-y-2 px-3">
+        <NavLink
+          to={ROUTES.appointmentNew}
+          className="flex items-center gap-2 rounded-xl bg-gradient-to-b from-gold-300 to-gold-500 px-3 py-2.5 text-sm font-semibold text-ink-950 shadow-gold-glow transition active:scale-[0.98]"
+        >
+          <CalendarPlus className="h-4 w-4" />
+          Nueva cita
+        </NavLink>
+        <NavLink
+          to={`${ROUTES.cashflow}?nuevo=gasto`}
+          className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm font-medium text-white/85 transition hover:bg-white/[0.07] active:scale-[0.98]"
+        >
+          <Receipt className="h-4 w-4 text-gold-300" />
+          Registrar gasto
+        </NavLink>
       </div>
 
       <nav className="flex-1 space-y-4 px-3">

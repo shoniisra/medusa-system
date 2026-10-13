@@ -17,6 +17,7 @@ import {
   BarChart3,
   LogOut,
   History,
+  Receipt,
 } from 'lucide-react';
 import { ROUTES } from '@/config/constants';
 import { useSession } from '@/store/session';
@@ -110,7 +111,7 @@ export function MobileNav() {
         title="Nuevo"
         className="sm:max-w-sm"
       >
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-2">
           <button
             onClick={() => {
               setNewOpen(false);
@@ -130,6 +131,16 @@ export function MobileNav() {
           >
             <ShoppingCart className="h-6 w-6 text-gold-300" />
             Nueva venta
+          </button>
+          <button
+            onClick={() => {
+              setNewOpen(false);
+              navigate(`${ROUTES.cashflow}?nuevo=gasto`);
+            }}
+            className="flex min-h-[96px] flex-col items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-sm font-medium text-white/85 active:scale-[0.97]"
+          >
+            <Receipt className="h-6 w-6 text-gold-300" />
+            Registrar gasto
           </button>
         </div>
       </Modal>

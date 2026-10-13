@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Lock,
@@ -103,7 +103,20 @@ export function CashflowPage() {
   const orgId = useOrgId();
   const user = useSession((s) => s.user);
   const setCashSession = useSession((s) => s.setCashSession);
-  const [tab, setTab] = useState<TabKey>('general');
+  const [userTab, setUserTab] = useState<TabKey>('general');
+  const [search, setSearch] = useSearchParams();
+  // Accesos directos externos (sidebar/FAB) llegan con ?nuevo=... y deben caer
+  // en la pestaña "general", que es la única que monta los modales de alta.
+  // Lo derivamos en render para evitar un effect que persigue la URL.
+  const tab: TabKey = search.get('nuevo') ? 'general' : userTab;
+  const switchTab = (t: TabKey) => {
+    setUserTab(t);
+    if (search.has('nuevo')) {
+      const next = new URLSearchParams(search);
+      next.delete('nuevo');
+      setSearch(next, { replace: true });
+    }
+  };
 
   const session = useQuery({
     queryKey: qk.cashSession(branchId),
@@ -139,7 +152,7 @@ export function CashflowPage() {
         {TABS.map((t) => (
           <button
             key={t.key}
-            onClick={() => setTab(t.key)}
+            onClick={() => switchTab(t.key)}
             className={cn(
               'rounded-lg px-3 py-1.5 text-xs font-medium transition-colors sm:text-sm',
               tab === t.key
@@ -180,9 +193,32 @@ interface Ctx {
 /* ───────────────────────────────── Resumen ──────────────────────────────── */
 
 function GeneralTab({ ctx }: { ctx: Ctx }) {
-  const [modal, setModal] = useState<null | 'income' | 'expense' | 'transfer'>(
-    null,
-  );
+  const [manualModal, setManualModal] = useState<
+    null | 'income' | 'expense' | 'transfer'
+  >(null);
+
+  // El acceso directo externo (sidebar/FAB) llega con ?nuevo=gasto|ingreso|
+  // transferencia; lo traducimos en render. El manual gana si el usuario abre
+  // otro modal con los botones de la pestaña.
+  const [search, setSearch] = useSearchParams();
+  const paramModal =
+    search.get('nuevo') === 'gasto'
+      ? ('expense' as const)
+      : search.get('nuevo') === 'ingreso'
+        ? ('income' as const)
+        : search.get('nuevo') === 'transferencia'
+          ? ('transfer' as const)
+          : null;
+  const modal = manualModal ?? paramModal;
+  const closeModal = () => {
+    setManualModal(null);
+    if (search.has('nuevo')) {
+      const next = new URLSearchParams(search);
+      next.delete('nuevo');
+      setSearch(next, { replace: true });
+    }
+  };
+  const setModal = setManualModal;
 
   return (
     <div className="space-y-6">
@@ -218,14 +254,10 @@ function GeneralTab({ ctx }: { ctx: Ctx }) {
 
       <TransactionsSection branchId={ctx.branchId} />
 
-      {modal === 'income' && (
-        <IncomeModal ctx={ctx} onClose={() => setModal(null)} />
-      )}
-      {modal === 'expense' && (
-        <ExpenseModal ctx={ctx} onClose={() => setModal(null)} />
-      )}
+      {modal === 'income' && <IncomeModal ctx={ctx} onClose={closeModal} />}
+      {modal === 'expense' && <ExpenseModal ctx={ctx} onClose={closeModal} />}
       {modal === 'transfer' && (
-        <TransferModal ctx={ctx} onClose={() => setModal(null)} />
+        <TransferModal ctx={ctx} onClose={closeModal} />
       )}
     </div>
   );
