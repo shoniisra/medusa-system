@@ -7,6 +7,7 @@ import {
   Package,
   Search,
   ChevronLeft,
+  AlertTriangle,
 } from 'lucide-react';
 import { money, num, fullName } from '@/lib/format';
 import { SERVICE_CATEGORIES } from '@/config/constants';
@@ -193,23 +194,42 @@ export function SaleItemsEditor({
           return (
             <div
               key={i.id}
-              className="rounded-2xl border border-white/10 bg-white/[0.03] p-3"
-              style={{
-                borderLeft: `3px solid ${
-                  assignable ? i.staff_color || '#64748b' : 'transparent'
-                }`,
-              }}
+              className={cn(
+                'rounded-2xl border p-3',
+                placeholder
+                  ? 'border-amber-400/60 bg-amber-400/[0.08] ring-1 ring-amber-400/30'
+                  : 'border-white/10 bg-white/[0.03]',
+              )}
+              style={
+                placeholder
+                  ? undefined
+                  : {
+                      borderLeft: `3px solid ${
+                        assignable ? i.staff_color || '#64748b' : 'transparent'
+                      }`,
+                    }
+              }
             >
               <div className="flex items-start gap-2">
-                <div className="min-w-0 flex-1 text-[15px] font-medium text-white">
-                  <InlineEdit
-                    value={i.description}
-                    align="left"
-                    onCommit={(v) =>
-                      v.trim() && onUpdateItem(i.id, { description: v.trim() })
-                    }
-                  />
-                </div>
+                {placeholder ? (
+                  <div className="flex min-w-0 flex-1 items-center gap-2">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-amber-300" />
+                    <span className="text-[13px] font-semibold text-amber-200">
+                      Falta elegir el servicio
+                      {i.category ? ` de ${i.category}` : ''}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="min-w-0 flex-1 text-[15px] font-medium text-white">
+                    <InlineEdit
+                      value={i.description}
+                      align="left"
+                      onCommit={(v) =>
+                        v.trim() && onUpdateItem(i.id, { description: v.trim() })
+                      }
+                    />
+                  </div>
+                )}
                 <button
                   onClick={() => onRemoveItem(i.id)}
                   aria-label="Eliminar ítem"
@@ -220,14 +240,15 @@ export function SaleItemsEditor({
               </div>
 
               {placeholder && (
-                <div className="mt-2 space-y-1">
+                <div className="mt-2 space-y-1.5">
                   <ServicePicker
                     item={i}
                     services={services}
                     onPick={(patch) => onUpdateItem(i.id, patch)}
                   />
-                  <p className="text-[11px] text-amber-300/80">
-                    Reservado por categoría: elegí el servicio para poder cobrar.
+                  <p className="text-[11px] text-amber-200/70">
+                    Reservado por categoría. Sin un servicio concreto no se puede
+                    cobrar.
                   </p>
                 </div>
               )}
@@ -346,13 +367,17 @@ export function SaleItemsEditor({
               const c = lineCommission(i, rules);
               const placeholder = !i.service_id && !i.product_id;
               return (
-                <tr key={i.id} className="align-middle">
+                <tr
+                  key={i.id}
+                  className={cn('align-middle', placeholder && 'bg-amber-400/[0.07]')}
+                >
                   <td className="py-1 pr-1">
                     <span
                       className="block h-8 w-1.5 rounded-full"
                       style={{
-                        backgroundColor:
-                          i.service_id || i.category
+                        backgroundColor: placeholder
+                          ? '#f59e0b'
+                          : i.service_id || i.category
                             ? i.staff_color || '#64748b'
                             : 'transparent',
                       }}
@@ -360,11 +385,16 @@ export function SaleItemsEditor({
                   </td>
                   <td className="py-1 pr-2">
                     {placeholder ? (
-                      <ServicePicker
-                        item={i}
-                        services={services}
-                        onPick={(patch) => onUpdateItem(i.id, patch)}
-                      />
+                      <div className="flex items-center gap-1.5">
+                        <AlertTriangle className="h-4 w-4 shrink-0 text-amber-300" />
+                        <div className="min-w-0 flex-1">
+                          <ServicePicker
+                            item={i}
+                            services={services}
+                            onPick={(patch) => onUpdateItem(i.id, patch)}
+                          />
+                        </div>
+                      </div>
                     ) : (
                       <InlineEdit
                         value={i.description}
@@ -549,10 +579,10 @@ function ServicePicker({
     <Select
       value=""
       onChange={(e) => e.target.value && pick(e.target.value)}
-      className="border-amber-400/40"
+      className="border-amber-400/70 bg-amber-400/10 font-medium text-amber-100"
     >
       <option value="">
-        {item.category ? `Elegí servicio de ${item.category}…` : 'Elegí servicio…'}
+        {item.category ? `Elegí el servicio de ${item.category}…` : 'Elegí el servicio…'}
       </option>
       {sorted.map((s) => (
         <option key={s.id} value={s.id}>
