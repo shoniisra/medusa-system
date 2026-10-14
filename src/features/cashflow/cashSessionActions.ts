@@ -312,6 +312,96 @@ export function buildCloseCashStatements(
   return { stmts, difference };
 }
 
+/**
+ * "Rollover": cerrar la sesión arrastrada (de ayer o antes) y abrir la de hoy
+ * en una sola transacción. El efectivo contado ahora cuenta a la vez como
+ * conteo de cierre y, menos el retiro al banco, como fondo de apertura del día.
+ *
+ * Es la invariante del cambio de día en el salón: lo que hay físicamente en la
+ * caja al empezar la mañana es lo que quedó en la caja de ayer. Pedir el valor
+ * dos veces (cerrar → abrir) era puro ruido operativo.
+ */
+export function buildRolloverStatements(
+  ctx: CashCtx,
+  oldSessionId: string,
+  registerId: string,
+  expected: number,
+  input: CloseCashInput,
+  now: string,
+): { stmts: Stmt[]; newSessionId: string; newOpening: number; difference: number } {
+  const { stmts: closeStmts, difference } = buildCloseCashStatements(
+    ctx,
+    oldSessionId,
+    expected,
+    input,
+    now,
+  );
+  const newOpening = round2(input.counted - input.withdraw);
+  const newSessionId = genId();
+  const stmts: Stmt[] = [
+    ...closeStmts,
+    {
+      sql: `INSERT INTO cash_session (id, cash_register_id, opened_by, opened_at, opening_cash, status)
+            VALUES (?, ?, ?, ?, ?, 'open')`,
+      args: [newSessionId, registerId, ctx.userId, now, newOpening],
+    },
+  ];
+  return { stmts, newSessionId, newOpening, difference };
+}
+
+export function useRolloverCashMutation(
+  ctx: CashCtx,
+  oldSession: CashSession | null,
+  registerId: string | null,
+  expected: number,
+  onDone?: (result: { newSession: CashSession; closedDay: string; difference: number }) => void,
+) {
+  const qc = useQueryClient();
+  const setCashSession = useSession((s) => s.setCashSession);
+  return useMutation({
+    mutationFn: async (input: CloseCashInput) => {
+      if (!oldSession) throw new Error('No hay caja abierta.');
+      if (!registerId) throw new Error('La sucursal no tiene caja registradora.');
+      const now = new Date().toISOString();
+      const { stmts, newSessionId, newOpening, difference } = buildRolloverStatements(
+        ctx,
+        oldSession.id,
+        registerId,
+        expected,
+        input,
+        now,
+      );
+      await batch(stmts);
+      const newSession: CashSession = {
+        id: newSessionId,
+        cash_register_id: registerId,
+        opened_by: ctx.userId,
+        opened_at: now,
+        opening_cash: newOpening,
+        closed_by: null,
+        closed_at: null,
+        expected_cash: null,
+        counted_cash: null,
+        difference: null,
+        status: 'open',
+        notes: null,
+      };
+      // El "día cerrado" para el resumen es el de la apertura de la sesión que
+      // acabamos de cerrar (ayer o el día del arrastre), no el de hoy.
+      const closedDay = ymd(new Date(oldSession.opened_at));
+      return { newSession, closedDay, difference };
+    },
+    onSuccess: (result) => {
+      setCashSession(result.newSession);
+      void qc.invalidateQueries({ queryKey: qk.cashSession(ctx.branchId) });
+      void qc.invalidateQueries({ queryKey: ['latest-cash', ctx.branchId] });
+      void qc.invalidateQueries({ queryKey: ['open-cash', ctx.branchId] });
+      invalidateFinance(qc, ctx.branchId);
+      onDone?.(result);
+    },
+  });
+}
+
 /** Mutación: cerrar caja — ajuste por descuadre + retiro + update de la sesión. */
 export function useCloseCashMutation(
   ctx: CashCtx,

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { buildCloseCashStatements, type CashCtx } from './cashSessionActions';
+import {
+  buildCloseCashStatements,
+  buildRolloverStatements,
+  type CashCtx,
+} from './cashSessionActions';
 
 /**
  * Cierre de caja: el orden de las sentencias es parte del contrato con el
@@ -112,5 +116,77 @@ describe('buildCloseCashStatements', () => {
     expect(args[2]).toBe(250);
     expect(args[3]).toBe(300); // counted_cash
     expect(args[4]).toBe(50); // difference
+  });
+});
+
+/**
+ * Rollover: cerrar la caja arrastrada y abrir la de hoy en un solo batch. Lo
+ * contado ahora es el conteo de cierre y, menos el retiro, el opening de hoy.
+ */
+describe('buildRolloverStatements', () => {
+  const REG = 'reg-1';
+
+  it('sin descuadre ni retiro: UPDATE del cierre + INSERT de la nueva sesión', () => {
+    const { stmts, newOpening } = buildRolloverStatements(
+      ctx,
+      SESSION_ID,
+      REG,
+      100,
+      { counted: 100, withdraw: 0, destination: null },
+      NOW,
+    );
+    expect(stmts).toHaveLength(2);
+    expect(stmts[0].sql).toMatch(/^\s*UPDATE cash_session/);
+    expect(stmts[1].sql).toContain('INSERT INTO cash_session');
+    expect(newOpening).toBe(100);
+  });
+
+  it('con retiro: cierra con contado y abre con contado - retiro', () => {
+    const { stmts, newOpening, difference } = buildRolloverStatements(
+      ctx,
+      SESSION_ID,
+      REG,
+      100,
+      { counted: 120, withdraw: 50, destination: 'bank-1' },
+      NOW,
+    );
+    // UPDATE close + adjustment + transfer + cash_out + INSERT new session
+    expect(stmts).toHaveLength(5);
+    expect(stmts[0].sql).toMatch(/^\s*UPDATE cash_session/);
+    expect(stmts[1].sql).toContain("'adjustment'");
+    expect(stmts[2].sql).toContain('account_transfer');
+    expect(stmts[3].sql).toContain("'cash_out'");
+    expect(stmts[4].sql).toContain('INSERT INTO cash_session');
+    expect(difference).toBe(20);
+    expect(newOpening).toBe(70); // 120 - 50
+  });
+
+  it('el INSERT de la nueva sesión queda SIEMPRE al final del batch', () => {
+    // Si el nuevo INSERT corriera antes del UPDATE de cierre, el trigger
+    // validaría el batch sobre el estado equivocado. Debe quedar al final.
+    const { stmts } = buildRolloverStatements(
+      ctx,
+      SESSION_ID,
+      REG,
+      100,
+      { counted: 95, withdraw: 30, destination: 'bank-1' },
+      NOW,
+    );
+    expect(stmts[stmts.length - 1].sql).toContain('INSERT INTO cash_session');
+  });
+
+  it('el newSessionId es un string no vacío y queda en los args del INSERT', () => {
+    const { stmts, newSessionId } = buildRolloverStatements(
+      ctx,
+      SESSION_ID,
+      REG,
+      100,
+      { counted: 100, withdraw: 0, destination: null },
+      NOW,
+    );
+    expect(newSessionId).toBeTruthy();
+    const insertArgs = stmts[stmts.length - 1].args as unknown[];
+    expect(insertArgs[0]).toBe(newSessionId);
+    expect(insertArgs[1]).toBe(REG);
   });
 });

@@ -4,8 +4,10 @@ import {
   AlertTriangle,
   BarChart3,
   CalendarDays,
+  ClipboardCheck,
   ClipboardList,
   Lock,
+  Repeat,
   Unlock,
   Wallet,
 } from 'lucide-react';
@@ -24,6 +26,7 @@ import {
   useLatestCashSession,
   useOpenCashMutation,
   usePendingAppointments,
+  useRolloverCashMutation,
   type CashCtx,
 } from './cashSessionActions';
 import { money, dateShort, timeShort } from '@/lib/format';
@@ -31,15 +34,17 @@ import { ymd } from '@/lib/date';
 import { ROUTES } from '@/config/constants';
 import { useSession, useBranchId, useOrgId } from '@/store/session';
 import { cn } from '@/lib/cn';
+import { CloseOverdueModal, useOverduePending } from '@/features/tasks/CloseOverdueModal';
 import type { CashSession } from '@/types';
 
 /**
- * Modal único de caja: abre / cierra la sesión y, al terminar un cierre, muestra
- * el resumen del día con dos accesos directos (métricas / agenda).
+ * Modal único de caja: abre, cierra o roll-overea la sesión (cerrar ayer y
+ * abrir hoy en un solo paso) y, al terminar un cierre, muestra el resumen del
+ * día con dos accesos directos (métricas / agenda).
  *
- * `enforce` lo pone el guard diario del AppLayout cuando el usuario arrastra una
- * caja de ayer o no abrió la de hoy: en ese modo no se puede cerrar sin resolver
- * (la X desaparece y el fondo no cierra).
+ * `enforce` lo pone el guard diario del AppLayout cuando el usuario arrastra
+ * una caja de ayer o no abrió la de hoy: en ese modo no se puede cerrar sin
+ * resolver (la X desaparece y el fondo no cierra).
  */
 export function CashRegisterModal({
   open,
@@ -63,42 +68,40 @@ export function CashRegisterModal({
 
   const openedToday = isOpenedToday(session, today);
 
-  // Decide el modo inicial del flujo:
-  //  - "retro"   : hay sesión abierta de un día previo → cerrar primero + abrir hoy
-  //  - "close"   : sesión abierta de hoy → cerrar normal
-  //  - "open"    : no hay sesión abierta (nunca o ya cerrada) → abrir caja
-  //
-  // El resumen del día NO es un modo inicial: solo se llega a él tras cerrar la
-  // caja en esta tanda. Antes, una caja cerrada hoy abría el chip "Abrir caja"
-  // directo en el resumen, que es lo que el usuario reportó como comportamiento
-  // equivocado.
-  type Mode = 'open' | 'close' | 'retro' | 'summary';
+  // Modo inicial — se calcula cada render pero SOLO se aplica cuando el modal
+  // pasa de cerrado a abierto. Mientras el modal está abierto, las transiciones
+  // internas (close → summary, rollover → summary) mandan. Antes recalculábamos
+  // el modo en cada cambio de initialMode, lo que causaba el bug clásico:
+  // después de abrir caja el refetch de latest-cash hacía initialMode='close' y
+  // el modal volvía a mostrar "Cerrar caja" por un frame.
+  type Mode = 'open' | 'close' | 'rollover' | 'summary';
   const initialMode: Mode =
     !session ? 'open'
     : session_isOpen && openedToday ? 'close'
-    : session_isOpen && !openedToday ? 'retro'
+    : session_isOpen && !openedToday ? 'rollover'
     : 'open';
 
-  // El modo "activo" permite avanzar en el flujo (retro → open → summary).
   const [mode, setMode] = useState<Mode>(initialMode);
   const [justClosedSession, setJustClosedSession] = useState<CashSession | null>(
     null,
   );
   const [justClosedDay, setJustClosedDay] = useState<string | null>(null);
 
-  // Si el modal se re-abre con otro estado inicial (p. ej. tras cerrar y
-  // volver a entrar al día siguiente), re-sincronizamos. Setear el estado
-  // durante render es el patrón recomendado por React para "ajustar un estado
-  // mientras renderizás": evita el flash de un render con el modo viejo que
-  // trae un useEffect y no infringe el linter.
-  const [modeSync, setModeSync] = useState({ open, initialMode });
-  if (modeSync.open !== open || modeSync.initialMode !== initialMode) {
-    setModeSync({ open, initialMode });
-    if (open) setMode(initialMode);
+  // Solo reseteamos el modo cuando el modal se vuelve a abrir desde fuera.
+  // Setear estado durante render ajustado a un disparador explícito ("open"
+  // cambió) es el patrón recomendado por React y no infringe el linter.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (open) {
+      setMode(initialMode);
+      setJustClosedSession(null);
+      setJustClosedDay(null);
+    }
   }
 
-  // En modo "summary" la última sesión cerrada marca el día; cuando acabamos de
-  // cerrar en esta tanda, usamos el valor local sincrónico para evitar flashes.
+  // Resumen: usa la sesión que acabamos de cerrar en esta tanda (sincrónica,
+  // sin esperar refetch) o la última cerrada si entramos directo al summary.
   const summarySessionId =
     justClosedSession?.id ?? (!session_isOpen ? session?.id ?? null : null);
   const summaryDay =
@@ -120,7 +123,11 @@ export function CashRegisterModal({
         <div className="mb-4 flex items-start gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-100">
           <AlertTriangle className="h-4 w-4 shrink-0" />
           <span>
-            Para empezar el día necesitás {mode === 'retro' ? 'cerrar la caja de ayer y abrir la de hoy' : 'abrir la caja'}.
+            Para empezar el día necesitás{' '}
+            {mode === 'rollover'
+              ? 'cerrar la caja de ayer y abrir la de hoy'
+              : 'abrir la caja'}
+            .
           </span>
         </div>
       )}
@@ -132,17 +139,29 @@ export function CashRegisterModal({
         </p>
       )}
 
-      {register.data && (mode === 'close' || mode === 'retro') && session_isOpen && session && (
+      {register.data && mode === 'close' && session_isOpen && session && (
         <CloseBody
           ctx={ctx}
           session={session}
-          retro={mode === 'retro'}
           onDismiss={onClose}
           onClosed={(closedDay) => {
             setJustClosedSession(session);
             setJustClosedDay(closedDay);
-            // Si era arrastre, pedir apertura de hoy; si no, resumen del día.
-            setMode(mode === 'retro' ? 'open' : 'summary');
+            setMode('summary');
+          }}
+        />
+      )}
+
+      {register.data && mode === 'rollover' && session_isOpen && session && (
+        <RolloverBody
+          ctx={ctx}
+          oldSession={session}
+          registerId={register.data.id}
+          onDismiss={onClose}
+          onDone={({ closedDay }) => {
+            setJustClosedSession(session);
+            setJustClosedDay(closedDay);
+            setMode('summary');
           }}
         />
       )}
@@ -151,15 +170,8 @@ export function CashRegisterModal({
         <OpenBody
           ctx={ctx}
           registerId={register.data.id}
-          retroContext={!!justClosedSession}
           onDismiss={onClose}
-          onOpened={() => {
-            // Tras abrir la caja de hoy luego de un cierre retroactivo, cerramos
-            // el modal: no hay métricas del día actual todavía. Si no fue retro,
-            // también cerramos (el usuario abrió recién).
-            if (justClosedSession) setMode('summary');
-            else onClose();
-          }}
+          onOpened={onClose}
         />
       )}
 
@@ -168,21 +180,17 @@ export function CashRegisterModal({
           sessionId={summarySessionId}
           branchId={branchId}
           day={summaryDay}
-          onViewMetrics={() => {
-            onClose();
-          }}
-          onGoCalendar={() => {
-            onClose();
-          }}
+          onViewMetrics={onClose}
+          onGoCalendar={onClose}
         />
       )}
     </Modal>
   );
 }
 
-function titleFor(mode: 'open' | 'close' | 'retro' | 'summary'): string {
+function titleFor(mode: 'open' | 'close' | 'rollover' | 'summary'): string {
   if (mode === 'close') return 'Cerrar caja';
-  if (mode === 'retro') return 'Cerrar caja de ayer';
+  if (mode === 'rollover') return 'Cerrar ayer y abrir hoy';
   if (mode === 'summary') return 'Resumen del día';
   return 'Abrir caja';
 }
@@ -203,13 +211,11 @@ function needsAction(session: CashSession | null, today: string): boolean {
 function OpenBody({
   ctx,
   registerId,
-  retroContext,
   onOpened,
   onDismiss,
 }: {
   ctx: CashCtx;
   registerId: string;
-  retroContext: boolean;
   onOpened: () => void;
   onDismiss: () => void;
 }) {
@@ -225,18 +231,8 @@ function OpenBody({
 
   return (
     <div className="space-y-4">
-      {retroContext && (
-        <p className="rounded-xl bg-success/10 p-3 text-xs text-success">
-          Caja de ayer cerrada. Ahora abrí la de hoy con el fondo que quedó.
-        </p>
-      )}
-
-      {/* Al empezar el día: qué dejó el último cierre y qué quedó pendiente. En
-          el arrastre (retro) no va: ahí el foco es abrir la caja de hoy. */}
-      {!retroContext && <LastCloseSummary branchId={ctx.branchId} />}
-      {!retroContext && (
-        <PendingTodayNotice branchId={ctx.branchId} onGoTasks={onDismiss} />
-      )}
+      <LastCloseSummary branchId={ctx.branchId} />
+      <PendingTodayNotice branchId={ctx.branchId} onGoTasks={onDismiss} />
 
       <Input
         label="Efectivo de apertura"
@@ -265,11 +261,9 @@ function OpenBody({
           {openIt.error instanceof Error ? openIt.error.message : 'Error al abrir caja.'}
         </p>
       )}
-      {!retroContext && (
-        <Button variant="ghost" className="w-full" onClick={onDismiss}>
-          Cerrar
-        </Button>
-      )}
+      <Button variant="ghost" className="w-full" onClick={onDismiss}>
+        Cerrar
+      </Button>
     </div>
   );
 }
@@ -359,18 +353,102 @@ function pendingLabel(reservedToday: number, overdue: number): string {
   return parts.join(' · ');
 }
 
+/* ────────────────── Bloqueador de vencidas (inline) ────────────────── */
+
+/**
+ * Panel de bloqueo compartido por el cierre normal y el rollover: muestra el
+ * conteo, lista las vencidas más viejas y ofrece abrir el cierre masivo sin
+ * salir del modal de caja. Antes mandaba al tablero genérico (filtrado por
+ * rango) y el usuario tenía que buscar manualmente una vencida de hace un mes.
+ */
+function BlockingPanel({
+  reservedToday,
+  overdue,
+  onOpenBulk,
+  onGoTasks,
+}: {
+  reservedToday: number;
+  overdue: number;
+  onOpenBulk: () => void;
+  onGoTasks: () => void;
+}) {
+  const overduePending = useOverduePending();
+  const sample = (overduePending.data ?? []).slice(0, 5);
+  const rest = Math.max(0, (overduePending.data?.length ?? 0) - sample.length);
+
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-100">
+      <div className="flex items-start gap-2">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>
+          No podés cerrar la caja con tareas sin procesar:{' '}
+          <b>{pendingLabel(reservedToday, overdue)}</b>. Marcálas aquí sin ir al
+          tablero.
+        </span>
+      </div>
+
+      {sample.length > 0 && (
+        <ul className="space-y-1 rounded-lg bg-black/20 p-2">
+          {sample.map((r) => (
+            <li
+              key={r.id}
+              className="flex items-baseline justify-between gap-2 text-[11px] text-amber-100/90"
+            >
+              <span className="truncate">
+                <span className="font-medium">
+                  {dateShort(r.start_at.slice(0, 10))}
+                </span>{' '}
+                · {r.customer_name ?? 'Sin cliente'}
+                {r.service_name ? (
+                  <span className="text-amber-100/60"> · {r.service_name}</span>
+                ) : null}
+              </span>
+              <span className="shrink-0 tabular-nums text-amber-100/60">
+                {timeShort(r.start_at)}
+              </span>
+            </li>
+          ))}
+          {rest > 0 && (
+            <li className="pt-1 text-[10px] text-amber-100/60">
+              y {rest} más…
+            </li>
+          )}
+        </ul>
+      )}
+
+      <div className="flex flex-wrap gap-2">
+        {overdue > 0 && (
+          <Button
+            size="sm"
+            className="shrink-0"
+            onClick={onOpenBulk}
+          >
+            <ClipboardCheck className="h-4 w-4" /> Resolver vencidas
+          </Button>
+        )}
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onGoTasks}
+          className="shrink-0"
+        >
+          <ClipboardList className="h-4 w-4" /> Abrir tablero
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /* ────────────────── Cerrar caja ────────────────── */
 
 function CloseBody({
   ctx,
   session,
-  retro,
   onClosed,
   onDismiss,
 }: {
   ctx: CashCtx;
   session: CashSession;
-  retro: boolean;
   onClosed: (closedDay: string) => void;
   onDismiss: () => void;
 }) {
@@ -386,6 +464,7 @@ function CloseBody({
   const blockers = pending.data ?? { reservedToday: 0, overdue: 0, total: 0 };
   const blocked = blockers.total > 0;
 
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [counted, setCounted] = useState('');
   const [withdraw, setWithdraw] = useState('');
   const [destination, setDestination] = useState('');
@@ -402,43 +481,12 @@ function CloseBody({
       'Caja cerrada',
       diff ? `Diferencia ${money(diff)}` : 'Sin diferencia en el conteo',
     );
-    // Para arrastre, el "día cerrado" es el de la apertura (ayer); si no, es hoy.
-    const closedDay = retro
-      ? ymd(new Date(session.opened_at))
-      : ymd(new Date());
-    onClosed(closedDay);
+    onClosed(ymd(new Date()));
   });
-
-  const openedDay = ymd(new Date(session.opened_at));
 
   return (
     <div className="space-y-4">
-      <div className="rounded-xl bg-white/5 p-3 text-xs text-white/60">
-        <div className="flex justify-between">
-          <span>Apertura</span>
-          <span className="text-white">
-            {dateShort(session.opened_at)} · {timeShort(session.opened_at)}
-          </span>
-        </div>
-        <div className="mt-1 flex justify-between">
-          <span>Fondo inicial</span>
-          <span className="text-white">{money(session.opening_cash)}</span>
-        </div>
-        <div className="mt-1 flex justify-between">
-          <span>Esperado en caja</span>
-          <span className="font-semibold text-gold-200">{money(expected)}</span>
-        </div>
-      </div>
-
-      {retro && (
-        <p className="flex items-start gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-100">
-          <AlertTriangle className="h-4 w-4 shrink-0" />
-          <span>
-            La caja quedó abierta desde el {dateShort(openedDay)}. Cerrála con lo que
-            tenés hoy y después abrís la caja del día.
-          </span>
-        </p>
-      )}
+      <OpenedHeader session={session} expected={expected} />
 
       <Input
         label="Efectivo contado (físico)"
@@ -483,28 +531,15 @@ function CloseBody({
       )}
 
       {blocked && (
-        <div className="flex flex-col gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-100">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>
-              No podés cerrar la caja con tareas sin procesar:{' '}
-              <b>{pendingLabel(blockers.reservedToday, blockers.overdue)}</b>.
-              Resolvelas en el tablero de tareas para no arrastrar
-              inconsistencias.
-            </span>
-          </div>
-          <Button
-            size="sm"
-            variant="outline"
-            className="self-start"
-            onClick={() => {
-              navigate(ROUTES.tasks);
-              onDismiss();
-            }}
-          >
-            <ClipboardList className="h-4 w-4" /> Ir a tareas
-          </Button>
-        </div>
+        <BlockingPanel
+          reservedToday={blockers.reservedToday}
+          overdue={blockers.overdue}
+          onOpenBulk={() => setBulkOpen(true)}
+          onGoTasks={() => {
+            navigate(ROUTES.tasks);
+            onDismiss();
+          }}
+        />
       )}
 
       <Button
@@ -528,6 +563,198 @@ function CloseBody({
           {closeIt.error instanceof Error ? closeIt.error.message : 'Error al cerrar.'}
         </p>
       )}
+
+      {bulkOpen && <CloseOverdueModal onClose={() => setBulkOpen(false)} />}
+    </div>
+  );
+}
+
+/* ────────────────── Rollover (cerrar ayer + abrir hoy en un paso) ────────────────── */
+
+function RolloverBody({
+  ctx,
+  oldSession,
+  registerId,
+  onDone,
+  onDismiss,
+}: {
+  ctx: CashCtx;
+  oldSession: CashSession;
+  registerId: string;
+  onDone: (result: { closedDay: string }) => void;
+  onDismiss: () => void;
+}) {
+  const toast = useToast();
+  const navigate = useNavigate();
+  const banks = useBankAccounts(ctx.orgId, true);
+  const expectedQ = useExpectedCash(oldSession);
+  const expected = expectedQ.data ?? oldSession.opening_cash;
+
+  const pending = usePendingAppointments(ctx.branchId);
+  const blockers = pending.data ?? { reservedToday: 0, overdue: 0, total: 0 };
+  const blocked = blockers.total > 0;
+
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [counted, setCounted] = useState('');
+  const [withdraw, setWithdraw] = useState('');
+  const [destination, setDestination] = useState('');
+
+  const cnt = counted === '' ? null : Number(counted);
+  const diff = cnt == null ? null : cnt - expected;
+  const out = withdraw === '' ? 0 : Number(withdraw);
+  const left = cnt == null ? null : cnt - out;
+  const tooMuch = cnt != null && out > cnt;
+  const noDestination = out > 0 && !destination;
+
+  const openedDay = ymd(new Date(oldSession.opened_at));
+
+  const rollover = useRolloverCashMutation(
+    ctx,
+    oldSession,
+    registerId,
+    expected,
+    (res) => {
+      toast.success(
+        'Día cerrado y caja de hoy abierta',
+        `Fondo inicial de hoy: ${money(res.newSession.opening_cash)}`,
+      );
+      onDone({ closedDay: res.closedDay });
+    },
+  );
+
+  return (
+    <div className="space-y-4">
+      <p className="flex items-start gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-100">
+        <AlertTriangle className="h-4 w-4 shrink-0" />
+        <span>
+          La caja quedó abierta desde el <b>{dateShort(openedDay)}</b>. Contá el
+          efectivo que hay ahora: se usa para cerrar ese día y como fondo de
+          apertura de hoy en un solo paso.
+        </span>
+      </p>
+
+      <OpenedHeader session={oldSession} expected={expected} />
+
+      <Input
+        label="Efectivo contado ahora (físico en caja)"
+        type="number"
+        min="0"
+        step="0.01"
+        value={counted}
+        onChange={(e) => setCounted(e.target.value)}
+      />
+
+      {cnt != null && (
+        <div className="flex justify-between text-xs text-white/50">
+          <span>Diferencia con lo esperado del día cerrado</span>
+          <span
+            className={cn(
+              'font-semibold',
+              diff === 0 ? 'text-white/70' : diff! < 0 ? 'text-danger' : 'text-success',
+            )}
+          >
+            {money(diff ?? 0)}
+          </span>
+        </div>
+      )}
+
+      <CountCashFields
+        cnt={cnt}
+        withdraw={withdraw}
+        onWithdrawChange={setWithdraw}
+        destination={destination}
+        onDestinationChange={setDestination}
+        banks={banks.data ?? []}
+        left={left}
+      />
+
+      {/* Lo que queda en caja arranca como fondo del día de hoy. Mostrarlo en
+          grande evita la pregunta "¿cuánto quedó para hoy?" en la caja física. */}
+      {cnt != null && (
+        <div className="flex items-center justify-between rounded-xl border border-gold/30 bg-gold/[0.08] p-3">
+          <div className="flex items-center gap-2 text-sm text-gold-100">
+            <Repeat className="h-4 w-4" />
+            <span>Fondo que arranca hoy</span>
+          </div>
+          <span className="text-base font-semibold text-gold-200">
+            {money(Math.max(0, left ?? 0))}
+          </span>
+        </div>
+      )}
+
+      {tooMuch && (
+        <p className="text-xs text-danger">
+          No podés retirar más de lo que contaste en caja.
+        </p>
+      )}
+      {noDestination && (
+        <p className="text-xs text-danger">Elegí la cuenta donde entra el retiro.</p>
+      )}
+
+      {blocked && (
+        <BlockingPanel
+          reservedToday={blockers.reservedToday}
+          overdue={blockers.overdue}
+          onOpenBulk={() => setBulkOpen(true)}
+          onGoTasks={() => {
+            navigate(ROUTES.tasks);
+            onDismiss();
+          }}
+        />
+      )}
+
+      <Button
+        className="w-full"
+        size="lg"
+        disabled={cnt == null || tooMuch || noDestination || blocked}
+        loading={rollover.isPending}
+        onClick={() =>
+          rollover.mutate({
+            counted: cnt ?? 0,
+            withdraw: out,
+            destination: out > 0 ? destination : null,
+          })
+        }
+      >
+        <Repeat className="h-4 w-4" /> Cerrar ayer y abrir hoy
+      </Button>
+      {rollover.isError && (
+        <p className="text-xs text-danger">
+          {rollover.error instanceof Error
+            ? rollover.error.message
+            : 'Error en el cambio de día.'}
+        </p>
+      )}
+
+      {bulkOpen && <CloseOverdueModal onClose={() => setBulkOpen(false)} />}
+    </div>
+  );
+}
+
+/** Cabecera compartida: apertura, fondo inicial y esperado. */
+function OpenedHeader({
+  session,
+  expected,
+}: {
+  session: CashSession;
+  expected: number;
+}) {
+  return (
+    <div className="rounded-xl bg-white/5 p-3 text-xs text-white/60">
+      <div className="flex justify-between">
+        <span>Apertura</span>
+        <span className="text-white">
+          {dateShort(session.opened_at)} · {timeShort(session.opened_at)}
+        </span>
+      </div>
+      <div className="mt-1 flex justify-between">
+        <span>Fondo inicial</span>
+        <span className="text-white">{money(session.opening_cash)}</span>
+      </div>
+      <div className="mt-1 flex justify-between">
+        <span>Esperado en caja</span>
+        <span className="font-semibold text-gold-200">{money(expected)}</span>
+      </div>
     </div>
   );
 }
@@ -660,7 +887,7 @@ function SummaryBody({
 export interface DailyCashState {
   loading: boolean;
   needsAction: boolean;
-  mode: 'open' | 'retro' | 'ok';
+  mode: 'open' | 'rollover' | 'ok';
 }
 
 export function useDailyCashGuard(): DailyCashState {
@@ -673,7 +900,7 @@ export function useDailyCashGuard(): DailyCashState {
     return { loading: true, needsAction: false, mode: 'ok' };
   }
   if (s && s.status === 'open' && !isOpenedToday(s, today)) {
-    return { loading: false, needsAction: true, mode: 'retro' };
+    return { loading: false, needsAction: true, mode: 'rollover' };
   }
   if (!s || (s.status === 'closed' && ymd(new Date(s.closed_at ?? s.opened_at)) !== today && (!isOpenedToday(s, today)))) {
     return { loading: false, needsAction: true, mode: 'open' };

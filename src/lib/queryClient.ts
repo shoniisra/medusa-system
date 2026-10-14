@@ -53,6 +53,9 @@ export function invalidateAppointments(
     ['week-availability'],
     ['overdue-pending'],
     ['overdue-count'],
+    // Cerrar vencidas desde el tablero (o desde el propio modal de caja) tiene
+    // que refrescar el bloqueador del cierre: antes quedaba stale hasta recargar.
+    ['cash-blocking-appts'],
   ];
   if (appointmentId) {
     keys.push(
