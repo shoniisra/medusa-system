@@ -1,17 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Scissors } from 'lucide-react';
+import { Scissors, Eye, EyeOff } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { query, queryOne } from '@/lib/db';
+import { query } from '@/lib/db';
 import { useSession } from '@/store/session';
 import { APP_NAME, ROUTES } from '@/config/constants';
-import { Button, Card, Select } from '@/components/ui';
+import { Button, Card, Select, Input } from '@/components/ui';
 import type { AppUser, Branch, Organization } from '@/types';
 
-/**
- * Login MVP: selecciona organización, usuario y sucursal.
- * TODO: reemplazar por verificación real de credenciales (backend/proxy).
- */
 export function LoginPage() {
   const navigate = useNavigate();
   const setSession = useSession((s) => s.setSession);
@@ -19,6 +15,9 @@ export function LoginPage() {
   const [orgId, setOrgId] = useState('');
   const [userId, setUserId] = useState('');
   const [branchId, setBranchId] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPwd, setShowPwd] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   const orgs = useQuery({
@@ -29,8 +28,6 @@ export function LoginPage() {
       ),
   });
 
-  // Preselección de organización en cuanto llega el listado. Es sincronizar el
-  // formulario con datos async, no estado derivado: el usuario puede cambiarla.
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     const def = import.meta.env.VITE_DEFAULT_ORG_ID;
@@ -39,12 +36,18 @@ export function LoginPage() {
   }, [orgs.data, orgId]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
+  // Usuarios: incluir has_password como columna derivada para no exponer el hash.
   const users = useQuery({
     queryKey: ['login-users', orgId],
     enabled: !!orgId,
     queryFn: () =>
-      query<AppUser>(
-        'SELECT * FROM app_user WHERE organization_id = ? AND active = 1 ORDER BY full_name',
+      query<AppUser & { has_password: 0 | 1 }>(
+        `SELECT id, organization_id, username, full_name, email, phone, role,
+                active, last_login_at, created_at, updated_at,
+                CASE WHEN password_hash IS NOT NULL AND password_hash != '' THEN 1 ELSE 0 END AS has_password
+           FROM app_user
+          WHERE organization_id = ? AND active = 1
+          ORDER BY full_name`,
         [orgId],
       ),
   });
@@ -59,14 +62,49 @@ export function LoginPage() {
       ),
   });
 
-  async function handleEnter() {
+  const selectedUser = users.data?.find((u) => u.id === userId);
+  const requiresPassword = selectedUser?.has_password === 1;
+
+  // Limpiar contraseña al cambiar usuario.
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    setPassword('');
     setError('');
+  }, [userId]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  async function handleEnter() {
+    if (!orgId || !userId || !branchId) {
+      setError('Seleccioná organización, usuario y sucursal.');
+      return;
+    }
+    if (requiresPassword && !password) {
+      setError('Ingresá tu contraseña.');
+      return;
+    }
+    setError('');
+    setLoading(true);
     try {
-      const org = await queryOne<Organization>(
-        'SELECT * FROM organization WHERE id = ?',
-        [orgId],
-      );
-      const user = users.data?.find((u) => u.id === userId);
+      // En producción: autenticar contra el Worker (setea cookie httpOnly).
+      // En dev: el Worker no corre, pero el flujo igual funciona porque la SPA
+      // ya está autenticada por la DB directa (dev bypass).
+      if (!import.meta.env.DEV) {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ user_id: userId, org_id: orgId, branch_id: branchId, password }),
+        });
+        if (!res.ok) {
+          const data = (await res.json().catch(() => ({}))) as { error?: string };
+          setError(data.error ?? 'No se pudo iniciar sesión.');
+          return;
+        }
+      }
+
+      // Hidratar sesión local.
+      const org = orgs.data?.find((o) => o.id === orgId);
+      const user = selectedUser;
       const branch = branches.data?.find((b) => b.id === branchId);
       if (!org || !user || !branch) {
         setError('Seleccioná organización, usuario y sucursal.');
@@ -76,10 +114,18 @@ export function LoginPage() {
       navigate(ROUTES.dashboard, { replace: true });
     } catch (e) {
       setError(
-        e instanceof Error ? e.message : 'No se pudo conectar a la base de datos.',
+        e instanceof Error ? e.message : 'No se pudo conectar.',
       );
+    } finally {
+      setLoading(false);
     }
   }
+
+  const canSubmit =
+    !!orgId &&
+    !!userId &&
+    !!branchId &&
+    (!requiresPassword || password.length >= 1);
 
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
@@ -132,15 +178,41 @@ export function LoginPage() {
             ))}
           </Select>
 
+          {requiresPassword && (
+            <div className="relative">
+              <Input
+                label="Contraseña"
+                type={showPwd ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && canSubmit && void handleEnter()}
+                autoComplete="current-password"
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={() => setShowPwd((v) => !v)}
+                className="absolute right-3 top-9 text-white/40 hover:text-white"
+                tabIndex={-1}
+              >
+                {showPwd ? (
+                  <EyeOff className="h-4 w-4" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+          )}
+
           {error && <p className="text-sm text-danger">{error}</p>}
 
           <Button
             className="w-full"
             size="lg"
             onClick={() => void handleEnter()}
-            disabled={!orgId || !userId || !branchId}
+            disabled={!canSubmit || loading}
           >
-            Ingresar
+            {loading ? 'Ingresando…' : 'Ingresar'}
           </Button>
         </div>
       </Card>

@@ -1,6 +1,15 @@
 import { createClient, type Client, type InValue } from '@libsql/client/web';
 import { handleGcalSync } from './gcalSync';
 import { handleGcal } from './gcal';
+import {
+  hashPassword,
+  verifyPassword,
+  signToken,
+  sessionCookie,
+  clearCookie,
+  parseCookieToken,
+  verifyToken,
+} from './auth';
 
 /**
  * Worker de Cloudflare: sirve los assets estáticos de la SPA y expone un proxy
@@ -14,6 +23,8 @@ import { handleGcal } from './gcal';
 interface Env {
   TURSO_DATABASE_URL: string;
   TURSO_AUTH_TOKEN: string;
+  /** Secreto para firmar tokens de sesión (HMAC-SHA256). */
+  SESSION_SECRET: string;
   /** Secreto compartido con el Apps Script que sincroniza Google Calendar. */
   GCAL_SYNC_SECRET: string;
   /** Service account que escribe en los calendarios (sistema → Google). */
@@ -102,6 +113,179 @@ async function logServerError(
   }
 }
 
+/* ─── Handler de login ────────────────────────────────────────────────────── */
+
+interface LoginBody {
+  user_id: string;
+  org_id: string;
+  branch_id: string;
+  password?: string;
+}
+
+interface AppUserRow {
+  id: string;
+  organization_id: string;
+  username: string;
+  full_name: string;
+  email: string | null;
+  phone: string | null;
+  role: string;
+  active: number;
+  password_hash: string | null;
+  last_login_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface BranchRow {
+  id: string;
+  organization_id: string;
+  name: string;
+  code: string;
+}
+
+interface OrgRow {
+  id: string;
+  name: string;
+}
+
+async function handleLogin(request: Request, env: Env): Promise<Response> {
+  let body: LoginBody;
+  try {
+    body = (await request.json()) as LoginBody;
+  } catch {
+    return Response.json({ error: 'Payload inválido' }, { status: 400 });
+  }
+
+  const { user_id, org_id, branch_id, password } = body;
+  if (!user_id || !org_id || !branch_id) {
+    return Response.json(
+      { error: 'Faltan campos requeridos.' },
+      { status: 400 },
+    );
+  }
+
+  const db = makeDb(env);
+
+  // Verificar usuario, organización y sucursal en paralelo.
+  const [userRs, branchRs, orgRs] = await Promise.all([
+    db.execute({
+      sql: `SELECT id, organization_id, username, full_name, email, phone, role,
+                   active, password_hash, last_login_at, created_at, updated_at
+              FROM app_user
+             WHERE id = ? AND organization_id = ? AND active = 1`,
+      args: [user_id, org_id],
+    }),
+    db.execute({
+      sql: `SELECT id, organization_id, name, code FROM branch WHERE id = ? AND organization_id = ? AND active = 1`,
+      args: [branch_id, org_id],
+    }),
+    db.execute({
+      sql: `SELECT id, name FROM organization WHERE id = ? AND active = 1`,
+      args: [org_id],
+    }),
+  ]);
+
+  const user = userRs.rows[0] as unknown as AppUserRow | undefined;
+  const branch = branchRs.rows[0] as unknown as BranchRow | undefined;
+  const org = orgRs.rows[0] as unknown as OrgRow | undefined;
+
+  if (!user || !branch || !org) {
+    return Response.json(
+      { error: 'Usuario, sucursal u organización no válidos.' },
+      { status: 401 },
+    );
+  }
+
+  // Verificación de contraseña:
+  //  - NULL password_hash → acceso sin contraseña (admins existentes sin hash).
+  //  - Con hash → verificar PBKDF2.
+  if (user.password_hash !== null && user.password_hash !== '') {
+    if (!password) {
+      return Response.json(
+        { error: 'Se requiere contraseña.' },
+        { status: 401 },
+      );
+    }
+    const ok = await verifyPassword(password, user.password_hash);
+    if (!ok) {
+      return Response.json({ error: 'Contraseña incorrecta.' }, { status: 401 });
+    }
+  }
+
+  // Actualizar last_login_at.
+  const now = new Date().toISOString();
+  await db
+    .execute({
+      sql: `UPDATE app_user SET last_login_at = ?, updated_at = ? WHERE id = ?`,
+      args: [now, now, user.id],
+    })
+    .catch(() => {
+      /* best-effort */
+    });
+
+  // Si hay SESSION_SECRET, emitir token. Si no (dev sin secret), devolver sin cookie.
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  if (env.SESSION_SECRET) {
+    const token = await signToken(
+      { userId: user.id, orgId: org_id, branchId: branch_id, role: user.role },
+      env.SESSION_SECRET,
+    );
+    const secure = new URL(request.url).protocol === 'https:';
+    headers.set('Set-Cookie', sessionCookie(token, secure));
+  }
+
+  // No exponer password_hash al cliente.
+  const { password_hash: _ph, ...safeUser } = user;
+  return new Response(
+    JSON.stringify({ user: safeUser, branch, organization: org }),
+    { status: 200, headers },
+  );
+}
+
+/* ─── Utilidad: hashear contraseña desde el panel de admin ───────────────── */
+// Expuesta como endpoint interno (requiere token válido) para que Settings
+// pueda setear contraseñas a colaboradoras sin exponer la lógica al cliente.
+
+async function handleSetPassword(request: Request, env: Env): Promise<Response> {
+  if (!env.SESSION_SECRET) {
+    return Response.json({ error: 'Sin configurar' }, { status: 503 });
+  }
+  const token = parseCookieToken(request);
+  if (!token) return Response.json({ error: 'No autorizado' }, { status: 401 });
+  const payload = await verifyToken(token, env.SESSION_SECRET);
+  if (!payload || !['owner', 'admin', 'manager'].includes(payload.role)) {
+    return Response.json({ error: 'Sin permisos' }, { status: 403 });
+  }
+
+  let body: { user_id: string; password: string } & Record<string, unknown>;
+  try {
+    body = (await request.json()) as {
+      user_id: string;
+      password: string;
+    } & Record<string, unknown>;
+  } catch {
+    return Response.json({ error: 'Payload inválido' }, { status: 400 });
+  }
+
+  if (!body.user_id || !body.password || String(body.password).length < 4) {
+    return Response.json(
+      { error: 'user_id y password (mín. 4 chars) requeridos.' },
+      { status: 400 },
+    );
+  }
+
+  const hash = await hashPassword(String(body.password));
+  const db = makeDb(env);
+  const now = new Date().toISOString();
+  await db.execute({
+    sql: `UPDATE app_user SET password_hash = ?, updated_at = ? WHERE id = ? AND organization_id = ?`,
+    args: [hash, now, body.user_id, payload.orgId],
+  });
+
+  return Response.json({ ok: true });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -124,6 +308,34 @@ export default {
       const payload = await request.json().catch(() => null);
       const { status, body } = await handleGcal(payload, env);
       return Response.json(body, { status });
+    }
+
+    // ── Autenticación ─────────────────────────────────────────────────────────
+    if (url.pathname === '/api/login' && request.method === 'POST') {
+      return handleLogin(request, env);
+    }
+
+    if (url.pathname === '/api/logout' && request.method === 'POST') {
+      const secure = url.protocol === 'https:';
+      return new Response(null, {
+        status: 204,
+        headers: { 'Set-Cookie': clearCookie(secure) },
+      });
+    }
+
+    if (url.pathname === '/api/set-password' && request.method === 'POST') {
+      return handleSetPassword(request, env);
+    }
+
+    // Verifica la sesión y devuelve el payload del token (para que el cliente
+    // pueda re-hidratar la sesión en una recarga sin re-loguear).
+    if (url.pathname === '/api/session' && request.method === 'GET') {
+      const token = parseCookieToken(request);
+      if (!token || !env.SESSION_SECRET) {
+        return Response.json({ user: null }, { status: 200 });
+      }
+      const payload = await verifyToken(token, env.SESSION_SECRET);
+      return Response.json({ user: payload }, { status: 200 });
     }
 
     if (url.pathname === '/api/db' && request.method === 'POST') {

@@ -38,13 +38,13 @@ export const useSession = create<SessionState>()(
         set({ user, organization, branch }),
       setBranch: (branch) => set({ branch, cashSession: null }),
       setCashSession: (cashSession) => set({ cashSession }),
-      logout: () =>
-        set({
-          user: null,
-          organization: null,
-          branch: null,
-          cashSession: null,
-        }),
+      logout: () => {
+        // Limpiar cookie de sesión del Worker en segundo plano (best-effort).
+        void fetch('/api/logout', { method: 'POST', credentials: 'include' }).catch(
+          () => undefined,
+        );
+        set({ user: null, organization: null, branch: null, cashSession: null });
+      },
 
       isAuthenticated: () => get().user !== null,
       hasOpenCash: () => get().cashSession?.status === 'open',

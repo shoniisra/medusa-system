@@ -5,6 +5,7 @@ import { AppLayout } from '@/layouts/AppLayout';
 import { HomePage } from '@/layouts/HomePage';
 import { lazyPage } from '@/lib/staleBuild';
 import { ProtectedRoute } from './ProtectedRoute';
+import { RequirePermission } from './RequirePermission';
 import { RouteError } from './RouteError';
 import { ROUTES } from '@/config/constants';
 import { LoginPage } from '@/features/auth/LoginPage';
@@ -75,6 +76,11 @@ const SettingsPage = lazyPage(() =>
     default: m.SettingsPage,
   })),
 );
+const MyServicesPage = lazyPage(() =>
+  import('@/features/staff/MyServicesPage').then((m) => ({
+    default: m.MyServicesPage,
+  })),
+);
 
 function PageFallback() {
   return (
@@ -98,35 +104,67 @@ export const router = createBrowserRouter([
         element: <AppLayout />,
         errorElement: <RouteError />,
         children: [
+          // Rutas disponibles para todos los roles autenticados.
           { path: ROUTES.dashboard, element: <HomePage /> },
-          { path: ROUTES.metrics, element: <DashboardPage /> },
-          { path: ROUTES.pos, element: lazyRoute(<PosPage />) },
-          { path: ROUTES.cashflow, element: lazyRoute(<CashflowPage />) },
+          { path: ROUTES.myServices, element: lazyRoute(<MyServicesPage />) },
           { path: ROUTES.calendar, element: lazyRoute(<CalendarPage />) },
-          {
-            path: ROUTES.calendarView,
-            element: lazyRoute(<CalendarViewPage />),
-          },
+          { path: ROUTES.calendarView, element: lazyRoute(<CalendarViewPage />) },
+          { path: ROUTES.appointmentNew, element: lazyRoute(<AppointmentPage />) },
+          { path: `${ROUTES.appointment}/:id`, element: lazyRoute(<AppointmentPage />) },
           { path: ROUTES.tasks, element: lazyRoute(<TasksPage />) },
           { path: ROUTES.history, element: lazyRoute(<HistoryPage />) },
           { path: ROUTES.reminders, element: lazyRoute(<RemindersPage />) },
-          {
-            path: ROUTES.appointmentNew,
-            element: lazyRoute(<AppointmentPage />),
-          },
-          {
-            path: `${ROUTES.appointment}/:id`,
-            element: lazyRoute(<AppointmentPage />),
-          },
-          { path: ROUTES.staff, element: lazyRoute(<StaffPage />) },
-          { path: ROUTES.staffAbsences, element: lazyRoute(<AbsencesPage />) },
           { path: ROUTES.clients, element: lazyRoute(<ClientsPage />) },
+          { path: `${ROUTES.client}/:id`, element: lazyRoute(<ClientDetailPage />) },
+
+          // POS: requiere use_pos.
           {
-            path: `${ROUTES.client}/:id`,
-            element: lazyRoute(<ClientDetailPage />),
+            element: <RequirePermission permission="use_pos" />,
+            children: [
+              { path: ROUTES.pos, element: lazyRoute(<PosPage />) },
+            ],
           },
-          { path: ROUTES.invoices, element: lazyRoute(<InvoicesPage />) },
-          { path: ROUTES.settings, element: lazyRoute(<SettingsPage />) },
+
+          // Métricas: requiere view_metrics.
+          {
+            element: <RequirePermission permission="view_metrics" />,
+            children: [
+              { path: ROUTES.metrics, element: <DashboardPage /> },
+            ],
+          },
+
+          // Finanzas: requiere view_finance.
+          {
+            element: <RequirePermission permission="view_finance" />,
+            children: [
+              { path: ROUTES.cashflow, element: lazyRoute(<CashflowPage />) },
+            ],
+          },
+
+          // Personal y ausencias: requiere view_staff_finance.
+          {
+            element: <RequirePermission permission="view_staff_finance" />,
+            children: [
+              { path: ROUTES.staff, element: lazyRoute(<StaffPage />) },
+              { path: ROUTES.staffAbsences, element: lazyRoute(<AbsencesPage />) },
+            ],
+          },
+
+          // Facturación: requiere view_invoices.
+          {
+            element: <RequirePermission permission="view_invoices" />,
+            children: [
+              { path: ROUTES.invoices, element: lazyRoute(<InvoicesPage />) },
+            ],
+          },
+
+          // Configuración: requiere manage_settings.
+          {
+            element: <RequirePermission permission="manage_settings" />,
+            children: [
+              { path: ROUTES.settings, element: lazyRoute(<SettingsPage />) },
+            ],
+          },
         ],
       },
     ],

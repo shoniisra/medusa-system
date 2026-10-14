@@ -16,12 +16,14 @@ import {
   ShoppingCart,
   History,
   Receipt,
+  Star,
 } from "lucide-react";
 import { ROUTES, APP_NAME } from "@/config/constants";
 import { query } from "@/lib/db";
-import { useBranchId } from "@/store/session";
+import { useBranchId, useSession } from "@/store/session";
 import { cn } from "@/lib/cn";
 import { ymd } from "@/features/calendar/appointmentBoard";
+import { useHasPermission } from "@/config/permissions";
 
 interface NavItem {
   to: string;
@@ -30,61 +32,7 @@ interface NavItem {
   end?: boolean;
 }
 
-/** Navegación por secciones; `title` opcional pinta un encabezado de grupo. */
-const NAV_SECTIONS: {
-  title?: string;
-  items: (NavItem & { children?: NavItem[] })[];
-}[] = [
-  {
-    items: [
-      {
-        to: ROUTES.dashboard,
-        label: "Tablero Principal",
-        icon: LayoutDashboard,
-        end: true,
-      },
-      { to: ROUTES.pos, label: "POS (venta sin cita)", icon: ShoppingCart },
-    ],
-  },
-  {
-    title: "Citas Agendadas",
-    items: [
-      {
-        to: ROUTES.calendar,
-        label: "Agenda",
-        icon: CalendarDays,
-        children: [
-          { to: ROUTES.calendar, label: "Lista", icon: CalendarDays, end: true },
-          { to: ROUTES.calendarView, label: "Calendario", icon: CalendarRange },
-          { to: ROUTES.tasks, label: "Tablero", icon: ClipboardList },
-          { to: ROUTES.history, label: "Historial", icon: History },
-        ],
-      },
-      { to: ROUTES.reminders, label: "Recordatorios", icon: BellRing },
-    ],
-  },
-  {
-    items: [
-      { to: ROUTES.cashflow, label: "Finanzas", icon: Wallet },
-      {
-        to: ROUTES.staff,
-        label: "Personal",
-        icon: Users,
-        children: [
-          { to: ROUTES.staff, label: "Nómina", icon: Users, end: true },
-          {
-            to: ROUTES.staffAbsences,
-            label: "Ausencias y cierres",
-            icon: CalendarOff,
-          },
-        ],
-      },
-      { to: ROUTES.clients, label: "Clientes", icon: Contact },
-      { to: ROUTES.invoices, label: "Facturación", icon: FileText },
-      { to: ROUTES.settings, label: "Configuración", icon: Settings },
-    ],
-  },
-];
+type NavItemWithChildren = NavItem & { children?: NavItem[] };
 
 /** Cuenta de citas vencidas (reservadas/atendiendo de días pasados). */
 function useOverdueCount(): number {
@@ -133,6 +81,69 @@ export function Sidebar() {
   const overdue = useOverdueCount();
   const tomorrow = useTomorrowCount();
   const { pathname } = useLocation();
+  const role = useSession((s) => s.user?.role);
+  const can = useHasPermission(role);
+
+  type Section = { title?: string; items: NavItemWithChildren[] };
+
+  const sections: Section[] = [
+    {
+      items: [
+        { to: ROUTES.dashboard, label: "Tablero Principal", icon: LayoutDashboard, end: true },
+        ...(can('view_own_summary')
+          ? [{ to: ROUTES.myServices, label: "Mis servicios", icon: Star }]
+          : []),
+        ...(can('use_pos')
+          ? [{ to: ROUTES.pos, label: "POS (venta sin cita)", icon: ShoppingCart }]
+          : []),
+      ],
+    },
+    {
+      title: "Citas Agendadas",
+      items: [
+        {
+          to: ROUTES.calendar,
+          label: "Agenda",
+          icon: CalendarDays,
+          children: [
+            { to: ROUTES.calendar, label: "Lista", icon: CalendarDays, end: true },
+            { to: ROUTES.calendarView, label: "Calendario", icon: CalendarRange },
+            { to: ROUTES.tasks, label: "Tablero", icon: ClipboardList },
+            { to: ROUTES.history, label: "Historial", icon: History },
+          ],
+        },
+        { to: ROUTES.reminders, label: "Recordatorios", icon: BellRing },
+      ],
+    },
+    {
+      items: [
+        ...(can('view_finance')
+          ? [{ to: ROUTES.cashflow, label: "Finanzas", icon: Wallet }]
+          : []),
+        ...(can('view_staff_finance')
+          ? [
+              {
+                to: ROUTES.staff,
+                label: "Personal",
+                icon: Users,
+                children: [
+                  { to: ROUTES.staff, label: "Nómina", icon: Users, end: true },
+                  { to: ROUTES.staffAbsences, label: "Ausencias y cierres", icon: CalendarOff },
+                ],
+              } as NavItemWithChildren,
+            ]
+          : []),
+        { to: ROUTES.clients, label: "Clientes", icon: Contact },
+        ...(can('view_invoices')
+          ? [{ to: ROUTES.invoices, label: "Facturación", icon: FileText }]
+          : []),
+        ...(can('manage_settings')
+          ? [{ to: ROUTES.settings, label: "Configuración", icon: Settings }]
+          : []),
+      ],
+    },
+  ].filter((s) => s.items.length > 0);
+
   return (
     <aside className="hidden w-64 shrink-0 flex-col border-r border-white/5 bg-ink-900/80 backdrop-blur-xl lg:flex">
       <div className="flex items-center gap-2 px-6 py-6">
@@ -156,17 +167,19 @@ export function Sidebar() {
           <CalendarPlus className="h-4 w-4" />
           Nueva cita
         </NavLink>
-        <NavLink
-          to={`${ROUTES.cashflow}?nuevo=gasto`}
-          className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm font-medium text-white/85 transition hover:bg-white/[0.07] active:scale-[0.98]"
-        >
-          <Receipt className="h-4 w-4 text-gold-300" />
-          Registrar gasto
-        </NavLink>
+        {can('view_finance') && (
+          <NavLink
+            to={`${ROUTES.cashflow}?nuevo=gasto`}
+            className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm font-medium text-white/85 transition hover:bg-white/[0.07] active:scale-[0.98]"
+          >
+            <Receipt className="h-4 w-4 text-gold-300" />
+            Registrar gasto
+          </NavLink>
+        )}
       </div>
 
       <nav className="flex-1 space-y-4 px-3">
-        {NAV_SECTIONS.map((section, si) => (
+        {sections.map((section, si) => (
           <div key={section.title ?? si} className="space-y-1">
             {section.title && (
               <p className="px-3 pb-1 pt-2 text-xs font-medium uppercase tracking-wide text-white/30">

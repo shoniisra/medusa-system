@@ -70,6 +70,12 @@ export interface AppUser {
   phone: string | null;
   role: UserRole;
   active: BoolInt;
+  /**
+   * El servidor nunca envía el hash al cliente. Este flag se incluye en las
+   * respuestas del Worker (login/listado de usuarios) para que la UI sepa si
+   * debe mostrar el campo de contraseña o no.
+   */
+  has_password: BoolInt;
   last_login_at: ISODateTime | null;
   created_at: ISODateTime;
   updated_at: ISODateTime;

@@ -86,4 +86,6 @@ export const ROUTES = {
   appointment: '/agenda/cita', // + /:id
   invoices: '/facturacion',
   settings: '/configuracion',
+  /** Vista personal de la colaboradora: sus servicios del día y comisiones. */
+  myServices: '/mis-servicios',
 } as const;

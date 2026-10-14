@@ -18,31 +18,16 @@ import {
   LogOut,
   History,
   Receipt,
+  Star,
 } from 'lucide-react';
 import { ROUTES } from '@/config/constants';
 import { useSession } from '@/store/session';
 import { fullName } from '@/lib/format';
 import { Modal } from '@/components/ui';
 import { cn } from '@/lib/cn';
+import { useHasPermission } from '@/config/permissions';
 
-/** Pestañas principales: lo que se usa todos los días. El resto vive en "Más". */
-const TABS = [
-  { to: ROUTES.dashboard, label: 'Inicio', icon: CalendarRange, end: true },
-  { to: ROUTES.calendar, label: 'Agenda', icon: CalendarDays },
-  { to: ROUTES.pos, label: 'POS', icon: ShoppingCart },
-];
-
-const MORE = [
-  { to: ROUTES.metrics, label: 'Métricas', icon: BarChart3 },
-  { to: ROUTES.tasks, label: 'Tablero', icon: ClipboardList },
-  { to: ROUTES.history, label: 'Historial', icon: History },
-  { to: ROUTES.cashflow, label: 'Finanzas', icon: Wallet },
-  { to: ROUTES.clients, label: 'Clientes', icon: Contact },
-  { to: ROUTES.reminders, label: 'Recordatorios', icon: BellRing },
-  { to: ROUTES.staff, label: 'Personal', icon: Users },
-  { to: ROUTES.invoices, label: 'Facturación', icon: FileText },
-  { to: ROUTES.settings, label: 'Configuración', icon: Settings },
-];
+type NavEntry = { to: string; label: string; icon: typeof CalendarDays; end?: boolean };
 
 /**
  * Navegación inferior (móvil): 4 destinos frecuentes + botón central para
@@ -52,11 +37,29 @@ const MORE = [
 export function MobileNav() {
   const navigate = useNavigate();
   const [moreOpen, setMoreOpen] = useState(false);
-  // Hoja del botón "+" central: dos opciones (cita, venta). El tap sobre el
-  // FAB abre la hoja; el flujo destructivo nunca se dispara con un solo tap
-  // accidental al tomar el teléfono.
   const [newOpen, setNewOpen] = useState(false);
   const { user, logout } = useSession();
+  const role = useSession((s) => s.user?.role);
+  const can = useHasPermission(role);
+
+  const TABS: NavEntry[] = [
+    { to: ROUTES.dashboard, label: 'Inicio', icon: CalendarRange, end: true },
+    { to: ROUTES.calendar, label: 'Agenda', icon: CalendarDays },
+    ...(can('use_pos') ? [{ to: ROUTES.pos, label: 'POS', icon: ShoppingCart }] : []),
+  ];
+
+  const MORE: NavEntry[] = [
+    ...(can('view_own_summary') ? [{ to: ROUTES.myServices, label: 'Mis servicios', icon: Star }] : []),
+    ...(can('view_metrics') ? [{ to: ROUTES.metrics, label: 'Métricas', icon: BarChart3 }] : []),
+    { to: ROUTES.tasks, label: 'Tablero', icon: ClipboardList },
+    { to: ROUTES.history, label: 'Historial', icon: History },
+    ...(can('view_finance') ? [{ to: ROUTES.cashflow, label: 'Finanzas', icon: Wallet }] : []),
+    { to: ROUTES.clients, label: 'Clientes', icon: Contact },
+    { to: ROUTES.reminders, label: 'Recordatorios', icon: BellRing },
+    ...(can('view_staff_finance') ? [{ to: ROUTES.staff, label: 'Personal', icon: Users }] : []),
+    ...(can('view_invoices') ? [{ to: ROUTES.invoices, label: 'Facturación', icon: FileText }] : []),
+    ...(can('manage_settings') ? [{ to: ROUTES.settings, label: 'Configuración', icon: Settings }] : []),
+  ];
 
   const tabClass = ({ isActive }: { isActive: boolean }) =>
     cn(
@@ -77,8 +80,7 @@ export function MobileNav() {
           </NavLink>
         ))}
 
-        {/* Acción central: abre una hoja con "Nueva cita" / "Nueva venta". Dos
-            taps intencionales en vez de uno directo al alta. */}
+        {/* Acción central FAB */}
         <div className="relative w-16 shrink-0">
           <button
             onClick={() => setNewOpen(true)}
@@ -113,35 +115,30 @@ export function MobileNav() {
       >
         <div className="grid grid-cols-3 gap-2">
           <button
-            onClick={() => {
-              setNewOpen(false);
-              navigate(ROUTES.appointmentNew);
-            }}
+            onClick={() => { setNewOpen(false); navigate(ROUTES.appointmentNew); }}
             className="flex min-h-[96px] flex-col items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-sm font-medium text-white/85 active:scale-[0.97]"
           >
             <CalendarPlus className="h-6 w-6 text-gold-300" />
             Nueva cita
           </button>
-          <button
-            onClick={() => {
-              setNewOpen(false);
-              navigate(ROUTES.pos);
-            }}
-            className="flex min-h-[96px] flex-col items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-sm font-medium text-white/85 active:scale-[0.97]"
-          >
-            <ShoppingCart className="h-6 w-6 text-gold-300" />
-            Nueva venta
-          </button>
-          <button
-            onClick={() => {
-              setNewOpen(false);
-              navigate(`${ROUTES.cashflow}?nuevo=gasto`);
-            }}
-            className="flex min-h-[96px] flex-col items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-sm font-medium text-white/85 active:scale-[0.97]"
-          >
-            <Receipt className="h-6 w-6 text-gold-300" />
-            Registrar gasto
-          </button>
+          {can('use_pos') && (
+            <button
+              onClick={() => { setNewOpen(false); navigate(ROUTES.pos); }}
+              className="flex min-h-[96px] flex-col items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-sm font-medium text-white/85 active:scale-[0.97]"
+            >
+              <ShoppingCart className="h-6 w-6 text-gold-300" />
+              Nueva venta
+            </button>
+          )}
+          {can('view_finance') && (
+            <button
+              onClick={() => { setNewOpen(false); navigate(`${ROUTES.cashflow}?nuevo=gasto`); }}
+              className="flex min-h-[96px] flex-col items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-sm font-medium text-white/85 active:scale-[0.97]"
+            >
+              <Receipt className="h-6 w-6 text-gold-300" />
+              Registrar gasto
+            </button>
+          )}
         </div>
       </Modal>
 
