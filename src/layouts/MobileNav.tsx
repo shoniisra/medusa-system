@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { useState } from "react";
+import { NavLink, useNavigate } from "react-router-dom";
 import {
   CalendarDays,
   CalendarPlus,
@@ -19,15 +19,20 @@ import {
   History,
   Receipt,
   Star,
-} from 'lucide-react';
-import { ROUTES } from '@/config/constants';
-import { useSession } from '@/store/session';
-import { fullName } from '@/lib/format';
-import { Modal } from '@/components/ui';
-import { cn } from '@/lib/cn';
-import { useHasPermission } from '@/config/permissions';
+} from "lucide-react";
+import { ROUTES } from "@/config/constants";
+import { useSession } from "@/store/session";
+import { fullName } from "@/lib/format";
+import { Modal } from "@/components/ui";
+import { cn } from "@/lib/cn";
+import { useHasPermission } from "@/config/permissions";
 
-type NavEntry = { to: string; label: string; icon: typeof CalendarDays; end?: boolean };
+type NavEntry = {
+  to: string;
+  label: string;
+  icon: typeof CalendarDays;
+  end?: boolean;
+};
 
 /**
  * Navegación inferior (móvil): 4 destinos frecuentes + botón central para
@@ -43,35 +48,49 @@ export function MobileNav() {
   const can = useHasPermission(role);
 
   const TABS: NavEntry[] = [
-    { to: ROUTES.dashboard, label: 'Inicio', icon: CalendarRange, end: true },
-    { to: ROUTES.calendar, label: 'Agenda', icon: CalendarDays },
-    ...(can('use_pos') ? [{ to: ROUTES.pos, label: 'POS', icon: ShoppingCart }] : []),
+    { to: ROUTES.dashboard, label: "Inicio", icon: CalendarRange, end: true },
+    { to: ROUTES.calendar, label: "Agenda", icon: CalendarDays },
+    ...(can("use_pos")
+      ? [{ to: ROUTES.pos, label: "POS", icon: ShoppingCart }]
+      : []),
   ];
 
   const MORE: NavEntry[] = [
-    ...(can('view_own_summary') ? [{ to: ROUTES.myServices, label: 'Mis servicios', icon: Star }] : []),
-    ...(can('view_metrics') ? [{ to: ROUTES.metrics, label: 'Métricas', icon: BarChart3 }] : []),
-    { to: ROUTES.tasks, label: 'Tablero', icon: ClipboardList },
-    { to: ROUTES.history, label: 'Historial', icon: History },
-    ...(can('view_finance') ? [{ to: ROUTES.cashflow, label: 'Finanzas', icon: Wallet }] : []),
-    { to: ROUTES.clients, label: 'Clientes', icon: Contact },
-    { to: ROUTES.reminders, label: 'Recordatorios', icon: BellRing },
-    ...(can('view_staff_finance') ? [{ to: ROUTES.staff, label: 'Personal', icon: Users }] : []),
-    ...(can('view_invoices') ? [{ to: ROUTES.invoices, label: 'Facturación', icon: FileText }] : []),
-    ...(can('manage_settings') ? [{ to: ROUTES.settings, label: 'Configuración', icon: Settings }] : []),
+    ...(can("view_own_summary")
+      ? [{ to: ROUTES.myServices, label: "Mis servicios", icon: Star }]
+      : []),
+    ...(can("view_metrics")
+      ? [{ to: ROUTES.metrics, label: "Métricas", icon: BarChart3 }]
+      : []),
+    { to: ROUTES.tasks, label: "Tablero", icon: ClipboardList },
+    { to: ROUTES.history, label: "Historial", icon: History },
+    ...(can("view_finance")
+      ? [{ to: ROUTES.cashflow, label: "Finanzas", icon: Wallet }]
+      : []),
+    { to: ROUTES.clients, label: "Clientes", icon: Contact },
+    { to: ROUTES.reminders, label: "Recordatorios", icon: BellRing },
+    ...(can("view_staff_finance")
+      ? [{ to: ROUTES.staff, label: "Personal", icon: Users }]
+      : []),
+    ...(can("view_invoices")
+      ? [{ to: ROUTES.invoices, label: "Facturación", icon: FileText }]
+      : []),
+    ...(can("manage_settings")
+      ? [{ to: ROUTES.settings, label: "Configuración", icon: Settings }]
+      : []),
   ];
 
   const tabClass = ({ isActive }: { isActive: boolean }) =>
     cn(
-      'flex flex-1 flex-col items-center justify-center gap-1 py-2 text-[11px] font-medium transition-colors',
-      isActive ? 'text-gold-300' : 'text-white/50',
+      "flex flex-1 flex-col items-center justify-center gap-1 py-2 text-[11px] font-medium transition-colors",
+      isActive ? "text-gold-300" : "text-white/50",
     );
 
   return (
     <>
       <nav
         className="fixed inset-x-0 bottom-0 z-40 flex h-16 items-stretch border-t border-white/10 bg-ink-900/95 backdrop-blur-xl lg:hidden"
-        style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
         {TABS.slice(0, 2).map(({ to, label, icon: Icon, end }) => (
           <NavLink key={to} to={to} end={end} className={tabClass}>
@@ -115,24 +134,33 @@ export function MobileNav() {
       >
         <div className="grid grid-cols-3 gap-2">
           <button
-            onClick={() => { setNewOpen(false); navigate(ROUTES.appointmentNew); }}
+            onClick={() => {
+              setNewOpen(false);
+              navigate(ROUTES.appointmentNew);
+            }}
             className="flex min-h-[96px] flex-col items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-sm font-medium text-white/85 active:scale-[0.97]"
           >
             <CalendarPlus className="h-6 w-6 text-gold-300" />
-            Nueva cita
+            Agendar Cita
           </button>
-          {can('use_pos') && (
+          {can("use_pos") && (
             <button
-              onClick={() => { setNewOpen(false); navigate(ROUTES.pos); }}
+              onClick={() => {
+                setNewOpen(false);
+                navigate(ROUTES.pos);
+              }}
               className="flex min-h-[96px] flex-col items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-sm font-medium text-white/85 active:scale-[0.97]"
             >
               <ShoppingCart className="h-6 w-6 text-gold-300" />
               Nueva venta
             </button>
           )}
-          {can('view_finance') && (
+          {can("view_finance") && (
             <button
-              onClick={() => { setNewOpen(false); navigate(`${ROUTES.cashflow}?nuevo=gasto`); }}
+              onClick={() => {
+                setNewOpen(false);
+                navigate(`${ROUTES.cashflow}?nuevo=gasto`);
+              }}
               className="flex min-h-[96px] flex-col items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-sm font-medium text-white/85 active:scale-[0.97]"
             >
               <Receipt className="h-6 w-6 text-gold-300" />
@@ -156,10 +184,10 @@ export function MobileNav() {
               onClick={() => setMoreOpen(false)}
               className={({ isActive }) =>
                 cn(
-                  'flex min-h-[84px] flex-col items-center justify-center gap-2 rounded-2xl border p-2 text-center text-xs font-medium transition active:scale-[0.97]',
+                  "flex min-h-[84px] flex-col items-center justify-center gap-2 rounded-2xl border p-2 text-center text-xs font-medium transition active:scale-[0.97]",
                   isActive
-                    ? 'border-gold/50 bg-gold/15 text-gold-100'
-                    : 'border-white/10 bg-white/[0.03] text-white/75',
+                    ? "border-gold/50 bg-gold/15 text-gold-100"
+                    : "border-white/10 bg-white/[0.03] text-white/75",
                 )
               }
             >
@@ -178,10 +206,10 @@ export function MobileNav() {
         >
           <span className="min-w-0">
             <span className="block truncate text-sm font-medium text-white">
-              {user ? fullName(user.full_name) : 'Sesión'}
+              {user ? fullName(user.full_name) : "Sesión"}
             </span>
             <span className="block text-xs capitalize text-white/40">
-              {user?.role ?? '—'}
+              {user?.role ?? "—"}
             </span>
           </span>
           <LogOut className="h-5 w-5 shrink-0 text-white/50" />

@@ -89,12 +89,23 @@ export function Sidebar() {
   const sections: Section[] = [
     {
       items: [
-        { to: ROUTES.dashboard, label: "Tablero Principal", icon: LayoutDashboard, end: true },
-        ...(can('view_own_summary')
+        {
+          to: ROUTES.dashboard,
+          label: "Tablero Principal",
+          icon: LayoutDashboard,
+          end: true,
+        },
+        ...(can("view_own_summary")
           ? [{ to: ROUTES.myServices, label: "Mis servicios", icon: Star }]
           : []),
-        ...(can('use_pos')
-          ? [{ to: ROUTES.pos, label: "POS (venta sin cita)", icon: ShoppingCart }]
+        ...(can("use_pos")
+          ? [
+              {
+                to: ROUTES.pos,
+                label: "POS (venta sin cita)",
+                icon: ShoppingCart,
+              },
+            ]
           : []),
       ],
     },
@@ -106,8 +117,17 @@ export function Sidebar() {
           label: "Agenda",
           icon: CalendarDays,
           children: [
-            { to: ROUTES.calendar, label: "Lista", icon: CalendarDays, end: true },
-            { to: ROUTES.calendarView, label: "Calendario", icon: CalendarRange },
+            {
+              to: ROUTES.calendar,
+              label: "Lista",
+              icon: CalendarDays,
+              end: true,
+            },
+            {
+              to: ROUTES.calendarView,
+              label: "Calendario",
+              icon: CalendarRange,
+            },
             { to: ROUTES.tasks, label: "Tablero", icon: ClipboardList },
             { to: ROUTES.history, label: "Historial", icon: History },
           ],
@@ -117,10 +137,10 @@ export function Sidebar() {
     },
     {
       items: [
-        ...(can('view_finance')
+        ...(can("view_finance")
           ? [{ to: ROUTES.cashflow, label: "Finanzas", icon: Wallet }]
           : []),
-        ...(can('view_staff_finance')
+        ...(can("view_staff_finance")
           ? [
               {
                 to: ROUTES.staff,
@@ -128,16 +148,20 @@ export function Sidebar() {
                 icon: Users,
                 children: [
                   { to: ROUTES.staff, label: "Nómina", icon: Users, end: true },
-                  { to: ROUTES.staffAbsences, label: "Ausencias y cierres", icon: CalendarOff },
+                  {
+                    to: ROUTES.staffAbsences,
+                    label: "Ausencias y cierres",
+                    icon: CalendarOff,
+                  },
                 ],
               } as NavItemWithChildren,
             ]
           : []),
         { to: ROUTES.clients, label: "Clientes", icon: Contact },
-        ...(can('view_invoices')
+        ...(can("view_invoices")
           ? [{ to: ROUTES.invoices, label: "Facturación", icon: FileText }]
           : []),
-        ...(can('manage_settings')
+        ...(can("manage_settings")
           ? [{ to: ROUTES.settings, label: "Configuración", icon: Settings }]
           : []),
       ],
@@ -165,9 +189,9 @@ export function Sidebar() {
           className="flex items-center gap-2 rounded-xl bg-gradient-to-b from-gold-300 to-gold-500 px-3 py-2.5 text-sm font-semibold text-ink-950 shadow-gold-glow transition active:scale-[0.98]"
         >
           <CalendarPlus className="h-4 w-4" />
-          Nueva cita
+          Agendar Cita
         </NavLink>
-        {can('view_finance') && (
+        {can("view_finance") && (
           <NavLink
             to={`${ROUTES.cashflow}?nuevo=gasto`}
             className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm font-medium text-white/85 transition hover:bg-white/[0.07] active:scale-[0.98]"

@@ -1,19 +1,19 @@
-import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
-import { CalendarDays, CalendarPlus, CalendarRange } from 'lucide-react';
-import { ROUTES } from '@/config/constants';
-import { Button, Badge } from '@/components/ui';
-import { useStaff } from '@/features/pos/useCatalog';
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
+import { CalendarDays, CalendarPlus, CalendarRange } from "lucide-react";
+import { ROUTES } from "@/config/constants";
+import { Button, Badge } from "@/components/ui";
+import { useStaff } from "@/features/pos/useCatalog";
 import {
   type AppointmentRow,
   ListView,
   startAttention,
-} from './appointmentBoard';
-import { AppointmentActionsModal } from './AppointmentActions';
-import { FilterBar } from './FilterBar';
-import { useAppointmentListFilters } from './useAppointmentListFilters';
-import { AppointmentsEmptyState } from './AppointmentsEmptyState';
+} from "./appointmentBoard";
+import { AppointmentActionsModal } from "./AppointmentActions";
+import { FilterBar } from "./FilterBar";
+import { useAppointmentListFilters } from "./useAppointmentListFilters";
+import { AppointmentsEmptyState } from "./AppointmentsEmptyState";
 
 /** Marcador de carga de la lista: evita el falso "Sin citas" mientras consulta. */
 function ListSkeleton() {
@@ -77,7 +77,7 @@ export function CalendarPage() {
             </Button>
           </Link>
           <Button onClick={() => navigate(ROUTES.appointmentNew)}>
-            <CalendarPlus className="h-4 w-4" /> Nueva cita
+            <CalendarPlus className="h-4 w-4" /> Agendar Cita
           </Button>
         </div>
       </div>
@@ -115,7 +115,7 @@ export function CalendarPage() {
       ) : (
         <ListView
           rows={filteredRows}
-          showDate={filters.mode !== 'today'}
+          showDate={filters.mode !== "today"}
           onStart={beginAttention}
           onFinish={finishAttention}
           onOpen={setSelected}

@@ -248,22 +248,9 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
 // pueda setear contraseñas a colaboradoras sin exponer la lógica al cliente.
 
 async function handleSetPassword(request: Request, env: Env): Promise<Response> {
-  if (!env.SESSION_SECRET) {
-    return Response.json({ error: 'Sin configurar' }, { status: 503 });
-  }
-  const token = parseCookieToken(request);
-  if (!token) return Response.json({ error: 'No autorizado' }, { status: 401 });
-  const payload = await verifyToken(token, env.SESSION_SECRET);
-  if (!payload || !['owner', 'admin', 'manager'].includes(payload.role)) {
-    return Response.json({ error: 'Sin permisos' }, { status: 403 });
-  }
-
-  let body: { user_id: string; password: string } & Record<string, unknown>;
+  let body: { user_id: string; password: string; org_id?: string } & Record<string, unknown>;
   try {
-    body = (await request.json()) as {
-      user_id: string;
-      password: string;
-    } & Record<string, unknown>;
+    body = (await request.json()) as typeof body;
   } catch {
     return Response.json({ error: 'Payload inválido' }, { status: 400 });
   }
@@ -275,12 +262,35 @@ async function handleSetPassword(request: Request, env: Env): Promise<Response> 
     );
   }
 
+  let orgId: string;
+
+  if (env.SESSION_SECRET) {
+    // Con SESSION_SECRET: verificar token HMAC y extraer orgId del payload.
+    const token = parseCookieToken(request);
+    if (!token) return Response.json({ error: 'No autorizado' }, { status: 401 });
+    const payload = await verifyToken(token, env.SESSION_SECRET);
+    if (!payload || !['owner', 'admin', 'manager'].includes(payload.role)) {
+      return Response.json({ error: 'Sin permisos' }, { status: 403 });
+    }
+    orgId = payload.orgId;
+  } else {
+    // Sin SESSION_SECRET: requiere org_id en el body.
+    // La barrera exterior es Cloudflare Access (allowlist por correo).
+    if (!body.org_id) {
+      return Response.json(
+        { error: 'org_id requerido cuando SESSION_SECRET no está configurado.' },
+        { status: 400 },
+      );
+    }
+    orgId = body.org_id;
+  }
+
   const hash = await hashPassword(String(body.password));
   const db = makeDb(env);
   const now = new Date().toISOString();
   await db.execute({
     sql: `UPDATE app_user SET password_hash = ?, updated_at = ? WHERE id = ? AND organization_id = ?`,
-    args: [hash, now, body.user_id, payload.orgId],
+    args: [hash, now, body.user_id, orgId],
   });
 
   return Response.json({ ok: true });

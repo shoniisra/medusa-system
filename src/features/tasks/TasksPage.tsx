@@ -1,30 +1,30 @@
-import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { CalendarPlus, ClipboardCheck, ClipboardList } from 'lucide-react';
-import { execute } from '@/lib/db';
-import { ROUTES } from '@/config/constants';
-import { Button, Badge, useToast } from '@/components/ui';
-import { useStaff } from '@/features/pos/useCatalog';
+import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { CalendarPlus, ClipboardCheck, ClipboardList } from "lucide-react";
+import { execute } from "@/lib/db";
+import { ROUTES } from "@/config/constants";
+import { Button, Badge, useToast } from "@/components/ui";
+import { useStaff } from "@/features/pos/useCatalog";
 import {
   type AppointmentRow,
   KanbanView,
   STATUS_ORDER,
-} from '@/features/calendar/appointmentBoard';
-import { AppointmentActionsModal } from '@/features/calendar/AppointmentActions';
-import { FilterBar } from '@/features/calendar/FilterBar';
-import { useAppointmentListFilters } from '@/features/calendar/useAppointmentListFilters';
-import { AppointmentsEmptyState } from '@/features/calendar/AppointmentsEmptyState';
-import { CloseOverdueModal, useOverduePending } from './CloseOverdueModal';
-import type { AppointmentStatus } from '@/types';
-import { invalidateAppointments } from '@/lib/queryClient';
+} from "@/features/calendar/appointmentBoard";
+import { AppointmentActionsModal } from "@/features/calendar/AppointmentActions";
+import { FilterBar } from "@/features/calendar/FilterBar";
+import { useAppointmentListFilters } from "@/features/calendar/useAppointmentListFilters";
+import { AppointmentsEmptyState } from "@/features/calendar/AppointmentsEmptyState";
+import { CloseOverdueModal, useOverduePending } from "./CloseOverdueModal";
+import type { AppointmentStatus } from "@/types";
+import { invalidateAppointments } from "@/lib/queryClient";
 
 /** Aviso al mover una tarjeta de columna en el tablero. */
 const MOVE_TOAST: Partial<Record<AppointmentStatus, string>> = {
-  reserved: 'Cita devuelta a Reservadas',
-  confirmed: 'Cita en atención',
-  cancelled: 'Cita cancelada',
-  no_show: 'Marcada como no asistió',
+  reserved: "Cita devuelta a Reservadas",
+  confirmed: "Cita en atención",
+  cancelled: "Cita cancelada",
+  no_show: "Marcada como no asistió",
 };
 
 /**
@@ -38,7 +38,7 @@ export function TasksPage() {
 
   const [selected, setSelected] = useState<AppointmentRow | null>(null);
   const [closeOverdue, setCloseOverdue] = useState(false);
-  const [notice, setNotice] = useState('');
+  const [notice, setNotice] = useState("");
 
   const staff = useStaff();
   const { filters, patch, label, appts, filteredRows, overdueInView } =
@@ -63,7 +63,7 @@ export function TasksPage() {
   // Arrastrar a "Atendido" no marca la cita: abre la ficha para confirmar el
   // detalle y cobrar (igual que "Finalizar y Cobrar" del menú de acciones).
   const finishAttention = (a: AppointmentRow) => {
-    if (a.status === 'reserved') {
+    if (a.status === "reserved") {
       execute(
         "UPDATE appointment SET status = 'confirmed', updated_at = ? WHERE id = ?",
         [new Date().toISOString(), a.id],
@@ -80,18 +80,17 @@ export function TasksPage() {
 
   const setStatus = useMutation({
     mutationFn: ({ id, status }: { id: string; status: AppointmentStatus }) =>
-      execute('UPDATE appointment SET status = ?, updated_at = ? WHERE id = ?', [
-        status,
-        new Date().toISOString(),
-        id,
-      ]),
+      execute(
+        "UPDATE appointment SET status = ?, updated_at = ? WHERE id = ?",
+        [status, new Date().toISOString(), id],
+      ),
     onSuccess: (_r, { status }) => {
       invalidate();
       // Arrastrar una tarjeta no deja rastro en pantalla más que el movimiento:
       // el aviso confirma que el cambio llegó a la base.
-      toast.success(MOVE_TOAST[status] ?? 'Cita actualizada');
+      toast.success(MOVE_TOAST[status] ?? "Cita actualizada");
     },
-    onError: (e: Error) => toast.error('No se pudo mover la cita', e.message),
+    onError: (e: Error) => toast.error("No se pudo mover la cita", e.message),
   });
 
   /**
@@ -102,15 +101,15 @@ export function TasksPage() {
    * - El resto de estados se cambian en el acto.
    */
   const handleMove = (a: AppointmentRow, toStatus: AppointmentStatus) => {
-    setNotice('');
+    setNotice("");
     if (a.status === toStatus) return;
-    if (a.status === 'attended') {
+    if (a.status === "attended") {
       setNotice(
-        'Una cita atendida ya tiene venta y cobro: no se puede mover de columna.',
+        "Una cita atendida ya tiene venta y cobro: no se puede mover de columna.",
       );
       return;
     }
-    if (toStatus === 'attended') {
+    if (toStatus === "attended") {
       finishAttention(a);
       return;
     }
@@ -125,7 +124,7 @@ export function TasksPage() {
         <Badge tone="gold">Tablero</Badge>
         {overdueTotal > 0 && (
           <span className="rounded-full bg-danger/20 px-2 py-0.5 text-xs font-medium text-danger">
-            {overdueTotal} vencida{overdueTotal > 1 ? 's' : ''}
+            {overdueTotal} vencida{overdueTotal > 1 ? "s" : ""}
           </span>
         )}
         <div className="ml-auto flex shrink-0 items-center gap-2">
@@ -141,7 +140,7 @@ export function TasksPage() {
           )}
           <Button size="sm" onClick={() => navigate(ROUTES.appointmentNew)}>
             <CalendarPlus className="h-4 w-4" />
-            <span className="hidden sm:inline">Nueva cita</span>
+            <span className="hidden sm:inline">Agendar Cita</span>
           </Button>
         </div>
       </div>

@@ -1,19 +1,16 @@
 import { useState } from 'react';
-import { Stethoscope, KeyRound } from 'lucide-react';
+import { Stethoscope } from 'lucide-react';
 import { RESOURCES } from './resources';
 import { ResourceManager } from './ResourceManager';
 import { DiagnosticsPanel } from './DiagnosticsPanel';
-import { UserAccessPanel } from './UserAccessPanel';
 import { cn } from '@/lib/cn';
 
 const DIAGNOSTICS_KEY = '__diagnostics';
-const ACCESS_KEY = '__access';
 
 export function SettingsPage() {
   const [active, setActive] = useState<string>(RESOURCES[0].key);
   const resource = RESOURCES.find((r) => r.key === active);
   const isDiagnostics = active === DIAGNOSTICS_KEY;
-  const isAccess = active === ACCESS_KEY;
 
   const tabClass = (key: string) =>
     cn(
@@ -42,10 +39,6 @@ export function SettingsPage() {
             </button>
           );
         })}
-        <button onClick={() => setActive(ACCESS_KEY)} className={tabClass(ACCESS_KEY)}>
-          <KeyRound className="h-4 w-4" />
-          Accesos
-        </button>
         <button onClick={() => setActive(DIAGNOSTICS_KEY)} className={tabClass(DIAGNOSTICS_KEY)}>
           <Stethoscope className="h-4 w-4" />
           Diagnóstico
@@ -54,8 +47,6 @@ export function SettingsPage() {
 
       {isDiagnostics ? (
         <DiagnosticsPanel />
-      ) : isAccess ? (
-        <UserAccessPanel />
       ) : resource ? (
         <ResourceManager key={resource.key} resource={resource} />
       ) : null}
