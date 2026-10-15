@@ -16,7 +16,6 @@ import {
   Search,
   ChevronLeft,
   ChevronRight,
-  SlidersHorizontal,
   Scale,
   ExternalLink,
 } from 'lucide-react';
@@ -2320,11 +2319,15 @@ function TransactionsTab({ ctx }: { ctx: Ctx }) {
   const bankName = (id: string) =>
     banks.data?.find((b) => b.id === id)?.name ?? 'Banco';
 
+  const set = <K extends keyof TxFilters>(k: K, v: TxFilters[K]) =>
+    setFilters((prev) => ({ ...prev, [k]: v }));
+
   return (
-    <div className="space-y-6">
-      {/* Barra: año, buscar, ordenar */}
+    <div className="space-y-4">
+      {/* Fila 1: año + ordenar (siempre visible) */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
+        {/* Selector de año */}
+        <div className="flex items-center gap-1">
           <button
             onClick={() => setYear((y) => y - 1)}
             className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
@@ -2341,38 +2344,167 @@ function TransactionsTab({ ctx }: { ctx: Ctx }) {
             <ChevronRight className="h-5 w-5" />
           </button>
         </div>
-        <div className="flex items-center gap-2">
+
+        <div className="flex items-center gap-3">
+          {/* Buscar (solo mobile) */}
           <Button
             size="sm"
             variant={activeFilters ? 'gold' : 'outline'}
+            className="lg:hidden"
             onClick={() => setSearchOpen(true)}
           >
-            <Search className="h-4 w-4" /> Buscar
+            <Search className="h-4 w-4" />
+            {activeFilters ? 'Filtrando' : 'Buscar'}
           </Button>
-          <div className="flex items-center gap-1 rounded-xl bg-white/5 p-1">
-            <SlidersHorizontal className="ml-1 h-4 w-4 text-white/40" />
-            {(['date', 'amount'] as const).map((s) => (
-              <button
-                key={s}
-                onClick={() => setSortBy(s)}
-                className={cn(
-                  'rounded-lg px-3 py-1 text-xs font-medium transition-colors',
-                  sortBy === s
-                    ? 'bg-gold-400 text-ink-950'
-                    : 'text-white/50 hover:text-white',
-                )}
-              >
-                {s === 'date' ? 'Fecha' : 'Valor'}
-              </button>
-            ))}
+
+          {/* Ordenar: siempre visible */}
+          <div className="flex items-center gap-2">
+            <span className="hidden text-xs font-medium text-white/40 sm:inline">
+              Ordenar:
+            </span>
+            <div className="flex rounded-xl bg-white/5 p-1">
+              {(['date', 'amount'] as const).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setSortBy(s)}
+                  className={cn(
+                    'rounded-lg px-3 py-1 text-xs font-medium transition-colors',
+                    sortBy === s
+                      ? 'bg-gold-400 text-ink-950'
+                      : 'text-white/50 hover:text-white',
+                  )}
+                >
+                  {s === 'date' ? 'Fecha' : 'Monto'}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </div>
 
+      {/* Barra de filtros inline — solo desktop */}
+      <div className="hidden rounded-xl border border-white/8 bg-white/[0.03] p-3 lg:block">
+        <div className="grid grid-cols-[auto_1fr_1fr_1fr_1fr_1fr_auto] items-end gap-3">
+          {/* Tipo */}
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-white/40">Tipo</p>
+            <div className="flex rounded-lg bg-white/5 p-0.5">
+              {([['all', 'Todos'], ['in', 'Ingreso'], ['out', 'Egreso']] as const).map(([v, lbl]) => (
+                <button
+                  key={v}
+                  onClick={() => set('tipo', v)}
+                  className={cn(
+                    'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                    filters.tipo === v
+                      ? v === 'in'
+                        ? 'bg-success/20 text-success'
+                        : v === 'out'
+                          ? 'bg-danger/20 text-danger'
+                          : 'bg-gold-400 text-ink-950'
+                      : 'text-white/50 hover:text-white',
+                  )}
+                >
+                  {lbl}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Categoría */}
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-white/40">Categoría</p>
+            <select
+              value={filters.category}
+              onChange={(e) => set('category', e.target.value)}
+              className="w-full rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-white focus:border-gold/40 focus:outline-none"
+            >
+              <option value="">Todas</option>
+              {categories.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Cuenta */}
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-white/40">Cuenta</p>
+            <select
+              value={filters.account}
+              onChange={(e) => set('account', e.target.value)}
+              className="w-full rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-white focus:border-gold/40 focus:outline-none"
+            >
+              <option value="all">Todas</option>
+              <option value="cash">Caja (efectivo)</option>
+              {banks.data?.map((b) => (
+                <option key={b.id} value={b.id}>{b.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Desde */}
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-white/40">Desde</p>
+            <DateInput
+              value={filters.from}
+              onChange={(v) => set('from', v)}
+              max={filters.to || undefined}
+            />
+          </div>
+
+          {/* Hasta */}
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-white/40">Hasta</p>
+            <DateInput
+              value={filters.to}
+              onChange={(v) => set('to', v)}
+              min={filters.from || undefined}
+            />
+          </div>
+
+          {/* Monto */}
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-white/40">Monto</p>
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="Mín"
+                value={filters.min}
+                onChange={(e) => set('min', e.target.value)}
+                className="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-white placeholder-white/20 focus:border-gold/40 focus:outline-none"
+              />
+              <span className="text-white/30">–</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="Máx"
+                value={filters.max}
+                onChange={(e) => set('max', e.target.value)}
+                className="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-white placeholder-white/20 focus:border-gold/40 focus:outline-none"
+              />
+            </div>
+          </div>
+
+          {/* Limpiar */}
+          <div className="flex items-end pb-0.5">
+            <button
+              disabled={!activeFilters}
+              onClick={() => setFilters(EMPTY_FILTERS)}
+              className="rounded-lg px-3 py-1.5 text-xs font-medium text-gold-300 transition-colors hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-30"
+            >
+              Limpiar
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Chip "limpiar" para mobile cuando hay filtros activos */}
       {activeFilters && (
         <button
           onClick={() => setFilters(EMPTY_FILTERS)}
-          className="text-xs text-gold-300 hover:underline"
+          className="text-xs text-gold-300 hover:underline lg:hidden"
         >
           Limpiar filtros
         </button>
