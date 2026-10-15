@@ -2723,7 +2723,8 @@ function EditAppointment({ id }: { id: string }) {
 
         {/* Resumen */}
         <div className="lg:col-span-1">
-          <Card gold className="lg:sticky lg:top-4">
+          <div className="space-y-4 lg:sticky lg:top-4">
+          <Card gold>
             <CardHeader title="Resumen" />
             <div className="space-y-4">
               <Select
@@ -2927,6 +2928,7 @@ function EditAppointment({ id }: { id: string }) {
               onVoid={(row) => voidPayment.mutate(row)}
             />
           )}
+          </div>
         </div>
       </div>
 
