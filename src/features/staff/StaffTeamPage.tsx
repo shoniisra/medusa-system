@@ -114,6 +114,7 @@ function useStaffWithUsers() {
     enabled: !!orgId,
     queryFn: () =>
       query<StaffWithUser>(
+        // Colaboradoras con perfil de staff.
         `SELECT sm.id, sm.first_name, sm.last_name, sm.color,
                 sm.phone, sm.email, sm.employee_code, sm.default_pay_cycle, sm.notes,
                 au.id AS user_id, au.username, au.role,
@@ -121,8 +122,20 @@ function useStaffWithUsers() {
            FROM staff_member sm
            LEFT JOIN app_user au ON au.id = sm.app_user_id
           WHERE sm.organization_id = ? AND sm.active = 1
-          ORDER BY sm.first_name`,
-        [orgId],
+        UNION ALL
+        -- Usuarios (admin/manager) sin perfil de colaboradora.
+        SELECT au.id, au.full_name AS first_name, NULL AS last_name, NULL AS color,
+               au.phone, au.email, NULL AS employee_code, NULL AS default_pay_cycle, NULL AS notes,
+               au.id AS user_id, au.username, au.role,
+               CASE WHEN au.password_hash IS NOT NULL AND au.password_hash != '' THEN 1 ELSE 0 END AS has_password
+          FROM app_user au
+         WHERE au.organization_id = ? AND au.active = 1
+           AND NOT EXISTS (
+               SELECT 1 FROM staff_member sm2
+                WHERE sm2.app_user_id = au.id AND sm2.active = 1
+           )
+        ORDER BY first_name`,
+        [orgId, orgId],
       ),
   });
 }
