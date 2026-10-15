@@ -13,6 +13,8 @@ import {
   UserRound,
   AlertTriangle,
   Pencil,
+  Plus,
+  Lock,
   Wallet,
   X,
 } from 'lucide-react';
@@ -42,6 +44,7 @@ import {
   type CustomerDraft,
 } from '@/features/clients/CustomerFields';
 import {
+  paymentMethodFor,
   PaymentTargetFields,
   useOpenCashSession,
   usePaymentTarget,
@@ -3818,18 +3821,20 @@ function ConfirmSaleModal({
   const qc = useQueryClient();
   const toast = useToast();
   // Saldo a cobrar = total − seña ya pagada.
-  // El monto a cobrar es el saldo (total − seña) y no es editable: se cobra
-  // exactamente lo que resta de la venta.
   const balance = Math.max(0, total - depositPaid);
-  // Destino del cobro: una cuenta bancaria (transferencia) o "cash" (efectivo).
-  const [dest, setDest] = useState('');
-  const [reference, setReference] = useState('');
   const [error, setError] = useState('');
   // Saldo a favor a canjear en este cobro (parcial o total del saldo pendiente).
   const [creditStr, setCreditStr] = useState('');
 
-  const target = usePaymentTarget(orgId, branchId, dest);
-  const { sessionId, effectiveDest, isCash, method, hasOpenCashToday } = target;
+  // Datos compartidos de cuentas y caja (dest vacío = solo para obtener banks/methods/session).
+  const target = usePaymentTarget(orgId, branchId, '');
+  const { sessionId, hasOpenCashToday } = target;
+
+  // Lista de pagos parciales que suman el total a cobrar en plata.
+  interface PaymentEntry { id: string; dest: string; amountStr: string; reference: string; }
+  const [payments, setPayments] = useState<PaymentEntry[]>([
+    { id: genId(), dest: '', amountStr: '', reference: '' },
+  ]);
 
   // Saldo a favor disponible del cliente (solo clientes con ficha lo tienen).
   const creditQ = useCustomerCredit(customerId);
@@ -3837,6 +3842,27 @@ function ConfirmSaleModal({
   const creditMethod = storeCreditMethod(target.methods.data);
   const creditUsed = Math.min(Math.max(0, Number(creditStr) || 0), creditAvailable, balance);
   const dueInMoney = Math.max(0, balance - creditUsed);
+
+  // Cuando hay un solo pago, sincronizar su monto con dueInMoney automáticamente.
+  useEffect(() => {
+    setPayments((prev) => {
+      if (prev.length !== 1) return prev;
+      const next = dueInMoney > 0 ? String(Math.round(dueInMoney * 100) / 100) : '';
+      if (prev[0].amountStr === next) return prev;
+      return [{ ...prev[0], amountStr: next }];
+    });
+  }, [dueInMoney]);
+
+  const allocatedSum = payments.reduce((s, p) => s + (Number(p.amountStr) || 0), 0);
+  const allocatedOk = dueInMoney === 0 || Math.abs(allocatedSum - dueInMoney) < 0.005;
+
+  const addPayment = () =>
+    setPayments((prev) => [...prev, { id: genId(), dest: '', amountStr: '', reference: '' }]);
+  const removePayment = (id: string) =>
+    setPayments((prev) => prev.filter((p) => p.id !== id));
+  const setPaymentField = <K extends keyof PaymentEntry>(
+    id: string, field: K, value: PaymentEntry[K],
+  ) => setPayments((prev) => prev.map((p) => (p.id === id ? { ...p, [field]: value } : p)));
 
   // ¿La cita es de un día anterior? → venta retroactiva.
   const now = new Date();
@@ -3862,12 +3888,15 @@ function ConfirmSaleModal({
         throw new Error('Esta cita ya fue atendida y cobrada.');
       }
 
-      if (dueInMoney > 0 && !method)
-        throw new Error(
-          `No hay un método de pago ${
-            isCash ? 'en efectivo' : 'por transferencia'
-          } configurado.`,
-        );
+      if (dueInMoney > 0) {
+        for (const entry of payments) {
+          const eDest = entry.dest || target.banks.data?.[0]?.id || 'cash';
+          if (!paymentMethodFor(target.methods.data, eDest === 'cash'))
+            throw new Error(
+              `No hay un método de pago ${eDest === 'cash' ? 'en efectivo' : 'por transferencia'} configurado.`,
+            );
+        }
+      }
 
       // Comisiones vigentes por colaborador+servicio (config o % por defecto).
       const rules = await loadCommissionRules();
@@ -3960,46 +3989,37 @@ function ConfirmSaleModal({
         args: [saleId, appointmentId],
       });
 
-      // Cobro del saldo en plata real (solo si queda algo tras seña y canje).
+      // Cobros en plata real: un INSERT por cada entrada del usuario.
       if (payInMoney > 0) {
-        const paymentId = genId();
-        stmts.push({
-          sql: `INSERT INTO payment
-                  (id, organization_id, branch_id, sale_id, payment_method_id,
-                   bank_account_id, paid_at, amount, status, reference)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)`,
-          args: [
-            paymentId,
-            orgId,
-            branchId,
-            saleId,
-            method!.id,
-            isCash ? null : effectiveDest,
-            now,
-            payInMoney,
-            reference || null,
-          ],
-        });
-
-        // Solo el efectivo ingresa a la caja física.
-        if (isCash && sessionId) {
+        for (const entry of payments) {
+          const entryAmt = Math.round((Number(entry.amountStr) || 0) * 100) / 100;
+          if (entryAmt <= 0) continue;
+          const eDest = entry.dest || target.banks.data?.[0]?.id || 'cash';
+          const eCash = eDest === 'cash';
+          const eMethod = paymentMethodFor(target.methods.data, eCash)!;
+          const paymentId = genId();
           stmts.push({
-            sql: `INSERT INTO cash_movement
-                    (id, cash_session_id, branch_id, movement_type, direction, amount,
-                     movement_at, sale_id, payment_id, description, created_by)
-                  VALUES (?, ?, ?, 'sale', 'in', ?, ?, ?, ?, ?, ?)`,
+            sql: `INSERT INTO payment
+                    (id, organization_id, branch_id, sale_id, payment_method_id,
+                     bank_account_id, paid_at, amount, status, reference)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)`,
             args: [
-              genId(),
-              sessionId,
-              branchId,
-              payInMoney,
-              now,
-              saleId,
-              paymentId,
-              `Venta cita ${customerName ?? ''}`.trim(),
-              userId,
+              paymentId, orgId, branchId, saleId, eMethod.id,
+              eCash ? null : eDest, now, entryAmt, entry.reference || null,
             ],
           });
+          if (eCash && sessionId) {
+            stmts.push({
+              sql: `INSERT INTO cash_movement
+                      (id, cash_session_id, branch_id, movement_type, direction, amount,
+                       movement_at, sale_id, payment_id, description, created_by)
+                    VALUES (?, ?, ?, 'sale', 'in', ?, ?, ?, ?, ?, ?)`,
+              args: [
+                genId(), sessionId, branchId, entryAmt, now, saleId, paymentId,
+                `Venta cita ${customerName ?? ''}`.trim(), userId,
+              ],
+            });
+          }
         }
       }
 
@@ -4070,7 +4090,16 @@ function ConfirmSaleModal({
     items.length > 0 &&
     !confirm.isPending &&
     (creditUsed === 0 || !!creditMethod) &&
-    (dueInMoney === 0 || (!!method && hasOpenCashToday));
+    (dueInMoney === 0 ||
+      (allocatedOk &&
+        hasOpenCashToday &&
+        payments.every((p) => {
+          const eDest = p.dest || target.banks.data?.[0]?.id || 'cash';
+          return (
+            (Number(p.amountStr) || 0) > 0 &&
+            !!paymentMethodFor(target.methods.data, eDest === 'cash')
+          );
+        })));
 
   return (
     <Modal open onClose={onClose} title="Confirmar venta">
@@ -4134,21 +4163,91 @@ function ConfirmSaleModal({
         )}
 
         {dueInMoney > 0 ? (
-          <PaymentTargetFields
-            target={target}
-            onDest={setDest}
-            reference={reference}
-            onReference={setReference}
-            extra={
-              isRetroactive ? (
-                <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
-                  <AlertTriangle className="h-3.5 w-3.5" /> Venta retroactiva: el
-                  servicio se registra con fecha {dateShort(serviceDay)}; el
-                  cobro entra a la caja de hoy.
-                </p>
-              ) : undefined
-            }
-          />
+          <div className="space-y-2">
+            {payments.map((entry) => {
+              const eDest = entry.dest || target.banks.data?.[0]?.id || 'cash';
+              const eCash = eDest === 'cash';
+              return (
+                <div key={entry.id} className="space-y-2 rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                  <div className="flex items-end gap-2">
+                    <div className="min-w-0 flex-1">
+                      <Select
+                        label="Cobrar en"
+                        value={eDest}
+                        onChange={(e) => setPaymentField(entry.id, 'dest', e.target.value)}
+                      >
+                        {target.banks.data?.map((b) => (
+                          <option key={b.id} value={b.id}>{b.name} (transferencia)</option>
+                        ))}
+                        <option value="cash">Efectivo (caja)</option>
+                      </Select>
+                    </div>
+                    <div className="w-28 shrink-0">
+                      <Input
+                        label="Monto"
+                        type="number"
+                        inputMode="decimal"
+                        min="0.01"
+                        step="0.01"
+                        value={entry.amountStr}
+                        onChange={(e) => setPaymentField(entry.id, 'amountStr', e.target.value)}
+                      />
+                    </div>
+                    {payments.length > 1 && (
+                      <button
+                        type="button"
+                        className="mb-1 shrink-0 text-white/40 transition-colors hover:text-danger"
+                        onClick={() => removePayment(entry.id)}
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                  {!eCash && (
+                    <Input
+                      label="Nº de voucher (opcional)"
+                      value={entry.reference}
+                      onChange={(e) => setPaymentField(entry.id, 'reference', e.target.value)}
+                      placeholder="Nº de transferencia o voucher"
+                    />
+                  )}
+                </div>
+              );
+            })}
+
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                className="flex items-center gap-1.5 text-xs text-gold-300 transition-colors hover:text-gold-200"
+                onClick={addPayment}
+              >
+                <Plus className="h-3.5 w-3.5" /> Agregar otro pago
+              </button>
+              {payments.length > 1 && (
+                <span className={cn('text-xs', allocatedOk ? 'text-success' : 'text-amber-300/80')}>
+                  Asignado {money(allocatedSum)} / {money(dueInMoney)}
+                </span>
+              )}
+            </div>
+
+            {isRetroactive && (
+              <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
+                <AlertTriangle className="h-3.5 w-3.5" /> Venta retroactiva: el
+                servicio se registra con fecha {dateShort(serviceDay)}; el cobro
+                entra a la caja de hoy.
+              </p>
+            )}
+
+            {!hasOpenCashToday && (
+              <p className="flex items-start gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-100">
+                <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>
+                  No podés registrar un pago con la caja cerrada. Abrí la caja de
+                  hoy desde el botón <b>Abrir caja</b> de la barra superior.
+                </span>
+              </p>
+            )}
+          </div>
         ) : (
           <p className="rounded-xl border border-success/30 bg-success/10 p-3 text-sm text-success">
             La venta queda cubierta con el saldo a favor
