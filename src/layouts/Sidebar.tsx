@@ -144,10 +144,13 @@ export function Sidebar() {
           ? [
               {
                 to: ROUTES.staff,
-                label: "Personal",
+                label: "Equipo",
                 icon: Users,
                 children: [
-                  { to: ROUTES.staff, label: "Nómina", icon: Users, end: true },
+                  ...(can("manage_staff")
+                    ? [{ to: ROUTES.staffTeam, label: "Miembros del equipo", icon: Users }]
+                    : []),
+                  { to: ROUTES.staff, label: "Comisiones", icon: Users, end: true },
                   {
                     to: ROUTES.staffAbsences,
                     label: "Ausencias y cierres",

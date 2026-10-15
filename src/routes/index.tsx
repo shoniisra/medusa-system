@@ -23,6 +23,9 @@ const CashflowPage = lazyPage(() =>
 const StaffPage = lazyPage(() =>
   import('@/features/staff/StaffPage').then((m) => ({ default: m.StaffPage })),
 );
+const StaffTeamPage = lazyPage(() =>
+  import('@/features/staff/StaffTeamPage').then((m) => ({ default: m.StaffTeamPage })),
+);
 const AbsencesPage = lazyPage(() =>
   import('@/features/staff/AbsencesPage').then((m) => ({
     default: m.AbsencesPage,
@@ -141,12 +144,20 @@ export const router = createBrowserRouter([
             ],
           },
 
-          // Personal y ausencias: requiere view_staff_finance.
+          // Comisiones y ausencias: requiere view_staff_finance.
           {
             element: <RequirePermission permission="view_staff_finance" />,
             children: [
               { path: ROUTES.staff, element: lazyRoute(<StaffPage />) },
               { path: ROUTES.staffAbsences, element: lazyRoute(<AbsencesPage />) },
+            ],
+          },
+
+          // Miembros del equipo: requiere manage_staff.
+          {
+            element: <RequirePermission permission="manage_staff" />,
+            children: [
+              { path: ROUTES.staffTeam, element: lazyRoute(<StaffTeamPage />) },
             ],
           },
 

@@ -70,7 +70,7 @@ export function MobileNav() {
     { to: ROUTES.clients, label: "Clientes", icon: Contact },
     { to: ROUTES.reminders, label: "Recordatorios", icon: BellRing },
     ...(can("view_staff_finance")
-      ? [{ to: ROUTES.staff, label: "Personal", icon: Users }]
+      ? [{ to: ROUTES.staff, label: "Equipo", icon: Users }]
       : []),
     ...(can("view_invoices")
       ? [{ to: ROUTES.invoices, label: "Facturación", icon: FileText }]

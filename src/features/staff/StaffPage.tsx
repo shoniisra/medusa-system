@@ -9,14 +9,10 @@ import {
   Scale,
   CalendarOff,
   ChevronRight,
-  BarChart3,
 } from 'lucide-react';
 import { query, queryOne, batch, execute, type Stmt } from '@/lib/db';
 import { genId, money, dateShort, fullName, todayISO } from '@/lib/format';
 import { useOrgId, useBranchId, useSession } from '@/store/session';
-import { useHasPermission } from '@/config/permissions';
-import { cn } from '@/lib/cn';
-import { StaffTeamManager } from './StaffTeamManager';
 import {
   Card,
   CardHeader,
@@ -139,58 +135,22 @@ function StaffInitials({
   );
 }
 
-type StaffTab = 'nomina' | 'equipo';
-
-function tabCls(active: boolean) {
-  return cn(
-    'flex items-center gap-2 rounded-xl border px-3 py-2 text-sm transition-colors',
-    active
-      ? 'border-gold/40 bg-gold/10 text-gold-200 shadow-gold-glow'
-      : 'border-white/10 text-white/60 hover:bg-white/5 hover:text-white',
-  );
-}
-
 export function StaffPage() {
   const orgId = useOrgId();
-  const role = useSession((s) => s.user?.role);
-  const can = useHasPermission(role);
-  const [tab, setTab] = useState<StaffTab>('nomina');
   const [advanceOpen, setAdvanceOpen] = useState(false);
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-white">Personal</h1>
-        {tab === 'nomina' && (
-          <Button onClick={() => setAdvanceOpen(true)}>
-            <HandCoins className="h-4 w-4" /> Adelanto
-          </Button>
-        )}
+        <h1 className="text-2xl font-semibold text-white">Comisiones</h1>
+        <Button onClick={() => setAdvanceOpen(true)}>
+          <HandCoins className="h-4 w-4" /> Adelanto
+        </Button>
       </div>
 
-      {/* Tabs: Nómina siempre visible; Equipo solo para roles con manage_staff */}
-      <div className="flex flex-wrap gap-2">
-        <button className={tabCls(tab === 'nomina')} onClick={() => setTab('nomina')}>
-          <BarChart3 className="h-4 w-4" />
-          Nómina
-        </button>
-        {can('manage_staff') && (
-          <button className={tabCls(tab === 'equipo')} onClick={() => setTab('equipo')}>
-            <Users className="h-4 w-4" />
-            Equipo
-          </button>
-        )}
-      </div>
-
-      {tab === 'nomina' ? (
-        <>
-          <CommissionBalanceSection orgId={orgId} />
-          <TeamActivitySection orgId={orgId} />
-          <AbsencesSummaryCard />
-        </>
-      ) : (
-        <StaffTeamManager />
-      )}
+      <CommissionBalanceSection orgId={orgId} />
+      <TeamActivitySection orgId={orgId} />
+      <AbsencesSummaryCard />
 
       <AdvanceModal open={advanceOpen} onClose={() => setAdvanceOpen(false)} />
     </div>

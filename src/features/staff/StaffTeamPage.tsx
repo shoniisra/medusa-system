@@ -1,15 +1,15 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  ChevronDown,
-  ChevronUp,
+  Plus,
+  Pencil,
   KeyRound,
   CheckCircle2,
   UserPlus,
   X,
-  Plus,
-  Pencil,
   UserRound,
+  Star,
+  MessageCircle,
 } from 'lucide-react';
 import { query, execute, batch } from '@/lib/db';
 import { useOrgId } from '@/store/session';
@@ -20,6 +20,7 @@ import {
   Badge,
   Select,
   EmptyState,
+  Modal,
   useToast,
 } from '@/components/ui';
 import {
@@ -59,7 +60,7 @@ const ROLE_TONES: Record<string, 'gold' | 'success' | 'info' | 'muted'> = {
   viewer: 'muted',
 };
 
-/* ─── Tipos locales ──────────────────────────────────────────────────────── */
+/* ─── Tipos ──────────────────────────────────────────────────────────────── */
 
 interface StaffWithUser {
   id: string;
@@ -419,10 +420,7 @@ function ColorPicker({ value, onChange }: { value: string; onChange: (hex: strin
                   : 'border-transparent text-white/60 hover:border-white/20 hover:bg-white/5',
               )}
             >
-              <span
-                className="h-3 w-3 shrink-0 rounded-full"
-                style={{ background: c.hex }}
-              />
+              <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: c.hex }} />
               {c.name}
             </button>
           );
@@ -451,14 +449,13 @@ function StaffProfileForm({
   staff,
   onDone,
 }: {
-  staff?: StaffWithUser; // undefined = nuevo
+  staff?: StaffWithUser;
   onDone: () => void;
 }) {
   const [draft, setDraft] = useState<StaffProfileDraft>(() => emptyDraft(staff));
   const { mutateAsync: create, isPending: creating } = useCreateStaff();
   const { mutateAsync: update, isPending: updating } = useUpdateStaff();
   const { show } = useToast();
-
   const isPending = creating || updating;
 
   function set<K extends keyof StaffProfileDraft>(k: K, v: StaffProfileDraft[K]) {
@@ -485,7 +482,7 @@ function StaffProfileForm({
   }
 
   return (
-    <div className="space-y-3 rounded-xl border border-white/15 bg-white/[0.04] p-4">
+    <div className="space-y-3">
       <div className="grid grid-cols-2 gap-3">
         <Input
           label="Nombre *"
@@ -620,7 +617,7 @@ function CategoryToggles({
   const { mutate, isPending } = useToggleCategory();
 
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+    <div className="grid grid-cols-2 gap-2">
       {SERVICE_CATEGORIES.map((cat) => {
         const row = categories.find((c) => c.category === cat);
         const on = row?.active === 1;
@@ -631,7 +628,7 @@ function CategoryToggles({
             disabled={isPending}
             onClick={() => mutate({ staffMemberId, category: cat, existing: row })}
             className={cn(
-              'flex min-h-[56px] flex-col items-center justify-center gap-1 rounded-2xl border p-2.5 text-center text-sm font-medium transition active:scale-[0.97]',
+              'flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-2xl border p-2.5 text-center text-sm font-medium transition active:scale-[0.97]',
               on
                 ? 'border-gold/60 bg-gold/15 text-gold-100 shadow-gold-glow'
                 : 'border-white/10 bg-white/[0.03] text-white/60 hover:bg-white/[0.06]',
@@ -748,28 +745,25 @@ function ExclusionsList({
   );
 }
 
-/* ─── StaffCard ───────────────────────────────────────────────────────────── */
+/* ─── EditModal ───────────────────────────────────────────────────────────── */
 
-function StaffCard({
+function EditModal({
   staff,
-  categories,
-  exclusions,
-  services,
+  onClose,
 }: {
-  staff: StaffWithUser;
-  categories: StaffCategoryRow[];
-  exclusions: StaffExclusionRow[];
-  services: Pick<Service, 'id' | 'name' | 'category'>[];
+  staff: StaffWithUser | null; // null = nuevo
+  onClose: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const [editProfile, setEditProfile] = useState(false);
   const [pwOpen, setPwOpen] = useState(false);
-  const { mutate: createUser, isPending: creating } = useCreateUser();
+  const { mutate: createUser, isPending: creatingUser } = useCreateUser();
   const { show } = useToast();
 
-  const displayName = [staff.first_name, staff.last_name].filter(Boolean).join(' ');
+  const displayName = staff
+    ? [staff.first_name, staff.last_name].filter(Boolean).join(' ')
+    : null;
 
   function handleCreateUser() {
+    if (!staff) return;
     createUser(
       { staffMemberId: staff.id, firstName: staff.first_name, lastName: staff.last_name },
       {
@@ -780,99 +774,26 @@ function StaffCard({
   }
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03]">
-      {/* Cabecera colapsable */}
-      <button
-        type="button"
-        className="flex w-full items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.03]"
-        onClick={() => setOpen((v) => !v)}
-      >
-        <span
-          className="h-3 w-3 shrink-0 rounded-full ring-1 ring-white/20"
-          style={{ background: staff.color ?? '#64748b' }}
-        />
-        <span className="flex min-w-0 flex-1 items-center gap-2 text-left">
-          <span className="truncate font-medium text-white">{displayName}</span>
-          {staff.role && (
-            <Badge tone={ROLE_TONES[staff.role] ?? 'muted'}>
-              {ROLE_LABELS[staff.role] ?? staff.role}
-            </Badge>
-          )}
-          {!staff.user_id && <Badge tone="muted">Sin cuenta</Badge>}
-        </span>
-        {open ? (
-          <ChevronUp className="h-4 w-4 shrink-0 text-white/40" />
-        ) : (
-          <ChevronDown className="h-4 w-4 shrink-0 text-white/40" />
-        )}
-      </button>
+    <Modal
+      open
+      onClose={onClose}
+      title={staff ? `Editar · ${displayName}` : 'Nueva colaboradora'}
+    >
+      <div className="space-y-5">
+        <StaffProfileForm staff={staff ?? undefined} onDone={onClose} />
 
-      {/* Panel expandido */}
-      {open && (
-        <div className="space-y-5 border-t border-white/10 px-4 pb-5 pt-4">
-
-          {/* ── Perfil ── */}
-          <section>
-            <div className="mb-3 flex items-center justify-between">
-              <p className="text-xs font-semibold uppercase tracking-wider text-white/40">
-                Perfil
-              </p>
-              {!editProfile && (
-                <Button size="sm" variant="ghost" onClick={() => setEditProfile(true)}>
-                  <Pencil className="h-3.5 w-3.5" /> Editar
-                </Button>
-              )}
-            </div>
-
-            {editProfile ? (
-              <StaffProfileForm staff={staff} onDone={() => setEditProfile(false)} />
-            ) : (
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-                {staff.phone && (
-                  <>
-                    <span className="text-white/40">Teléfono</span>
-                    <span className="text-white">{staff.phone}</span>
-                  </>
-                )}
-                {staff.email && (
-                  <>
-                    <span className="text-white/40">Email</span>
-                    <span className="truncate text-white">{staff.email}</span>
-                  </>
-                )}
-                {staff.employee_code && (
-                  <>
-                    <span className="text-white/40">Código</span>
-                    <span className="text-white">{staff.employee_code}</span>
-                  </>
-                )}
-                {staff.default_pay_cycle && (
-                  <>
-                    <span className="text-white/40">Ciclo</span>
-                    <span className="text-white">
-                      {PAY_CYCLE_OPTIONS.find((o) => o.value === staff.default_pay_cycle)
-                        ?.label ?? staff.default_pay_cycle}
-                    </span>
-                  </>
-                )}
-                {!staff.phone && !staff.email && !staff.employee_code && (
-                  <p className="col-span-2 text-xs text-white/30">Sin datos adicionales</p>
-                )}
-              </div>
-            )}
-          </section>
-
-          {/* ── Cuenta ── */}
-          <section>
+        {/* Sección de cuenta — solo para colaboradoras existentes */}
+        {staff && (
+          <div className="border-t border-white/10 pt-4">
             <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-white/40">
               Cuenta
             </p>
             {!staff.user_id ? (
               <div className="flex items-center gap-3">
                 <p className="text-sm text-white/50">Sin usuario vinculado.</p>
-                <Button size="sm" onClick={handleCreateUser} disabled={creating}>
+                <Button size="sm" onClick={handleCreateUser} disabled={creatingUser}>
                   <UserPlus className="h-3.5 w-3.5" />
-                  {creating ? 'Creando…' : 'Crear acceso'}
+                  {creatingUser ? 'Creando…' : 'Crear acceso'}
                 </Button>
               </div>
             ) : (
@@ -906,84 +827,280 @@ function StaffCard({
                 )}
               </div>
             )}
-          </section>
-
-          {/* ── Especialidades ── */}
-          <section>
-            <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-white/40">
-              Especialidades
-            </p>
-            <CategoryToggles staffMemberId={staff.id} categories={categories} />
-          </section>
-
-          {/* ── Servicios excluidos ── */}
-          <section>
-            <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-white/40">
-              Servicios excluidos
-            </p>
-            <ExclusionsList
-              staffMemberId={staff.id}
-              exclusions={exclusions}
-              services={services}
-            />
-          </section>
-        </div>
-      )}
-    </div>
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
 
-/* ─── StaffTeamManager ────────────────────────────────────────────────────── */
+/* ─── SpecialtiesPanel ────────────────────────────────────────────────────── */
 
-export function StaffTeamManager() {
-  const [addOpen, setAddOpen] = useState(false);
+function SpecialtiesPanel({
+  staff,
+  categories,
+  exclusions,
+  services,
+  onClose,
+}: {
+  staff: StaffWithUser;
+  categories: StaffCategoryRow[];
+  exclusions: StaffExclusionRow[];
+  services: Pick<Service, 'id' | 'name' | 'category'>[];
+  onClose: () => void;
+}) {
+  const displayName = [staff.first_name, staff.last_name].filter(Boolean).join(' ');
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm"
+        onClick={onClose}
+      />
+
+      {/* Panel: bottom-sheet en mobile, right panel en desktop */}
+      <div
+        className={cn(
+          'fixed z-50 overflow-y-auto border-white/10 bg-ink-900',
+          // Mobile: bottom sheet
+          'bottom-0 left-0 right-0 max-h-[85dvh] rounded-t-2xl border-t px-4 pb-8 pt-4',
+          // Desktop: right panel
+          'sm:inset-y-0 sm:bottom-auto sm:left-auto sm:right-0 sm:top-0 sm:max-h-full sm:w-[400px] sm:rounded-none sm:rounded-l-2xl sm:border-l sm:border-t-0 sm:px-5 sm:py-5',
+        )}
+      >
+        {/* Header */}
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <span
+              className="h-3 w-3 shrink-0 rounded-full ring-1 ring-white/20"
+              style={{ background: staff.color ?? '#64748b' }}
+            />
+            <h2 className="font-semibold text-white">{displayName}</h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-white/40 transition-colors hover:bg-white/10 hover:text-white"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Especialidades */}
+        <section className="mb-5">
+          <p className="mb-2.5 text-xs font-semibold uppercase tracking-wider text-white/40">
+            Especialidades
+          </p>
+          <CategoryToggles staffMemberId={staff.id} categories={categories} />
+        </section>
+
+        {/* Servicios excluidos */}
+        <section>
+          <p className="mb-2.5 text-xs font-semibold uppercase tracking-wider text-white/40">
+            Servicios excluidos
+          </p>
+          <ExclusionsList
+            staffMemberId={staff.id}
+            exclusions={exclusions}
+            services={services}
+          />
+        </section>
+      </div>
+    </>
+  );
+}
+
+/* ─── StaffTeamPage ───────────────────────────────────────────────────────── */
+
+export function StaffTeamPage() {
+  const [editStaff, setEditStaff] = useState<StaffWithUser | null | 'new'>(null);
+  const [specialtiesStaff, setSpecialtiesStaff] = useState<StaffWithUser | null>(null);
+
   const { data: staffList = [], isLoading } = useStaffWithUsers();
   const { data: allCategories = [] } = useStaffCategories();
   const { data: allExclusions = [] } = useStaffExclusions();
   const { data: services = [] } = useOrgServices();
 
-  if (isLoading) {
-    return (
-      <div className="space-y-3">
-        {[0, 1, 2, 3].map((i) => (
-          <div key={i} className="h-14 animate-pulse rounded-2xl bg-white/5" />
-        ))}
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-3">
-      {/* Botón nueva colaboradora */}
-      {!addOpen && (
-        <div className="flex justify-end">
-          <Button onClick={() => setAddOpen(true)}>
-            <Plus className="h-4 w-4" /> Nueva colaboradora
-          </Button>
+    <div className="mx-auto max-w-[1500px] space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold text-white">Miembros del equipo</h1>
+          <p className="text-sm text-white/40">Colaboradoras, especialidades y accesos.</p>
         </div>
-      )}
+        <Button onClick={() => setEditStaff('new')}>
+          <Plus className="h-4 w-4" /> Nueva colaboradora
+        </Button>
+      </div>
 
-      {addOpen && (
-        <StaffProfileForm onDone={() => setAddOpen(false)} />
-      )}
-
-      {!staffList.length && !addOpen && (
+      {/* Tabla */}
+      {isLoading ? (
+        <div className="space-y-2">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="h-14 animate-pulse rounded-xl bg-white/5" />
+          ))}
+        </div>
+      ) : staffList.length === 0 ? (
         <EmptyState
           title="Sin colaboradoras"
           description='Creá la primera con el botón "Nueva colaboradora".'
           icon={UserRound}
         />
+      ) : (
+        <div className="overflow-hidden rounded-2xl border border-white/10">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-white/10 text-xs uppercase tracking-wider text-white/40">
+                <th className="px-4 py-2.5 text-left font-medium">Nombre</th>
+                <th className="hidden px-4 py-2.5 text-left font-medium md:table-cell">
+                  Teléfono
+                </th>
+                <th className="hidden px-4 py-2.5 text-left font-medium sm:table-cell">
+                  Cuenta
+                </th>
+                <th className="px-4 py-2.5 text-right font-medium">Acciones</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/[0.06]">
+              {staffList.map((staff) => {
+                const displayName = [staff.first_name, staff.last_name]
+                  .filter(Boolean)
+                  .join(' ');
+                const staffCategories = allCategories.filter(
+                  (c) => c.staff_member_id === staff.id && c.active === 1,
+                );
+
+                return (
+                  <tr
+                    key={staff.id}
+                    className="transition-colors hover:bg-white/[0.02]"
+                  >
+                    {/* Nombre + rol */}
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2.5">
+                        <span
+                          className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-white/20"
+                          style={{ background: staff.color ?? '#64748b' }}
+                        />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-white">{displayName}</span>
+                            {staff.role && (
+                              <Badge tone={ROLE_TONES[staff.role] ?? 'muted'}>
+                                {ROLE_LABELS[staff.role] ?? staff.role}
+                              </Badge>
+                            )}
+                          </div>
+                          {/* Cuenta en mobile */}
+                          <div className="mt-0.5 sm:hidden">
+                            {staff.user_id ? (
+                              <span className="text-xs text-white/50">
+                                @{staff.username}
+                                {staff.has_password === 1 && (
+                                  <CheckCircle2 className="ml-1 inline h-3 w-3 text-success" />
+                                )}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-white/30">Sin cuenta</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+
+                    {/* Teléfono (md+) */}
+                    <td className="hidden px-4 py-3 md:table-cell">
+                      {staff.phone ? (
+                        <a
+                          href={`https://wa.me/${staff.phone.replace(/\D/g, '')}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1.5 text-xs text-white/60 transition-colors hover:text-success"
+                          title={`WhatsApp ${staff.phone}`}
+                        >
+                          <MessageCircle className="h-3.5 w-3.5 shrink-0" />
+                          {staff.phone}
+                        </a>
+                      ) : (
+                        <span className="text-xs text-white/25">—</span>
+                      )}
+                    </td>
+
+                    {/* Cuenta (desktop) */}
+                    <td className="hidden px-4 py-3 sm:table-cell">
+                      {staff.user_id ? (
+                        <div className="flex items-center gap-1.5 text-white/60">
+                          <span className="font-mono text-xs">@{staff.username}</span>
+                          {staff.has_password === 1 ? (
+                            <CheckCircle2 className="h-3.5 w-3.5 text-success" />
+                          ) : (
+                            <KeyRound className="h-3.5 w-3.5 text-white/30" />
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-white/30">Sin cuenta</span>
+                      )}
+                    </td>
+
+                    {/* Acciones */}
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-2">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setSpecialtiesStaff(staff)}
+                          title={
+                            staffCategories.length > 0
+                              ? `${staffCategories.length} categoría(s)`
+                              : 'Sin especialidades'
+                          }
+                        >
+                          <Star className="h-3.5 w-3.5" />
+                          <span className="hidden sm:inline">Especialidades</span>
+                          {staffCategories.length > 0 && (
+                            <span className="ml-0.5 text-xs text-white/50">
+                              ({staffCategories.length})
+                            </span>
+                          )}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setEditStaff(staff)}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          <span className="hidden sm:inline">Editar</span>
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
 
-      {staffList.map((staff) => (
-        <StaffCard
-          key={staff.id}
-          staff={staff}
-          categories={allCategories.filter((c) => c.staff_member_id === staff.id)}
-          exclusions={allExclusions.filter((e) => e.staff_member_id === staff.id)}
-          services={services}
+      {/* Modal editar / crear */}
+      {editStaff !== null && (
+        <EditModal
+          staff={editStaff === 'new' ? null : editStaff}
+          onClose={() => setEditStaff(null)}
         />
-      ))}
+      )}
+
+      {/* Panel de especialidades */}
+      {specialtiesStaff && (
+        <SpecialtiesPanel
+          staff={specialtiesStaff}
+          categories={allCategories.filter((c) => c.staff_member_id === specialtiesStaff.id)}
+          exclusions={allExclusions.filter((e) => e.staff_member_id === specialtiesStaff.id)}
+          services={services}
+          onClose={() => setSpecialtiesStaff(null)}
+        />
+      )}
     </div>
   );
 }
