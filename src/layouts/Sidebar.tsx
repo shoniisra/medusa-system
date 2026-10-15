@@ -17,6 +17,10 @@ import {
   History,
   Receipt,
   Star,
+  BarChart3,
+  ArrowLeftRight,
+  Landmark,
+  Scale,
 } from "lucide-react";
 import { ROUTES, APP_NAME } from "@/config/constants";
 import { query } from "@/lib/db";
@@ -138,7 +142,21 @@ export function Sidebar() {
     {
       items: [
         ...(can("view_finance")
-          ? [{ to: ROUTES.cashflow, label: "Finanzas", icon: Wallet }]
+          ? [
+              {
+                to: ROUTES.cashflow,
+                label: "Finanzas",
+                icon: Wallet,
+                children: [
+                  { to: ROUTES.cashflow, label: "Vista general", icon: Wallet, end: true },
+                  { to: ROUTES.cashflowResumen, label: "Resumen", icon: BarChart3 },
+                  { to: ROUTES.cashflowTransacciones, label: "Transacciones", icon: Receipt },
+                  { to: ROUTES.cashflowTransferencias, label: "Transferencias", icon: ArrowLeftRight },
+                  { to: ROUTES.cashflowCuentas, label: "Cuentas", icon: Landmark },
+                  { to: ROUTES.cashflowDeudas, label: "Deudas · Créditos", icon: Scale },
+                ],
+              } as NavItemWithChildren,
+            ]
           : []),
         ...(can("view_staff_finance")
           ? [

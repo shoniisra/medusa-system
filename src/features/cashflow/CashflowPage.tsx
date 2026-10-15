@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { NavLink, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Lock,
@@ -86,14 +86,13 @@ function useInvalidateFinance() {
   return () => invalidateFinance(qc, branchId);
 }
 
-type TabKey = 'general' | 'resumen' | 'transacciones' | 'cuentas' | 'deudas';
-
-const TABS: { key: TabKey; label: string }[] = [
-  { key: 'general', label: 'Vista general' },
-  { key: 'resumen', label: 'Resumen' },
-  { key: 'transacciones', label: 'Transacciones' },
-  { key: 'cuentas', label: 'Cuentas' },
-  { key: 'deudas', label: 'Deudas · Créditos' },
+const FINANCE_TABS: { path: string; label: string; end?: boolean }[] = [
+  { path: ROUTES.cashflow, label: 'Vista general', end: true },
+  { path: ROUTES.cashflowResumen, label: 'Resumen' },
+  { path: ROUTES.cashflowTransacciones, label: 'Transacciones' },
+  { path: ROUTES.cashflowTransferencias, label: 'Transferencias' },
+  { path: ROUTES.cashflowCuentas, label: 'Cuentas' },
+  { path: ROUTES.cashflowDeudas, label: 'Deudas · Créditos' },
 ];
 
 /* ───────────────────────────────── Página ───────────────────────────────── */
@@ -103,20 +102,13 @@ export function CashflowPage() {
   const orgId = useOrgId();
   const user = useSession((s) => s.user);
   const setCashSession = useSession((s) => s.setCashSession);
-  const [userTab, setUserTab] = useState<TabKey>('general');
-  const [search, setSearch] = useSearchParams();
-  // Accesos directos externos (sidebar/FAB) llegan con ?nuevo=... y deben caer
-  // en la pestaña "general", que es la única que monta los modales de alta.
-  // Lo derivamos en render para evitar un effect que persigue la URL.
-  const tab: TabKey = search.get('nuevo') ? 'general' : userTab;
-  const switchTab = (t: TabKey) => {
-    setUserTab(t);
-    if (search.has('nuevo')) {
-      const next = new URLSearchParams(search);
-      next.delete('nuevo');
-      setSearch(next, { replace: true });
-    }
-  };
+  const { pathname } = useLocation();
+  const tab = pathname.startsWith(ROUTES.cashflowResumen) ? 'resumen'
+    : pathname.startsWith(ROUTES.cashflowTransacciones) ? 'transacciones'
+    : pathname.startsWith(ROUTES.cashflowCuentas) ? 'cuentas'
+    : pathname.startsWith(ROUTES.cashflowDeudas) ? 'deudas'
+    : pathname.startsWith(ROUTES.cashflowTransferencias) ? 'transferencias'
+    : 'general';
 
   const session = useQuery({
     queryKey: qk.cashSession(branchId),
@@ -149,25 +141,29 @@ export function CashflowPage() {
 
       {/* Submenú */}
       <div className="flex flex-wrap gap-1 rounded-xl bg-white/5 p-1">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => switchTab(t.key)}
-            className={cn(
-              'rounded-lg px-3 py-1.5 text-xs font-medium transition-colors sm:text-sm',
-              tab === t.key
-                ? 'bg-gold-400 text-ink-950 shadow-gold-glow'
-                : 'text-white/50 hover:text-white',
-            )}
+        {FINANCE_TABS.map((t) => (
+          <NavLink
+            key={t.path}
+            to={t.path}
+            end={t.end}
+            className={({ isActive }) =>
+              cn(
+                'rounded-lg px-3 py-1.5 text-xs font-medium transition-colors sm:text-sm',
+                isActive
+                  ? 'bg-gold-400 text-ink-950 shadow-gold-glow'
+                  : 'text-white/50 hover:text-white',
+              )
+            }
           >
             {t.label}
-          </button>
+          </NavLink>
         ))}
       </div>
 
       {tab === 'general' && <GeneralTab ctx={ctx} />}
       {tab === 'resumen' && <MonthlyResumenTab branchId={branchId} />}
       {tab === 'transacciones' && <TransactionsTab ctx={ctx} />}
+      {tab === 'transferencias' && <TransferenciasTab ctx={ctx} />}
       {tab === 'cuentas' && (
         <AccountsTab
           ctx={ctx}
@@ -1845,7 +1841,7 @@ function TransactionsSection({ branchId }: { branchId: string }) {
                   p.paid_at AS at,
                   COALESCE(cs.first_name || ' ' || COALESCE(cs.last_name,''),
                            ca.first_name || ' ' || COALESCE(ca.last_name,'')) AS customer_name,
-                  u.full_name AS created_by_name,
+                  COALESCE(u.full_name, su.full_name) AS created_by_name,
                   COALESCE(p.appointment_id, s.appointment_id) AS appointment_id,
                   p.sale_id AS sale_id
              FROM payment p
@@ -1854,6 +1850,7 @@ function TransactionsSection({ branchId }: { branchId: string }) {
              LEFT JOIN appointment a ON a.id = COALESCE(p.appointment_id, s.appointment_id)
              LEFT JOIN customer ca ON ca.id = a.customer_id
              LEFT JOIN app_user u ON u.id = p.created_by
+             LEFT JOIN app_user su ON su.id = s.created_by
              JOIN payment_method pm ON pm.id = p.payment_method_id
             WHERE p.branch_id = ? AND p.status = 'confirmed'
               AND substr(p.paid_at, 1, ?) = ?
@@ -2228,7 +2225,7 @@ function TransactionsTab({ ctx }: { ctx: Ctx }) {
                   p.paid_at AS at,
                   COALESCE(cs.first_name || ' ' || COALESCE(cs.last_name,''),
                            ca.first_name || ' ' || COALESCE(ca.last_name,'')) AS customer_name,
-                  u.full_name AS created_by_name,
+                  COALESCE(u.full_name, su.full_name) AS created_by_name,
                   COALESCE(p.appointment_id, s.appointment_id) AS appointment_id,
                   p.sale_id AS sale_id
              FROM payment p
@@ -2237,6 +2234,7 @@ function TransactionsTab({ ctx }: { ctx: Ctx }) {
              LEFT JOIN appointment a ON a.id = COALESCE(p.appointment_id, s.appointment_id)
              LEFT JOIN customer ca ON ca.id = a.customer_id
              LEFT JOIN app_user u ON u.id = p.created_by
+             LEFT JOIN app_user su ON su.id = s.created_by
              JOIN payment_method pm ON pm.id = p.payment_method_id
             WHERE p.branch_id = ? AND p.status = 'confirmed'
               AND substr(p.paid_at, 1, 4) = ?
@@ -2513,6 +2511,135 @@ function SearchModal({
         </div>
       </div>
     </Modal>
+  );
+}
+
+/* ─────────────────────────── Transferencias entre cuentas ─────────────────────────── */
+
+interface TransferRow {
+  id: string;
+  transfer_date: string;
+  amount: number;
+  description: string | null;
+  from_kind: AccountKind;
+  to_kind: AccountKind;
+  from_name: string | null;
+  to_name: string | null;
+  created_by_name: string | null;
+  created_at: string;
+}
+
+function TransferenciasTab({ ctx }: { ctx: Ctx }) {
+  const [year, setYear] = useState(new Date().getFullYear());
+
+  const transfers = useQuery({
+    queryKey: ['fin-transfers', ctx.branchId, year],
+    enabled: !!ctx.branchId,
+    queryFn: () =>
+      query<TransferRow>(
+        `SELECT at.id, at.transfer_date, at.amount, at.description,
+                at.from_kind, at.to_kind,
+                CASE WHEN at.from_kind = 'cash' THEN 'Caja' ELSE COALESCE(fb.name, 'Banco') END AS from_name,
+                CASE WHEN at.to_kind = 'cash' THEN 'Caja' ELSE COALESCE(tb.name, 'Banco') END AS to_name,
+                u.full_name AS created_by_name,
+                at.created_at
+           FROM account_transfer at
+           LEFT JOIN bank_account fb ON fb.id = at.from_bank_account_id
+           LEFT JOIN bank_account tb ON tb.id = at.to_bank_account_id
+           LEFT JOIN app_user u ON u.id = at.created_by
+          WHERE at.branch_id = ? AND substr(at.transfer_date, 1, 4) = ?
+          ORDER BY at.transfer_date DESC, at.created_at DESC`,
+        [ctx.branchId, String(year)],
+      ),
+  });
+
+  const rows = transfers.data ?? [];
+  const total = rows.reduce((a, r) => a + r.amount, 0);
+
+  return (
+    <div className="space-y-6">
+      {/* Selector de año */}
+      <div className="flex items-center justify-center gap-4">
+        <button
+          onClick={() => setYear((y) => y - 1)}
+          className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+        >
+          <ChevronLeft className="h-5 w-5" />
+        </button>
+        <span className="min-w-[4rem] text-center text-lg font-semibold text-white">
+          {year}
+        </span>
+        <button
+          onClick={() => setYear((y) => y + 1)}
+          className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+        >
+          <ChevronRight className="h-5 w-5" />
+        </button>
+      </div>
+
+      <Card>
+        <CardHeader
+          title="Transferencias entre cuentas"
+          subtitle="Movimientos internos de dinero"
+          action={
+            <MetricCard size="xl" label="Total movido" value={money(total)} gold />
+          }
+        />
+
+        {rows.length === 0 ? (
+          <EmptyState icon={ArrowLeftRight} title="Sin transferencias en el año" />
+        ) : (
+          <div className="-mx-2 overflow-x-auto">
+            <table className="w-full min-w-[640px] text-sm">
+              <thead>
+                <tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-white/40">
+                  <th className="px-2 py-2 font-medium">Fecha</th>
+                  <th className="px-2 py-2 font-medium">Desde</th>
+                  <th className="px-2 py-2 font-medium">Hacia</th>
+                  <th className="px-2 py-2 font-medium">Descripción</th>
+                  <th className="px-2 py-2 font-medium">Usuario</th>
+                  <th className="px-2 py-2 text-right font-medium">Monto</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {rows.map((r) => (
+                  <tr key={r.id} className="text-white/80">
+                    <td className="whitespace-nowrap px-2 py-2 text-white/50">
+                      {dateShort(r.transfer_date)}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-2">
+                      <span className="inline-flex items-center gap-1.5">
+                        {r.from_kind === 'cash'
+                          ? <Wallet className="h-3.5 w-3.5 text-gold-300" />
+                          : <Landmark className="h-3.5 w-3.5 text-white/40" />}
+                        {r.from_name}
+                      </span>
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-2">
+                      <span className="inline-flex items-center gap-1.5">
+                        {r.to_kind === 'cash'
+                          ? <Wallet className="h-3.5 w-3.5 text-gold-300" />
+                          : <Landmark className="h-3.5 w-3.5 text-white/40" />}
+                        {r.to_name}
+                      </span>
+                    </td>
+                    <td className="px-2 py-2 text-white/60">
+                      {r.description ?? <span className="text-white/20">—</span>}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-2 text-white/60">
+                      {r.created_by_name ?? '—'}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-2 text-right font-medium text-gold-300">
+                      {money(r.amount)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </div>
   );
 }
 
