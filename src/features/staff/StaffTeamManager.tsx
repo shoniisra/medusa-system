@@ -8,6 +8,8 @@ import {
   UserPlus,
   X,
   Plus,
+  Pencil,
+  UserRound,
 } from 'lucide-react';
 import { query, execute, batch } from '@/lib/db';
 import { useOrgId } from '@/store/session';
@@ -20,38 +22,22 @@ import {
   EmptyState,
   useToast,
 } from '@/components/ui';
+import {
+  GOOGLE_EVENT_COLORS,
+  DEFAULT_CALENDAR_COLOR,
+  findCalendarColor,
+} from '@/config/colors';
 import { genId } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import type { Service } from '@/types';
 
-/* ─── Tipos locales ──────────────────────────────────────────────────────── */
+/* ─── Constantes ─────────────────────────────────────────────────────────── */
 
-interface StaffWithUser {
-  id: string;
-  first_name: string;
-  last_name: string | null;
-  color: string | null;
-  user_id: string | null;
-  username: string | null;
-  role: string | null;
-  has_password: 0 | 1 | null;
-}
-
-interface StaffCategoryRow {
-  id: string;
-  staff_member_id: string;
-  category: string;
-  priority: number;
-  active: 0 | 1;
-}
-
-interface StaffExclusionRow {
-  id: string;
-  staff_member_id: string;
-  service_id: string;
-  service_name: string;
-  service_category: string;
-}
+const PAY_CYCLE_OPTIONS = [
+  { value: 'weekly', label: 'Semanal' },
+  { value: 'biweekly', label: 'Quincenal' },
+  { value: 'monthly', label: 'Mensual' },
+];
 
 const ROLE_LABELS: Record<string, string> = {
   owner: 'Propietario',
@@ -73,6 +59,51 @@ const ROLE_TONES: Record<string, 'gold' | 'success' | 'info' | 'muted'> = {
   viewer: 'muted',
 };
 
+/* ─── Tipos locales ──────────────────────────────────────────────────────── */
+
+interface StaffWithUser {
+  id: string;
+  first_name: string;
+  last_name: string | null;
+  color: string | null;
+  phone: string | null;
+  email: string | null;
+  employee_code: string | null;
+  default_pay_cycle: string | null;
+  notes: string | null;
+  user_id: string | null;
+  username: string | null;
+  role: string | null;
+  has_password: 0 | 1 | null;
+}
+
+interface StaffProfileDraft {
+  first_name: string;
+  last_name: string;
+  color: string;
+  phone: string;
+  email: string;
+  employee_code: string;
+  default_pay_cycle: string;
+  notes: string;
+}
+
+interface StaffCategoryRow {
+  id: string;
+  staff_member_id: string;
+  category: string;
+  priority: number;
+  active: 0 | 1;
+}
+
+interface StaffExclusionRow {
+  id: string;
+  staff_member_id: string;
+  service_id: string;
+  service_name: string;
+  service_category: string;
+}
+
 /* ─── Queries ─────────────────────────────────────────────────────────────── */
 
 function useStaffWithUsers() {
@@ -83,6 +114,7 @@ function useStaffWithUsers() {
     queryFn: () =>
       query<StaffWithUser>(
         `SELECT sm.id, sm.first_name, sm.last_name, sm.color,
+                sm.phone, sm.email, sm.employee_code, sm.default_pay_cycle, sm.notes,
                 au.id AS user_id, au.username, au.role,
                 CASE WHEN au.password_hash IS NOT NULL AND au.password_hash != '' THEN 1 ELSE 0 END AS has_password
            FROM staff_member sm
@@ -142,6 +174,70 @@ function useOrgServices() {
 }
 
 /* ─── Mutations ───────────────────────────────────────────────────────────── */
+
+function useCreateStaff() {
+  const orgId = useOrgId();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (draft: StaffProfileDraft) => {
+      const now = new Date().toISOString();
+      await execute(
+        `INSERT INTO staff_member
+           (id, organization_id, first_name, last_name, color, phone, email,
+            employee_code, default_pay_cycle, notes, active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+        [
+          genId(),
+          orgId,
+          draft.first_name.trim(),
+          draft.last_name.trim() || null,
+          draft.color || DEFAULT_CALENDAR_COLOR.hex,
+          draft.phone.trim() || null,
+          draft.email.trim() || null,
+          draft.employee_code.trim() || null,
+          draft.default_pay_cycle || 'monthly',
+          draft.notes.trim() || null,
+          now,
+          now,
+        ],
+      );
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['staff-with-users', orgId] });
+    },
+  });
+}
+
+function useUpdateStaff() {
+  const orgId = useOrgId();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, draft }: { id: string; draft: StaffProfileDraft }) => {
+      const now = new Date().toISOString();
+      await execute(
+        `UPDATE staff_member
+            SET first_name = ?, last_name = ?, color = ?, phone = ?, email = ?,
+                employee_code = ?, default_pay_cycle = ?, notes = ?, updated_at = ?
+          WHERE id = ?`,
+        [
+          draft.first_name.trim(),
+          draft.last_name.trim() || null,
+          draft.color || DEFAULT_CALENDAR_COLOR.hex,
+          draft.phone.trim() || null,
+          draft.email.trim() || null,
+          draft.employee_code.trim() || null,
+          draft.default_pay_cycle || 'monthly',
+          draft.notes.trim() || null,
+          now,
+          id,
+        ],
+      );
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['staff-with-users', orgId] });
+    },
+  });
+}
 
 function useToggleCategory() {
   const orgId = useOrgId();
@@ -294,7 +390,170 @@ function useAddExclusion() {
   });
 }
 
-/* ─── Sub-componentes ─────────────────────────────────────────────────────── */
+/* ─── ColorPicker ─────────────────────────────────────────────────────────── */
+
+function ColorPicker({ value, onChange }: { value: string; onChange: (hex: string) => void }) {
+  const current = findCalendarColor(value);
+  return (
+    <div>
+      <div className="mb-1.5 flex items-baseline justify-between gap-2">
+        <span className="text-xs font-medium text-white/60">Color identificador</span>
+        <span className="text-xs text-white/40">
+          {current ? current.name : value ? value.toUpperCase() : '—'}
+        </span>
+      </div>
+      <div className="grid grid-cols-4 gap-1.5 rounded-xl border border-white/10 bg-white/[0.03] p-2 sm:grid-cols-6">
+        {GOOGLE_EVENT_COLORS.map((c) => {
+          const on = c.hex.toLowerCase() === value.toLowerCase();
+          return (
+            <button
+              key={c.hex}
+              type="button"
+              aria-pressed={on}
+              title={c.name}
+              onClick={() => onChange(c.hex)}
+              className={cn(
+                'flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs transition active:scale-[0.97]',
+                on
+                  ? 'border-white/50 bg-white/10 font-medium text-white'
+                  : 'border-transparent text-white/60 hover:border-white/20 hover:bg-white/5',
+              )}
+            >
+              <span
+                className="h-3 w-3 shrink-0 rounded-full"
+                style={{ background: c.hex }}
+              />
+              {c.name}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ─── StaffProfileForm ────────────────────────────────────────────────────── */
+
+function emptyDraft(staff?: StaffWithUser): StaffProfileDraft {
+  return {
+    first_name: staff?.first_name ?? '',
+    last_name: staff?.last_name ?? '',
+    color: staff?.color ?? DEFAULT_CALENDAR_COLOR.hex,
+    phone: staff?.phone ?? '',
+    email: staff?.email ?? '',
+    employee_code: staff?.employee_code ?? '',
+    default_pay_cycle: staff?.default_pay_cycle ?? 'monthly',
+    notes: staff?.notes ?? '',
+  };
+}
+
+function StaffProfileForm({
+  staff,
+  onDone,
+}: {
+  staff?: StaffWithUser; // undefined = nuevo
+  onDone: () => void;
+}) {
+  const [draft, setDraft] = useState<StaffProfileDraft>(() => emptyDraft(staff));
+  const { mutateAsync: create, isPending: creating } = useCreateStaff();
+  const { mutateAsync: update, isPending: updating } = useUpdateStaff();
+  const { show } = useToast();
+
+  const isPending = creating || updating;
+
+  function set<K extends keyof StaffProfileDraft>(k: K, v: StaffProfileDraft[K]) {
+    setDraft((d) => ({ ...d, [k]: v }));
+  }
+
+  async function save() {
+    if (!draft.first_name.trim()) {
+      show({ title: 'El nombre es obligatorio', tone: 'danger' });
+      return;
+    }
+    try {
+      if (staff) {
+        await update({ id: staff.id, draft });
+        show({ title: 'Perfil actualizado', tone: 'success' });
+      } else {
+        await create(draft);
+        show({ title: 'Colaboradora creada', tone: 'success' });
+      }
+      onDone();
+    } catch {
+      show({ title: 'Error al guardar', tone: 'danger' });
+    }
+  }
+
+  return (
+    <div className="space-y-3 rounded-xl border border-white/15 bg-white/[0.04] p-4">
+      <div className="grid grid-cols-2 gap-3">
+        <Input
+          label="Nombre *"
+          value={draft.first_name}
+          onChange={(e) => set('first_name', e.target.value)}
+          autoFocus={!staff}
+        />
+        <Input
+          label="Apellido"
+          value={draft.last_name}
+          onChange={(e) => set('last_name', e.target.value)}
+        />
+      </div>
+
+      <ColorPicker value={draft.color} onChange={(hex) => set('color', hex)} />
+
+      <div className="grid grid-cols-2 gap-3">
+        <Input
+          label="Teléfono"
+          value={draft.phone}
+          onChange={(e) => set('phone', e.target.value)}
+        />
+        <Input
+          label="Email"
+          type="email"
+          value={draft.email}
+          onChange={(e) => set('email', e.target.value)}
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <Input
+          label="Código empleado"
+          value={draft.employee_code}
+          onChange={(e) => set('employee_code', e.target.value)}
+        />
+        <Select
+          label="Ciclo de pago"
+          value={draft.default_pay_cycle}
+          onChange={(e) => set('default_pay_cycle', e.target.value)}
+        >
+          {PAY_CYCLE_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </Select>
+      </div>
+
+      <Input
+        label="Notas"
+        value={draft.notes}
+        onChange={(e) => set('notes', e.target.value)}
+      />
+
+      <div className="flex gap-2 pt-1">
+        <Button onClick={() => void save()} disabled={isPending}>
+          {isPending ? 'Guardando…' : staff ? 'Guardar cambios' : 'Crear colaboradora'}
+        </Button>
+        <Button variant="ghost" onClick={onDone}>
+          Cancelar
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/* ─── PasswordForm ────────────────────────────────────────────────────────── */
 
 function PasswordForm({ userId, onDone }: { userId: string; onDone: () => void }) {
   const [pw, setPw] = useState('');
@@ -349,6 +608,8 @@ function PasswordForm({ userId, onDone }: { userId: string; onDone: () => void }
   );
 }
 
+/* ─── CategoryToggles ─────────────────────────────────────────────────────── */
+
 function CategoryToggles({
   staffMemberId,
   categories,
@@ -383,6 +644,8 @@ function CategoryToggles({
     </div>
   );
 }
+
+/* ─── ExclusionsList ──────────────────────────────────────────────────────── */
 
 function ExclusionsList({
   staffMemberId,
@@ -435,7 +698,7 @@ function ExclusionsList({
             type="button"
             disabled={removing}
             onClick={() => remove(exc.id)}
-            className="shrink-0 rounded p-1 text-white/40 hover:bg-white/10 hover:text-danger transition-colors"
+            className="shrink-0 rounded p-1 text-white/40 transition-colors hover:bg-white/10 hover:text-danger"
             title="Quitar exclusión"
           >
             <X className="h-4 w-4" />
@@ -466,11 +729,7 @@ function ExclusionsList({
               ))}
             </Select>
           </div>
-          <Button
-            size="sm"
-            onClick={handleAdd}
-            disabled={!selectedServiceId || adding}
-          >
+          <Button size="sm" onClick={handleAdd} disabled={!selectedServiceId || adding}>
             {adding ? '…' : 'Agregar'}
           </Button>
           <Button
@@ -489,7 +748,7 @@ function ExclusionsList({
   );
 }
 
-/* ─── StaffCard (fila expandible por colaborador) ─────────────────────────── */
+/* ─── StaffCard ───────────────────────────────────────────────────────────── */
 
 function StaffCard({
   staff,
@@ -502,8 +761,8 @@ function StaffCard({
   exclusions: StaffExclusionRow[];
   services: Pick<Service, 'id' | 'name' | 'category'>[];
 }) {
-  const orgId = useOrgId();
   const [open, setOpen] = useState(false);
+  const [editProfile, setEditProfile] = useState(false);
   const [pwOpen, setPwOpen] = useState(false);
   const { mutate: createUser, isPending: creating } = useCreateUser();
   const { show } = useToast();
@@ -519,9 +778,6 @@ function StaffCard({
       },
     );
   }
-
-  // Silencia unused variable — orgId solo se usa para contextualizar el PasswordForm
-  void orgId;
 
   return (
     <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03]">
@@ -542,9 +798,7 @@ function StaffCard({
               {ROLE_LABELS[staff.role] ?? staff.role}
             </Badge>
           )}
-          {!staff.user_id && (
-            <Badge tone="muted">Sin cuenta</Badge>
-          )}
+          {!staff.user_id && <Badge tone="muted">Sin cuenta</Badge>}
         </span>
         {open ? (
           <ChevronUp className="h-4 w-4 shrink-0 text-white/40" />
@@ -556,6 +810,58 @@ function StaffCard({
       {/* Panel expandido */}
       {open && (
         <div className="space-y-5 border-t border-white/10 px-4 pb-5 pt-4">
+
+          {/* ── Perfil ── */}
+          <section>
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-xs font-semibold uppercase tracking-wider text-white/40">
+                Perfil
+              </p>
+              {!editProfile && (
+                <Button size="sm" variant="ghost" onClick={() => setEditProfile(true)}>
+                  <Pencil className="h-3.5 w-3.5" /> Editar
+                </Button>
+              )}
+            </div>
+
+            {editProfile ? (
+              <StaffProfileForm staff={staff} onDone={() => setEditProfile(false)} />
+            ) : (
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                {staff.phone && (
+                  <>
+                    <span className="text-white/40">Teléfono</span>
+                    <span className="text-white">{staff.phone}</span>
+                  </>
+                )}
+                {staff.email && (
+                  <>
+                    <span className="text-white/40">Email</span>
+                    <span className="truncate text-white">{staff.email}</span>
+                  </>
+                )}
+                {staff.employee_code && (
+                  <>
+                    <span className="text-white/40">Código</span>
+                    <span className="text-white">{staff.employee_code}</span>
+                  </>
+                )}
+                {staff.default_pay_cycle && (
+                  <>
+                    <span className="text-white/40">Ciclo</span>
+                    <span className="text-white">
+                      {PAY_CYCLE_OPTIONS.find((o) => o.value === staff.default_pay_cycle)
+                        ?.label ?? staff.default_pay_cycle}
+                    </span>
+                  </>
+                )}
+                {!staff.phone && !staff.email && !staff.employee_code && (
+                  <p className="col-span-2 text-xs text-white/30">Sin datos adicionales</p>
+                )}
+              </div>
+            )}
+          </section>
+
           {/* ── Cuenta ── */}
           <section>
             <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-white/40">
@@ -627,9 +933,10 @@ function StaffCard({
   );
 }
 
-/* ─── Exportación principal ───────────────────────────────────────────────── */
+/* ─── StaffTeamManager ────────────────────────────────────────────────────── */
 
 export function StaffTeamManager() {
+  const [addOpen, setAddOpen] = useState(false);
   const { data: staffList = [], isLoading } = useStaffWithUsers();
   const { data: allCategories = [] } = useStaffCategories();
   const { data: allExclusions = [] } = useStaffExclusions();
@@ -645,22 +952,29 @@ export function StaffTeamManager() {
     );
   }
 
-  if (!staffList.length) {
-    return (
-      <EmptyState
-        title="Sin colaboradoras"
-        description="Agregá colaboradoras en Configuración para empezar."
-        icon={UserPlus}
-      />
-    );
-  }
-
   return (
-    <div className="space-y-2">
-      <p className="text-sm text-white/40">
-        Hacé clic en una colaboradora para gestionar su acceso, especialidades y
-        servicios excluidos.
-      </p>
+    <div className="space-y-3">
+      {/* Botón nueva colaboradora */}
+      {!addOpen && (
+        <div className="flex justify-end">
+          <Button onClick={() => setAddOpen(true)}>
+            <Plus className="h-4 w-4" /> Nueva colaboradora
+          </Button>
+        </div>
+      )}
+
+      {addOpen && (
+        <StaffProfileForm onDone={() => setAddOpen(false)} />
+      )}
+
+      {!staffList.length && !addOpen && (
+        <EmptyState
+          title="Sin colaboradoras"
+          description='Creá la primera con el botón "Nueva colaboradora".'
+          icon={UserRound}
+        />
+      )}
+
       {staffList.map((staff) => (
         <StaffCard
           key={staff.id}

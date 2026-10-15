@@ -1,9 +1,7 @@
-import { createElement, type ReactNode } from 'react';
-import { calendarColorName } from '@/config/colors';
+import { type ReactNode } from 'react';
 import {
   Scissors,
   Package,
-  Users,
   Building2,
   UserRound,
   CreditCard,
@@ -11,8 +9,6 @@ import {
   Landmark,
   Calculator,
   Percent,
-  Star,
-  Ban,
   type LucideIcon,
 } from 'lucide-react';
 import { money, fullName } from '@/lib/format';
@@ -31,15 +27,6 @@ const CATEGORY_OPTIONS = SERVICE_CATEGORIES.map((c) => ({
   value: c,
   label: c,
 }));
-
-/** Prioridad de una habilidad: 1 = primaria, 2 = secundaria (respaldo). */
-const PRIORITY_OPTIONS = [
-  { value: '1', label: 'Primaria' },
-  { value: '2', label: 'Secundaria' },
-];
-
-const priorityLabel = (p: SqlValue) =>
-  Number(p) === 1 ? 'Primaria' : Number(p) === 2 ? 'Secundaria' : `Nivel ${p}`;
 
 /* ─────────────────────────── Tipos del motor CRUD ────────────────────────── */
 
@@ -114,51 +101,12 @@ export interface ResourceConfig {
 
 /* ─────────────────────────────── Helpers UI ──────────────────────────────── */
 
-const PAY_CYCLE_OPTIONS = [
-  { value: 'weekly', label: 'Semanal' },
-  { value: 'biweekly', label: 'Quincenal' },
-  { value: 'monthly', label: 'Mensual' },
-];
-
 const METHOD_TYPE_OPTIONS = (
   Object.keys(PAYMENT_METHOD_LABELS) as (keyof typeof PAYMENT_METHOD_LABELS)[]
 ).map((k) => ({ value: k, label: PAYMENT_METHOD_LABELS[k] }));
 
 const s = (v: SqlValue) => (v == null ? '—' : String(v));
 
-/** Punto de color + nombre del color de Google Calendar al que corresponde. */
-const colorDot = (hex: string | null): ReactNode =>
-  hex
-    ? createElement(
-        'span',
-        { className: 'inline-flex items-center gap-2' },
-        createElement('span', {
-          key: 'dot',
-          className: 'inline-block h-4 w-4 shrink-0 rounded-full border border-white/20',
-          style: { backgroundColor: hex },
-          title: hex,
-        }),
-        createElement(
-          'span',
-          { key: 'name', className: 'text-white/60' },
-          calendarColorName(hex),
-        ),
-      )
-    : '—';
-
-/** Etiqueta de prioridad con color: dorado la primaria, tenue la secundaria. */
-const priorityTag = (p: SqlValue): ReactNode =>
-  createElement(
-    'span',
-    {
-      className: `inline-flex items-center rounded-full px-2 py-0.5 text-xs ${
-        Number(p) === 1
-          ? 'bg-gold/15 text-gold-200'
-          : 'bg-white/10 text-white/60'
-      }`,
-    },
-    priorityLabel(p),
-  );
 
 /* ────────────────────────── Definición de recursos ───────────────────────── */
 
@@ -251,162 +199,6 @@ export const RESOURCES: ResourceConfig[] = [
       { name: 'cost_price', label: 'Precio costo', type: 'money' },
       { name: 'base_price', label: 'Precio venta', type: 'money' },
       { name: 'description', label: 'Descripción', type: 'textarea', colSpan: 2 },
-    ],
-  },
-  {
-    key: 'staff',
-    label: 'Colaboradores',
-    singular: 'colaborador',
-    icon: Users,
-    table: 'staff_member',
-    autoScopeOrg: true,
-    orderBy: 'first_name',
-    hasActive: true,
-    hasUpdatedAt: true,
-    columns: [
-      {
-        header: 'Nombre',
-        render: (r) => fullName(String(r.first_name), r.last_name as string),
-      },
-      {
-        header: 'Color',
-        render: (r) => colorDot(r.color as string | null),
-        sortValue: (r) => calendarColorName(r.color as string | null),
-      },
-      { header: 'Código', render: (r) => s(r.employee_code) },
-      { header: 'Teléfono', render: (r) => s(r.phone) },
-      {
-        header: 'Ciclo',
-        render: (r) =>
-          PAY_CYCLE_OPTIONS.find((o) => o.value === r.default_pay_cycle)?.label ??
-          s(r.default_pay_cycle),
-      },
-    ],
-    fields: [
-      { name: 'first_name', label: 'Nombre', type: 'text', required: true },
-      { name: 'last_name', label: 'Apellido', type: 'text' },
-      {
-        name: 'color',
-        label: 'Color identificador',
-        type: 'color',
-        colSpan: 2,
-      },
-      { name: 'employee_code', label: 'Código empleado', type: 'text' },
-      { name: 'phone', label: 'Teléfono', type: 'text' },
-      { name: 'email', label: 'Email', type: 'text' },
-      { name: 'birth_date', label: 'Cumpleaños', type: 'date' },
-      { name: 'hire_date', label: 'Ingreso', type: 'date' },
-      {
-        name: 'default_pay_cycle',
-        label: 'Ciclo de pago',
-        type: 'select',
-        options: PAY_CYCLE_OPTIONS,
-      },
-      { name: 'notes', label: 'Notas', type: 'textarea', colSpan: 2 },
-    ],
-  },
-  {
-    key: 'staff_categories',
-    label: 'Especialidades',
-    singular: 'especialidad',
-    icon: Star,
-    table: 'staff_category',
-    autoScopeOrg: false,
-    // Scope por organización vía join a staff_member (la tabla no tiene
-    // organization_id, igual que staff_service_commission).
-    listSql: (orgId) => ({
-      sql: `SELECT sc.*,
-                   sm.first_name || CASE WHEN sm.last_name IS NOT NULL THEN ' ' || sm.last_name ELSE '' END AS staff_name,
-                   sm.color AS staff_color
-              FROM staff_category sc
-              JOIN staff_member sm ON sm.id = sc.staff_member_id
-             WHERE sm.organization_id = ?
-             ORDER BY sm.first_name, sc.priority, sc.category`,
-      args: [orgId],
-    }),
-    orderBy: 'id',
-    hasActive: true,
-    hasUpdatedAt: true,
-    columns: [
-      { header: 'Colaborador', render: (r) => s(r.staff_name) },
-      { header: 'Categoría', render: (r) => s(r.category) },
-      {
-        header: 'Prioridad',
-        render: (r) => priorityTag(r.priority),
-        sortValue: (r) => Number(r.priority),
-      },
-    ],
-    fields: [
-      {
-        name: 'staff_member_id',
-        label: 'Colaborador',
-        type: 'select',
-        required: true,
-        optionsKey: 'staff',
-        colSpan: 2,
-      },
-      {
-        name: 'category',
-        label: 'Categoría',
-        type: 'select',
-        required: true,
-        options: CATEGORY_OPTIONS,
-        colSpan: 2,
-      },
-      {
-        name: 'priority',
-        label: 'Prioridad',
-        type: 'select',
-        required: true,
-        options: PRIORITY_OPTIONS,
-        defaultValue: 1,
-      },
-    ],
-  },
-  {
-    key: 'staff_exclusions',
-    label: 'Servicios excluidos',
-    singular: 'servicio excluido',
-    icon: Ban,
-    table: 'staff_service_exclusion',
-    autoScopeOrg: false,
-    listSql: (orgId) => ({
-      sql: `SELECT sse.*,
-                   sm.first_name || CASE WHEN sm.last_name IS NOT NULL THEN ' ' || sm.last_name ELSE '' END AS staff_name,
-                   sv.name AS service_name,
-                   sv.category AS service_category
-              FROM staff_service_exclusion sse
-              JOIN staff_member sm ON sm.id = sse.staff_member_id
-              JOIN service sv ON sv.id = sse.service_id
-             WHERE sm.organization_id = ?
-             ORDER BY sm.first_name, sv.name`,
-      args: [orgId],
-    }),
-    orderBy: 'id',
-    hasActive: true,
-    hasUpdatedAt: true,
-    columns: [
-      { header: 'Colaborador', render: (r) => s(r.staff_name) },
-      { header: 'Servicio', render: (r) => s(r.service_name) },
-      { header: 'Categoría', render: (r) => s(r.service_category) },
-    ],
-    fields: [
-      {
-        name: 'staff_member_id',
-        label: 'Colaborador',
-        type: 'select',
-        required: true,
-        optionsKey: 'staff',
-        colSpan: 2,
-      },
-      {
-        name: 'service_id',
-        label: 'Servicio que no hace',
-        type: 'select',
-        required: true,
-        optionsKey: 'services',
-        colSpan: 2,
-      },
     ],
   },
   {
