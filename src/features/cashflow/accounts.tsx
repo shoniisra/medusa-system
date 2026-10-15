@@ -19,6 +19,19 @@ export function useBankAccounts(orgId: string, enabled: boolean) {
   });
 }
 
+/** Solo cuentas visibles para cobros al cliente (excluye is_internal). */
+export function useBankAccountsForCheckout(orgId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['bank-accounts-checkout', orgId],
+    enabled: enabled && !!orgId,
+    queryFn: () =>
+      query<BankAccount>(
+        'SELECT * FROM bank_account WHERE organization_id = ? AND active = 1 AND COALESCE(is_internal,0) = 0 ORDER BY name',
+        [orgId],
+      ),
+  });
+}
+
 /**
  * Selector de cuenta: caja física + cuentas bancarias activas.
  *
