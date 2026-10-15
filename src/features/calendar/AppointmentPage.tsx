@@ -46,6 +46,7 @@ import {
 import {
   paymentMethodFor,
   PaymentTargetFields,
+  useBankAccountsForCheckout,
   useOpenCashSession,
   usePaymentTarget,
 } from '@/features/cashflow/accounts';
@@ -2201,16 +2202,18 @@ function EditAppointment({ id }: { id: string }) {
     queryKey: ['appointment-payments', id],
     queryFn: () =>
       query<PaymentRow>(
-        `SELECT p.id, p.amount, p.paid_at, p.reference,
+        `SELECT p.id, p.amount, p.paid_at, p.reference, p.bank_account_id, p.status,
                 pm.method_type, ba.name AS bank_name,
                 u.full_name AS created_by_name,
+                cm.id AS movement_id, cm.cash_session_id AS movement_session_id,
                 CASE WHEN p.sale_id IS NULL THEN 'deposit' ELSE 'sale' END AS kind
            FROM payment p
            JOIN payment_method pm ON pm.id = p.payment_method_id
            LEFT JOIN bank_account ba ON ba.id = p.bank_account_id
            LEFT JOIN app_user u ON u.id = p.created_by
+           LEFT JOIN cash_movement cm ON cm.payment_id = p.id AND cm.direction = 'in'
            LEFT JOIN sale s ON s.id = p.sale_id
-          WHERE p.status = 'confirmed'
+          WHERE p.status IN ('confirmed','voided')
             AND (p.appointment_id = ? OR s.appointment_id = ?)
           ORDER BY p.paid_at`,
         [id, id],
@@ -2448,6 +2451,33 @@ function EditAppointment({ id }: { id: string }) {
       toast.success(APPT_STATUS_TOAST[status] ?? 'Cita actualizada');
     },
     onError: (e: Error) => toast.error('No se pudo cambiar el estado', e.message),
+  });
+
+  const voidPayment = useMutation({
+    mutationFn: async (row: PaymentRow) => {
+      const now = new Date().toISOString();
+      const stmts: Stmt[] = [
+        { sql: `UPDATE payment SET status = 'voided' WHERE id = ?`, args: [row.id] },
+      ];
+      if (row.movement_id && row.movement_session_id) {
+        stmts.push({
+          sql: `INSERT INTO cash_movement
+                  (id, cash_session_id, branch_id, movement_type, direction, amount,
+                   movement_at, payment_id, description, created_by)
+                VALUES (?, ?, ?, 'sale', 'out', ?, ?, ?, '[Anulación de cobro]', ?)`,
+          args: [genId(), row.movement_session_id, branchId, row.amount, now, row.id, userId],
+        });
+      }
+      await batch(stmts);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['appointment-payments', id] });
+      qc.invalidateQueries({ queryKey: ['appointment-deposits', id] });
+      invalidateSales(qc, branchId);
+      invalidateFinance(qc);
+      toast.success('Cobro anulado');
+    },
+    onError: (e: Error) => toast.error('No se pudo anular el cobro', e.message),
   });
 
   const all = items.data ?? [];
@@ -2689,9 +2719,6 @@ function EditAppointment({ id }: { id: string }) {
             />
           )}
 
-          {paymentsList.length > 0 && (
-            <PaymentsHistoryCard payments={paymentsList} />
-          )}
         </div>
 
         {/* Resumen */}
@@ -2893,6 +2920,13 @@ function EditAppointment({ id }: { id: string }) {
               </Button>
             </div>
           </Card>
+
+          {paymentsList.length > 0 && (
+            <PaymentsHistoryCard
+              payments={paymentsList}
+              onVoid={(row) => voidPayment.mutate(row)}
+            />
+          )}
         </div>
       </div>
 
@@ -3826,9 +3860,11 @@ function ConfirmSaleModal({
   // Saldo a favor a canjear en este cobro (parcial o total del saldo pendiente).
   const [creditStr, setCreditStr] = useState('');
 
-  // Datos compartidos de cuentas y caja (dest vacío = solo para obtener banks/methods/session).
+  // Datos compartidos de cuentas y caja.
   const target = usePaymentTarget(orgId, branchId, '');
   const { sessionId, hasOpenCashToday } = target;
+  // Solo cuentas visibles para cobros al cliente (excluye internas).
+  const checkoutBanks = useBankAccountsForCheckout(orgId, true);
 
   // Lista de pagos parciales que suman el total a cobrar en plata.
   interface PaymentEntry { id: string; dest: string; amountStr: string; reference: string; }
@@ -3890,7 +3926,7 @@ function ConfirmSaleModal({
 
       if (dueInMoney > 0) {
         for (const entry of payments) {
-          const eDest = entry.dest || target.banks.data?.[0]?.id || 'cash';
+          const eDest = entry.dest || checkoutBanks.data?.[0]?.id || 'cash';
           if (!paymentMethodFor(target.methods.data, eDest === 'cash'))
             throw new Error(
               `No hay un método de pago ${eDest === 'cash' ? 'en efectivo' : 'por transferencia'} configurado.`,
@@ -3994,7 +4030,7 @@ function ConfirmSaleModal({
         for (const entry of payments) {
           const entryAmt = Math.round((Number(entry.amountStr) || 0) * 100) / 100;
           if (entryAmt <= 0) continue;
-          const eDest = entry.dest || target.banks.data?.[0]?.id || 'cash';
+          const eDest = entry.dest || checkoutBanks.data?.[0]?.id || 'cash';
           const eCash = eDest === 'cash';
           const eMethod = paymentMethodFor(target.methods.data, eCash)!;
           const paymentId = genId();
@@ -4094,7 +4130,7 @@ function ConfirmSaleModal({
       (allocatedOk &&
         hasOpenCashToday &&
         payments.every((p) => {
-          const eDest = p.dest || target.banks.data?.[0]?.id || 'cash';
+          const eDest = p.dest || checkoutBanks.data?.[0]?.id || 'cash';
           return (
             (Number(p.amountStr) || 0) > 0 &&
             !!paymentMethodFor(target.methods.data, eDest === 'cash')
@@ -4165,44 +4201,79 @@ function ConfirmSaleModal({
         {dueInMoney > 0 ? (
           <div className="space-y-2">
             {payments.map((entry) => {
-              const eDest = entry.dest || target.banks.data?.[0]?.id || 'cash';
+              const defaultDest = checkoutBanks.data?.[0]?.id || 'cash';
+              const eDest = entry.dest || defaultDest;
               const eCash = eDest === 'cash';
+              const otherSum = payments
+                .filter((p) => p.id !== entry.id)
+                .reduce((s, p) => s + (Number(p.amountStr) || 0), 0);
+              const maxForEntry = Math.round(Math.max(0, dueInMoney - otherSum) * 100) / 100;
+              const entryVal = Number(entry.amountStr) || 0;
+              const entryError =
+                entryVal > 0 && entryVal > maxForEntry + 0.005
+                  ? `Máximo ${money(maxForEntry)}`
+                  : entryVal < 0
+                  ? 'Valor inválido'
+                  : null;
               return (
-                <div key={entry.id} className="space-y-2 rounded-xl border border-white/10 bg-white/[0.03] p-3">
-                  <div className="flex items-end gap-2">
-                    <div className="min-w-0 flex-1">
-                      <Select
-                        label="Cobrar en"
-                        value={eDest}
-                        onChange={(e) => setPaymentField(entry.id, 'dest', e.target.value)}
+                <div key={entry.id} className="space-y-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                  {/* Selector de cuenta como tarjetas */}
+                  <div className="flex flex-wrap gap-2">
+                    {checkoutBanks.data?.map((b) => (
+                      <button
+                        key={b.id}
+                        type="button"
+                        className={cn(
+                          'rounded-xl border px-3 py-2 text-sm font-medium transition-colors',
+                          eDest === b.id
+                            ? 'border-gold/60 bg-gold/10 text-gold-200'
+                            : 'border-white/10 bg-white/[0.03] text-white/60 hover:bg-white/[0.07] hover:text-white',
+                        )}
+                        onClick={() => setPaymentField(entry.id, 'dest', b.id)}
                       >
-                        {target.banks.data?.map((b) => (
-                          <option key={b.id} value={b.id}>{b.name} (transferencia)</option>
-                        ))}
-                        <option value="cash">Efectivo (caja)</option>
-                      </Select>
-                    </div>
-                    <div className="w-28 shrink-0">
-                      <Input
-                        label="Monto"
-                        type="number"
-                        inputMode="decimal"
-                        min="0.01"
-                        step="0.01"
-                        value={entry.amountStr}
-                        onChange={(e) => setPaymentField(entry.id, 'amountStr', e.target.value)}
-                      />
-                    </div>
+                        {b.name}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      className={cn(
+                        'rounded-xl border px-3 py-2 text-sm font-medium transition-colors',
+                        eCash
+                          ? 'border-gold/60 bg-gold/10 text-gold-200'
+                          : 'border-white/10 bg-white/[0.03] text-white/60 hover:bg-white/[0.07] hover:text-white',
+                      )}
+                      onClick={() => setPaymentField(entry.id, 'dest', 'cash')}
+                    >
+                      Efectivo
+                    </button>
                     {payments.length > 1 && (
                       <button
                         type="button"
-                        className="mb-1 shrink-0 text-white/40 transition-colors hover:text-danger"
+                        className="ml-auto text-white/30 transition-colors hover:text-danger"
                         onClick={() => removePayment(entry.id)}
                       >
                         <X className="h-4 w-4" />
                       </button>
                     )}
                   </div>
+
+                  {/* Input de monto grande */}
+                  <div>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      min="0.01"
+                      step="0.01"
+                      value={entry.amountStr}
+                      onChange={(e) => setPaymentField(entry.id, 'amountStr', e.target.value)}
+                      placeholder={`$${maxForEntry.toFixed(2)}`}
+                      className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-2xl font-semibold text-white placeholder-white/20 outline-none focus:border-gold/40 focus:ring-1 focus:ring-gold/20"
+                    />
+                    {entryError && (
+                      <p className="mt-1 text-xs text-danger">{entryError}</p>
+                    )}
+                  </div>
+
                   {!eCash && (
                     <Input
                       label="Nº de voucher (opcional)"
