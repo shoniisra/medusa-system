@@ -141,6 +141,11 @@ export const router = createBrowserRouter([
             element: <RequirePermission permission="view_finance" />,
             children: [
               { path: ROUTES.cashflow, element: lazyRoute(<CashflowPage />) },
+              { path: ROUTES.cashflowResumen, element: lazyRoute(<CashflowPage />) },
+              { path: ROUTES.cashflowTransacciones, element: lazyRoute(<CashflowPage />) },
+              { path: ROUTES.cashflowCuentas, element: lazyRoute(<CashflowPage />) },
+              { path: ROUTES.cashflowDeudas, element: lazyRoute(<CashflowPage />) },
+              { path: ROUTES.cashflowTransferencias, element: lazyRoute(<CashflowPage />) },
             ],
           },
 
