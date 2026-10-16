@@ -114,7 +114,7 @@ export function CashRegisterModal({
   return (
     <Modal
       open={open}
-      onClose={canClose ? onClose : () => undefined}
+      onClose={onClose}
       title={titleFor(mode)}
       className="sm:max-w-xl"
     >
