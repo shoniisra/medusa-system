@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Pre-commit hook: corre el mismo lint que CI (npm run build en Cloudflare Pages).
+# Evita que un commit rompa el deploy de prod por errores de tsc o eslint.
+#
+# Activar en una clone nueva:
+#   git config core.hooksPath .githooks
+#
+# Saltar en un commit puntual (NO recomendado antes de push):
+#   git commit --no-verify
+
+set -e
+
+# No correr sobre merge commits en curso (ya resueltos manualmente)
+if [ -f .git/MERGE_HEAD ]; then
+  echo "pre-commit: merge en curso, salteando lint."
+  exit 0
+fi
+
+echo "pre-commit: corriendo npm run lint (tsc + eslint)..."
+if ! npm run lint; then
+  echo ""
+  echo "pre-commit: lint FALLO. El build de Cloudflare Pages tambien va a fallar."
+  echo "Arregla los errores y volve a hacer commit."
+  echo "Si realmente necesitas commitear igual: git commit --no-verify"
+  exit 1
+fi
+
+echo "pre-commit: lint OK."

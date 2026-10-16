@@ -2471,8 +2471,8 @@ function EditAppointment({ id }: { id: string }) {
       await batch(stmts);
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['appointment-payments', id] });
-      qc.invalidateQueries({ queryKey: ['appointment-deposits', id] });
+      void qc.invalidateQueries({ queryKey: ['appointment-payments', id] });
+      void qc.invalidateQueries({ queryKey: ['appointment-deposits', id] });
       invalidateSales(qc, branchId);
       invalidateFinance(qc);
       toast.success('Cobro anulado');
@@ -3882,14 +3882,17 @@ function ConfirmSaleModal({
   const dueInMoney = Math.max(0, balance - creditUsed);
 
   // Cuando hay un solo pago, sincronizar su monto con dueInMoney automáticamente.
-  useEffect(() => {
-    setPayments((prev) => {
-      if (prev.length !== 1) return prev;
+  // Patrón "adjust state during render" (https://react.dev/reference/react/useState#storing-information-from-previous-renders)
+  const [lastDueInMoney, setLastDueInMoney] = useState(dueInMoney);
+  if (dueInMoney !== lastDueInMoney) {
+    setLastDueInMoney(dueInMoney);
+    if (payments.length === 1) {
       const next = dueInMoney > 0 ? String(Math.round(dueInMoney * 100) / 100) : '';
-      if (prev[0].amountStr === next) return prev;
-      return [{ ...prev[0], amountStr: next }];
-    });
-  }, [dueInMoney]);
+      if (payments[0].amountStr !== next) {
+        setPayments([{ ...payments[0], amountStr: next }]);
+      }
+    }
+  }
 
   const allocatedSum = payments.reduce((s, p) => s + (Number(p.amountStr) || 0), 0);
   const allocatedOk = dueInMoney === 0 || Math.abs(allocatedSum - dueInMoney) < 0.005;
