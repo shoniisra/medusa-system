@@ -4,7 +4,6 @@ import {
   AlertTriangle,
   BarChart3,
   CalendarDays,
-  ClipboardCheck,
   ClipboardList,
   Lock,
   Repeat,
@@ -34,7 +33,7 @@ import { ymd } from '@/lib/date';
 import { ROUTES } from '@/config/constants';
 import { useSession, useBranchId, useOrgId } from '@/store/session';
 import { cn } from '@/lib/cn';
-import { CloseOverdueModal, useOverduePending } from '@/features/tasks/CloseOverdueModal';
+import { CloseOverdueModal } from '@/features/tasks/CloseOverdueModal';
 import type { CashSession } from '@/types';
 
 /**
@@ -364,7 +363,6 @@ function pendingLabel(reservedToday: number, overdue: number): string {
 function BlockingPanel({
   reservedToday,
   overdue,
-  onOpenBulk,
   onGoTasks,
 }: {
   reservedToday: number;
@@ -372,69 +370,23 @@ function BlockingPanel({
   onOpenBulk: () => void;
   onGoTasks: () => void;
 }) {
-  const overduePending = useOverduePending();
-  const sample = (overduePending.data ?? []).slice(0, 5);
-  const rest = Math.max(0, (overduePending.data?.length ?? 0) - sample.length);
-
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-100">
       <div className="flex items-start gap-2">
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
         <span>
-          No podés cerrar la caja con tareas sin procesar:{' '}
-          <b>{pendingLabel(reservedToday, overdue)}</b>. Marcálas aquí sin ir al
-          tablero.
+          No podés cerrar la caja porque hay tareas sin procesar:{' '}
+          <b>{pendingLabel(reservedToday, overdue)}</b>.
         </span>
       </div>
-
-      {sample.length > 0 && (
-        <ul className="space-y-1 rounded-lg bg-black/20 p-2">
-          {sample.map((r) => (
-            <li
-              key={r.id}
-              className="flex items-baseline justify-between gap-2 text-[11px] text-amber-100/90"
-            >
-              <span className="truncate">
-                <span className="font-medium">
-                  {dateShort(r.start_at.slice(0, 10))}
-                </span>{' '}
-                · {r.customer_name ?? 'Sin cliente'}
-                {r.service_name ? (
-                  <span className="text-amber-100/60"> · {r.service_name}</span>
-                ) : null}
-              </span>
-              <span className="shrink-0 tabular-nums text-amber-100/60">
-                {timeShort(r.start_at)}
-              </span>
-            </li>
-          ))}
-          {rest > 0 && (
-            <li className="pt-1 text-[10px] text-amber-100/60">
-              y {rest} más…
-            </li>
-          )}
-        </ul>
-      )}
-
-      <div className="flex flex-wrap gap-2">
-        {overdue > 0 && (
-          <Button
-            size="sm"
-            className="shrink-0"
-            onClick={onOpenBulk}
-          >
-            <ClipboardCheck className="h-4 w-4" /> Resolver vencidas
-          </Button>
-        )}
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={onGoTasks}
-          className="shrink-0"
-        >
-          <ClipboardList className="h-4 w-4" /> Abrir tablero
-        </Button>
-      </div>
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={onGoTasks}
+        className="self-start shrink-0"
+      >
+        <ClipboardList className="h-4 w-4" /> Ver Tareas Pendientes
+      </Button>
     </div>
   );
 }
