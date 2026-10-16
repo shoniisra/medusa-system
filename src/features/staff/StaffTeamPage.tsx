@@ -124,7 +124,10 @@ function useStaffWithUsers() {
           WHERE sm.organization_id = ? AND sm.active = 1
         UNION ALL
         -- Usuarios (admin/manager) sin perfil de colaboradora.
-        SELECT au.id, au.full_name AS first_name, NULL AS last_name, NULL AS color,
+        -- Nombre a mostrar = username capitalizado (ej: "michelle" → "Michelle").
+        SELECT au.id,
+               UPPER(SUBSTR(au.username, 1, 1)) || SUBSTR(au.username, 2) AS first_name,
+               NULL AS last_name, NULL AS color,
                au.phone, au.email, NULL AS employee_code, NULL AS default_pay_cycle, NULL AS notes,
                au.id AS user_id, au.username, au.role,
                CASE WHEN au.password_hash IS NOT NULL AND au.password_hash != '' THEN 1 ELSE 0 END AS has_password

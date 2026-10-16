@@ -3,13 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { Scissors, Eye, EyeOff } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { query, queryOne } from '@/lib/db';
+import { verifyPassword } from '@/lib/auth';
 import { useSession } from '@/store/session';
 import { APP_NAME, ROUTES } from '@/config/constants';
 import { Button, Card, Select, Input } from '@/components/ui';
 import type { AppUser, Branch, Organization } from '@/types';
 
 interface UserForLogin extends AppUser {
-  has_password: 0 | 1;
   default_branch_id: string | null;
 }
 
@@ -51,9 +51,7 @@ export function LoginPage() {
     queryFn: () =>
       query<UserForLogin>(
         `SELECT id, organization_id, username, full_name, email, phone, role,
-                active, last_login_at, created_at, updated_at,
-                CASE WHEN password_hash IS NOT NULL AND password_hash != '' THEN 1 ELSE 0 END AS has_password,
-                default_branch_id
+                active, last_login_at, created_at, updated_at, default_branch_id
            FROM app_user
           WHERE organization_id = ? AND active = 1
           ORDER BY full_name`,
@@ -62,7 +60,6 @@ export function LoginPage() {
   });
 
   const selectedUser = users.data?.find((u) => u.id === userId);
-  const requiresPassword = selectedUser?.has_password === 1;
 
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
@@ -76,8 +73,8 @@ export function LoginPage() {
       setError('Seleccioná un usuario.');
       return;
     }
-    if (requiresPassword && !password) {
-      setError('Ingresá tu contraseña.');
+    if (password.length !== 4) {
+      setError('Ingresá tu token de 4 dígitos.');
       return;
     }
     setError('');
@@ -98,7 +95,22 @@ export function LoginPage() {
         return;
       }
 
-      if (!import.meta.env.DEV) {
+      if (import.meta.env.DEV) {
+        // En dev no hay Worker: validamos el hash directo contra la DB.
+        const row = await queryOne<{ password_hash: string | null }>(
+          `SELECT password_hash FROM app_user WHERE id = ? AND organization_id = ? AND active = 1`,
+          [userId, orgId],
+        );
+        if (!row?.password_hash) {
+          setError('Usuario sin token configurado.');
+          return;
+        }
+        const ok = await verifyPassword(password, row.password_hash);
+        if (!ok) {
+          setError('Token incorrecto.');
+          return;
+        }
+      } else {
         const res = await fetch('/api/login', {
           method: 'POST',
           credentials: 'include',
@@ -135,7 +147,7 @@ export function LoginPage() {
     }
   }
 
-  const canSubmit = !!userId && (!requiresPassword || password.length >= 1);
+  const canSubmit = !!userId && password.length === 4;
 
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
@@ -163,27 +175,30 @@ export function LoginPage() {
             ))}
           </Select>
 
-          {requiresPassword && (
-            <div className="relative">
-              <Input
-                label="Contraseña"
-                type={showPwd ? 'text' : 'password'}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && canSubmit && void handleEnter()}
-                autoComplete="current-password"
-                autoFocus
-              />
-              <button
-                type="button"
-                onClick={() => setShowPwd((v) => !v)}
-                className="absolute right-3 top-9 text-white/40 hover:text-white"
-                tabIndex={-1}
-              >
-                {showPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </button>
-            </div>
-          )}
+          <div className="relative">
+            <Input
+              label="Token (4 dígitos)"
+              type={showPwd ? 'text' : 'password'}
+              value={password}
+              onChange={(e) => {
+                const v = e.target.value.replace(/\D/g, '').slice(0, 4);
+                setPassword(v);
+              }}
+              onKeyDown={(e) => e.key === 'Enter' && canSubmit && void handleEnter()}
+              inputMode="numeric"
+              maxLength={4}
+              autoComplete="one-time-code"
+              disabled={!userId}
+            />
+            <button
+              type="button"
+              onClick={() => setShowPwd((v) => !v)}
+              className="absolute right-3 top-9 text-white/40 hover:text-white"
+              tabIndex={-1}
+            >
+              {showPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
+          </div>
 
           {error && <p className="text-sm text-danger">{error}</p>}
 
