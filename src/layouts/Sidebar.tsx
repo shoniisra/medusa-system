@@ -1,4 +1,5 @@
 import { useLocation, NavLink } from "react-router-dom";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   LayoutDashboard,
@@ -21,6 +22,8 @@ import {
   ArrowLeftRight,
   Landmark,
   Scale,
+  ChevronRight,
+  ChevronDown,
 } from "lucide-react";
 import { ROUTES, APP_NAME } from "@/config/constants";
 import { query } from "@/lib/db";
@@ -87,6 +90,28 @@ export function Sidebar() {
   const { pathname } = useLocation();
   const role = useSession((s) => s.user?.role);
   const can = useHasPermission(role);
+
+  // Secciones colapsadas por defecto; se abren con el chevron o cuando un
+  // hijo está activo (no se pueden cerrar mientras hay un hijo activo).
+  const [openSections, setOpenSections] = useState<Set<string>>(new Set());
+
+  function isSectionOpen(to: string, children: NavItem[] | undefined): boolean {
+    if (!children) return false;
+    if (children.some((c) => pathname === c.to || pathname.startsWith(c.to + '/')))
+      return true;
+    return openSections.has(to);
+  }
+
+  function toggleSection(to: string, e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setOpenSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(to)) next.delete(to);
+      else next.add(to);
+      return next;
+    });
+  }
 
   type Section = { title?: string; items: NavItemWithChildren[] };
 
@@ -232,34 +257,51 @@ export function Sidebar() {
               </p>
             )}
             {section.items.map(({ to, label, icon: Icon, end, children }) => {
-              // El padre se resalta si la ruta actual es la suya o la de un hijo.
               const parentActive = children
-                ? children.some((c) => pathname.startsWith(c.to))
+                ? children.some((c) => pathname === c.to || pathname.startsWith(c.to + '/'))
                 : false;
+              const open = isSectionOpen(to, children);
               return (
                 <div key={to}>
-                  <NavLink
-                    to={to}
-                    end={end}
-                    className={({ isActive }) =>
-                      cn(
-                        "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors",
-                        isActive || parentActive
-                          ? "bg-gold/10 text-gold-200 shadow-gold-glow"
-                          : "text-white/60 hover:bg-white/5 hover:text-white",
-                      )
-                    }
-                  >
-                    <Icon className="h-5 w-5" />
-                    <span className="flex-1">{label}</span>
-                    {to === ROUTES.reminders && tomorrow > 0 && (
-                      <span className="rounded-full bg-gold/20 px-2 py-0.5 text-xs font-medium text-gold-200">
-                        {tomorrow}
-                      </span>
+                  <div className="relative">
+                    <NavLink
+                      to={to}
+                      end={end}
+                      className={({ isActive }) =>
+                        cn(
+                          "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors",
+                          children ? "pr-9" : "",
+                          isActive || parentActive
+                            ? "bg-gold/10 text-gold-200 shadow-gold-glow"
+                            : "text-white/60 hover:bg-white/5 hover:text-white",
+                        )
+                      }
+                    >
+                      <Icon className="h-5 w-5" />
+                      <span className="flex-1">{label}</span>
+                      {to === ROUTES.reminders && tomorrow > 0 && (
+                        <span className="rounded-full bg-gold/20 px-2 py-0.5 text-xs font-medium text-gold-200">
+                          {tomorrow}
+                        </span>
+                      )}
+                    </NavLink>
+                    {children && (
+                      <button
+                        type="button"
+                        onClick={(e) => toggleSection(to, e)}
+                        className="absolute right-1 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-white/40 hover:bg-white/10 hover:text-white"
+                        aria-label={open ? "Colapsar" : "Expandir"}
+                      >
+                        {open ? (
+                          <ChevronDown className="h-3.5 w-3.5" />
+                        ) : (
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        )}
+                      </button>
                     )}
-                  </NavLink>
+                  </div>
 
-                  {children && (
+                  {open && children && (
                     <div className="ml-[1.15rem] space-y-0.5 border-l border-white/10 pl-4">
                       {children.map((c) => (
                         <NavLink

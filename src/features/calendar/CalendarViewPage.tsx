@@ -4,7 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ChevronLeft,
   ChevronRight,
-  ChevronDown,
+  MoreHorizontal,
   Download,
   Check,
   PlugZap,
@@ -258,19 +258,12 @@ export function CalendarViewPage() {
         </div>
       </div>
 
-      {/* Encabezado compacto: mes + navegación. Todo lo secundario va al menú. */}
+      {/* Encabezado compacto: mes + pills de vista + navegación. */}
       <div className="flex shrink-0 items-center gap-1 px-3 py-2 lg:px-4">
-        <button
-          onClick={() => setMenuOpen(true)}
-          className="flex min-w-0 items-center gap-1 rounded-xl px-2 py-1.5 text-left text-lg font-semibold text-white active:bg-white/10 lg:text-xl"
-        >
-          <span className="truncate first-letter:uppercase">{title}</span>
-          <ChevronDown className="h-4 w-4 shrink-0 text-white/50" />
-        </button>
+        <span className="min-w-0 truncate px-2 py-1.5 text-lg font-semibold text-white first-letter:uppercase lg:text-xl">
+          {title}
+        </span>
 
-        {/* Estado de la consulta: visible al lado del título, no tapando el
-            calendario. Usamos pastilla porque "appears vacío" fue el síntoma
-            original — queremos que se vea de lejos que algo se está cargando. */}
         {source === 'medusa' && (appts.isLoading || appts.isFetching) && (
           <span
             className="ml-1 flex items-center gap-1.5 rounded-full border border-gold/40 bg-gold/15 px-2.5 py-1 text-xs font-medium text-gold-100"
@@ -278,11 +271,41 @@ export function CalendarViewPage() {
             aria-live="polite"
           >
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            {appts.isLoading ? 'Cargando citas…' : 'Actualizando…'}
+            {appts.isLoading ? 'Cargando…' : ''}
           </span>
         )}
 
-        <div className="ml-auto flex shrink-0 items-center gap-0.5">
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          {/* Pills de vista */}
+          <div className="flex items-center rounded-xl border border-white/10 bg-white/[0.03] p-0.5">
+            {(['three', 'week', 'month'] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => { setView(v); setSource('medusa'); }}
+                className={cn(
+                  'rounded-lg px-2.5 py-1 text-xs font-medium transition-colors',
+                  view === v && source === 'medusa'
+                    ? 'bg-gold/25 text-gold-200'
+                    : 'text-white/50 hover:text-white',
+                )}
+              >
+                {VIEW_LABEL[v]}
+              </button>
+            ))}
+            <button
+              onClick={() => setSource((s) => (s === 'google' ? 'medusa' : 'google'))}
+              className={cn(
+                'rounded-lg px-2.5 py-1 text-xs font-medium transition-colors',
+                source === 'google'
+                  ? 'bg-gold/25 text-gold-200'
+                  : 'text-white/50 hover:text-white',
+              )}
+              title="Ver Google Calendar"
+            >
+              G
+            </button>
+          </div>
+
           <button
             onClick={() => step(-1)}
             aria-label="Anterior"
@@ -302,6 +325,13 @@ export function CalendarViewPage() {
             className="rounded-xl border border-white/10 px-3 py-1.5 text-sm font-medium text-white/70 active:bg-white/10"
           >
             Hoy
+          </button>
+          <button
+            onClick={() => setMenuOpen(true)}
+            aria-label="Opciones de Google Calendar"
+            className="tap flex items-center justify-center rounded-xl p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+          >
+            <MoreHorizontal className="h-5 w-5" />
           </button>
         </div>
       </div>
@@ -412,7 +442,9 @@ export function CalendarViewPage() {
                 onClick={() => {
                   const d = pendingSlot;
                   setPendingSlot(null);
-                  navigate(`${ROUTES.appointmentNew}?date=${ymd(d)}`);
+                  const hh = String(d.getHours()).padStart(2, '0');
+                  const mm = String(d.getMinutes()).padStart(2, '0');
+                  navigate(`${ROUTES.appointmentNew}?date=${ymd(d)}&time=${hh}:${mm}`);
                 }}
                 className="rounded-xl bg-gradient-to-b from-gold-300 to-gold-500 px-4 py-2 text-sm font-semibold text-ink-950 active:scale-95"
               >
@@ -426,37 +458,9 @@ export function CalendarViewPage() {
       <Modal
         open={menuOpen}
         onClose={() => setMenuOpen(false)}
-        title="Calendario"
+        title="Google Calendar"
         className="sm:max-w-sm"
       >
-        <p className="mb-2 text-xs uppercase tracking-wide text-white/40">
-          Vista
-        </p>
-        <div className="space-y-1.5">
-          {(['three', 'week', 'month'] as const).map((v) => (
-            <button
-              key={v}
-              onClick={() => {
-                setView(v);
-                setSource('medusa');
-                setMenuOpen(false);
-              }}
-              className={cn(
-                'flex w-full items-center justify-between rounded-xl border px-3.5 py-3 text-sm',
-                view === v && source === 'medusa'
-                  ? 'border-gold/50 bg-gold/15 text-gold-100'
-                  : 'border-white/10 bg-white/[0.03] text-white/75',
-              )}
-            >
-              {VIEW_LABEL[v]}
-              {view === v && source === 'medusa' && <Check className="h-4 w-4" />}
-            </button>
-          ))}
-        </div>
-
-        <p className="mb-2 mt-5 text-xs uppercase tracking-wide text-white/40">
-          Google Calendar
-        </p>
         <button
           onClick={() => {
             setSource((s) => (s === 'google' ? 'medusa' : 'google'));

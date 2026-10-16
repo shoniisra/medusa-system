@@ -331,6 +331,12 @@ export const RESOURCES: ResourceConfig[] = [
       { name: 'bank_name', label: 'Banco', type: 'text' },
       { name: 'account_number', label: 'Nº de cuenta', type: 'text' },
       { name: 'account_type', label: 'Tipo', type: 'text', placeholder: 'ahorros, corriente…' },
+      {
+        name: 'is_internal',
+        label: 'Cuenta interna (solo admins)',
+        type: 'checkbox',
+        placeholder: 'No visible como método de pago para clientes ni para roles sin finanzas',
+      },
     ],
   },
   {

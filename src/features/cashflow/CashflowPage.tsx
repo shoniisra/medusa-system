@@ -542,9 +542,9 @@ function BalanceChartCard({ branchId }: { branchId: string }) {
 
 /* ─────────────────── hook de cuentas (caja + bancos) ─────────────────── */
 
-function useAccounts(ctx: Ctx) {
+function useAccounts(ctx: Ctx, showInternal = true) {
   return useQuery({
-    queryKey: ['fin-accounts', ctx.branchId, ctx.orgId, ctx.sessionId],
+    queryKey: ['fin-accounts', ctx.branchId, ctx.orgId, ctx.sessionId, showInternal],
     enabled: !!ctx.branchId && !!ctx.orgId,
     queryFn: async () => {
       // Con la caja abierta, el saldo es de la sesión en curso; cerrada, es el
@@ -582,8 +582,9 @@ function useAccounts(ctx: Ctx) {
                 AS balance
            FROM bank_account ba
           WHERE ba.organization_id = ? AND ba.active = 1
+            AND (? OR COALESCE(ba.is_internal, 0) = 0)
           ORDER BY ba.name`,
-        [ctx.orgId],
+        [ctx.orgId, showInternal ? 1 : 0],
       );
       return { cash, cashOpen: !!ctx.sessionId, banks };
     },
@@ -1021,7 +1022,7 @@ function AccountsTab({
   const qc = useQueryClient();
   const setCashSession = useSession((s) => s.setCashSession);
   const invalidate = useInvalidateFinance();
-  const accounts = useAccounts(ctx);
+  const accounts = useAccounts(ctx, isAdmin);
   const [adjust, setAdjust] = useState<AdjustTarget | null>(null);
 
   if (loading) return null;

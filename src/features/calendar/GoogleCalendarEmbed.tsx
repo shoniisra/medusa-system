@@ -14,6 +14,7 @@ export function GoogleCalendarEmbed({
   className = 'h-[600px]',
   mode = 'WEEK',
 }: {
+  /** Clase aplicada al Card contenedor (p.ej. "h-full" o "h-[600px]"). */
   className?: string;
   /** Vista del calendario embebido: día, semana, mes o agenda. */
   mode?: 'DAY' | 'WEEK' | 'MONTH' | 'AGENDA';
@@ -49,11 +50,11 @@ export function GoogleCalendarEmbed({
   )}&ctz=${encodeURIComponent(DEFAULT_TIMEZONE)}&mode=${mode}`;
 
   return (
-    <Card className="overflow-hidden p-0">
+    <Card className={`overflow-hidden p-0 ${className}`}>
       <iframe
         title="Google Calendar"
         src={src}
-        className={`w-full rounded-2xl border-0 ${className}`}
+        className="h-full w-full rounded-2xl border-0"
         loading="lazy"
       />
     </Card>

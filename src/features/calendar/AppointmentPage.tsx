@@ -318,7 +318,7 @@ function NewAppointment() {
     params.get('date') || initialStart.date,
   );
   const [time, setTime] = useState(
-    params.get('date') ? '10:00' : initialStart.time,
+    params.get('time') || (params.get('date') ? '10:00' : initialStart.time),
   );
   /**
    * ¿La hora la eligió el usuario? Mientras no la toque, el asistente puede
