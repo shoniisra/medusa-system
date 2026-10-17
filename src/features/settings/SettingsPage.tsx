@@ -4,13 +4,20 @@ import { RESOURCES } from './resources';
 import { ResourceManager } from './ResourceManager';
 import { DiagnosticsPanel } from './DiagnosticsPanel';
 import { cn } from '@/lib/cn';
+import { useSession } from '@/store/session';
+import { hasPermission } from '@/config/permissions';
 
 const DIAGNOSTICS_KEY = '__diagnostics';
 
 export function SettingsPage() {
   const [active, setActive] = useState<string>(RESOURCES[0].key);
   const resource = RESOURCES.find((r) => r.key === active);
-  const isDiagnostics = active === DIAGNOSTICS_KEY;
+  // El panel de errores del Worker queda detrás de `view_diagnostics` (owner/admin).
+  // Un gerente ya puede entrar a Configuración por `manage_settings`, pero el tab
+  // de Diagnóstico sigue escondido.
+  const role = useSession((s) => s.user?.role);
+  const canSeeDiagnostics = hasPermission(role, 'view_diagnostics');
+  const isDiagnostics = canSeeDiagnostics && active === DIAGNOSTICS_KEY;
 
   const tabClass = (key: string) =>
     cn(
@@ -39,10 +46,12 @@ export function SettingsPage() {
             </button>
           );
         })}
-        <button onClick={() => setActive(DIAGNOSTICS_KEY)} className={tabClass(DIAGNOSTICS_KEY)}>
-          <Stethoscope className="h-4 w-4" />
-          Diagnóstico
-        </button>
+        {canSeeDiagnostics && (
+          <button onClick={() => setActive(DIAGNOSTICS_KEY)} className={tabClass(DIAGNOSTICS_KEY)}>
+            <Stethoscope className="h-4 w-4" />
+            Diagnóstico
+          </button>
+        )}
       </div>
 
       {isDiagnostics ? (

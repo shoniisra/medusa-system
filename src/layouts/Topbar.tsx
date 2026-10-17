@@ -8,6 +8,7 @@ import { CashRegisterModal } from '@/features/cashflow/CashRegisterModal';
 import { useBranchCashSession } from '@/features/cashflow/cashSessionActions';
 import { Modal, Button } from '@/components/ui';
 import { cn } from '@/lib/cn';
+import { roleLabel } from '@/config/permissions';
 import type { Branch } from '@/types';
 
 export function Topbar() {
@@ -91,7 +92,7 @@ export function Topbar() {
           <p className="text-sm font-medium text-white">
             {user ? fullName(user.full_name) : '—'}
           </p>
-          <p className="text-xs capitalize text-white/40">{user?.role}</p>
+          <p className="text-xs text-white/40">{roleLabel(user?.role)}</p>
         </div>
 
         <button

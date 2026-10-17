@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ChangeEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Plus,
@@ -12,7 +12,8 @@ import {
   MessageCircle,
 } from 'lucide-react';
 import { query, execute, batch } from '@/lib/db';
-import { useOrgId } from '@/store/session';
+import { useOrgId, useSession } from '@/store/session';
+import { hasPermission, ROLE_LABELS, roleLabel } from '@/config/permissions';
 import { SERVICE_CATEGORIES } from '@/config/constants';
 import {
   Button,
@@ -22,6 +23,7 @@ import {
   EmptyState,
   Modal,
   useToast,
+  DateInput,
 } from '@/components/ui';
 import {
   GOOGLE_EVENT_COLORS,
@@ -30,7 +32,8 @@ import {
 } from '@/config/colors';
 import { genId } from '@/lib/format';
 import { cn } from '@/lib/cn';
-import type { Service } from '@/types';
+import { birthdayDayMonth } from '@/lib/date';
+import type { Service, UserRole } from '@/types';
 
 /* ─── Constantes ─────────────────────────────────────────────────────────── */
 
@@ -40,25 +43,14 @@ const PAY_CYCLE_OPTIONS = [
   { value: 'monthly', label: 'Mensual' },
 ];
 
-const ROLE_LABELS: Record<string, string> = {
-  owner: 'Propietario',
-  admin: 'Admin',
-  manager: 'Gerente',
-  cashier: 'Cajero/a',
-  reception: 'Recepción',
-  staff: 'Colaboradora',
-  viewer: 'Solo vista',
-};
-
 const ROLE_TONES: Record<string, 'gold' | 'success' | 'info' | 'muted'> = {
-  owner: 'gold',
   admin: 'gold',
   manager: 'success',
   cashier: 'info',
-  reception: 'info',
   staff: 'muted',
-  viewer: 'muted',
 };
+
+const ASSIGNABLE_ROLES: UserRole[] = ['admin', 'manager', 'cashier', 'staff'];
 
 /* ─── Tipos ──────────────────────────────────────────────────────────────── */
 
@@ -69,6 +61,7 @@ interface StaffWithUser {
   color: string | null;
   phone: string | null;
   email: string | null;
+  birth_date: string | null;
   employee_code: string | null;
   default_pay_cycle: string | null;
   notes: string | null;
@@ -84,6 +77,7 @@ interface StaffProfileDraft {
   color: string;
   phone: string;
   email: string;
+  birth_date: string;
   employee_code: string;
   default_pay_cycle: string;
   notes: string;
@@ -116,7 +110,8 @@ function useStaffWithUsers() {
       query<StaffWithUser>(
         // Colaboradoras con perfil de staff.
         `SELECT sm.id, sm.first_name, sm.last_name, sm.color,
-                sm.phone, sm.email, sm.employee_code, sm.default_pay_cycle, sm.notes,
+                sm.phone, sm.email, sm.birth_date,
+                sm.employee_code, sm.default_pay_cycle, sm.notes,
                 au.id AS user_id, au.username, au.role,
                 CASE WHEN au.password_hash IS NOT NULL AND au.password_hash != '' THEN 1 ELSE 0 END AS has_password
            FROM staff_member sm
@@ -128,7 +123,8 @@ function useStaffWithUsers() {
         SELECT au.id,
                UPPER(SUBSTR(au.username, 1, 1)) || SUBSTR(au.username, 2) AS first_name,
                NULL AS last_name, NULL AS color,
-               au.phone, au.email, NULL AS employee_code, NULL AS default_pay_cycle, NULL AS notes,
+               au.phone, au.email, au.birth_date,
+               NULL AS employee_code, NULL AS default_pay_cycle, NULL AS notes,
                au.id AS user_id, au.username, au.role,
                CASE WHEN au.password_hash IS NOT NULL AND au.password_hash != '' THEN 1 ELSE 0 END AS has_password
           FROM app_user au
@@ -200,9 +196,9 @@ function useCreateStaff() {
       const now = new Date().toISOString();
       await execute(
         `INSERT INTO staff_member
-           (id, organization_id, first_name, last_name, color, phone, email,
+           (id, organization_id, first_name, last_name, color, phone, email, birth_date,
             employee_code, default_pay_cycle, notes, active, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
         [
           genId(),
           orgId,
@@ -211,6 +207,7 @@ function useCreateStaff() {
           draft.color || DEFAULT_CALENDAR_COLOR.hex,
           draft.phone.trim() || null,
           draft.email.trim() || null,
+          draft.birth_date || null,
           draft.employee_code.trim() || null,
           draft.default_pay_cycle || 'monthly',
           draft.notes.trim() || null,
@@ -234,7 +231,8 @@ function useUpdateStaff() {
       await execute(
         `UPDATE staff_member
             SET first_name = ?, last_name = ?, color = ?, phone = ?, email = ?,
-                employee_code = ?, default_pay_cycle = ?, notes = ?, updated_at = ?
+                birth_date = ?, employee_code = ?, default_pay_cycle = ?, notes = ?,
+                updated_at = ?
           WHERE id = ?`,
         [
           draft.first_name.trim(),
@@ -242,6 +240,7 @@ function useUpdateStaff() {
           draft.color || DEFAULT_CALENDAR_COLOR.hex,
           draft.phone.trim() || null,
           draft.email.trim() || null,
+          draft.birth_date || null,
           draft.employee_code.trim() || null,
           draft.default_pay_cycle || 'monthly',
           draft.notes.trim() || null,
@@ -355,6 +354,60 @@ function useSetPassword() {
   });
 }
 
+/**
+ * Guarda los campos de perfil que viven en `app_user` para usuarios sin
+ * `staff_member` (p. ej. un admin que no es colaboradora). Lo que es exclusivo
+ * de staff_member (color, employee_code, notas, ciclo de pago) se descarta.
+ */
+function useUpdateAppUserProfile() {
+  const orgId = useOrgId();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      userId,
+      draft,
+    }: {
+      userId: string;
+      draft: StaffProfileDraft;
+    }) => {
+      const now = new Date().toISOString();
+      await execute(
+        `UPDATE app_user
+            SET phone = ?, email = ?, birth_date = ?, updated_at = ?
+          WHERE id = ?`,
+        [
+          draft.phone.trim() || null,
+          draft.email.trim() || null,
+          draft.birth_date || null,
+          now,
+          userId,
+        ],
+      );
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['staff-with-users', orgId] });
+    },
+  });
+}
+
+function useUpdateUserRole() {
+  const orgId = useOrgId();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ userId, role }: { userId: string; role: UserRole }) => {
+      const now = new Date().toISOString();
+      await execute(
+        `UPDATE app_user SET role = ?, updated_at = ? WHERE id = ?`,
+        [role, now, userId],
+      );
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['staff-with-users', orgId] });
+      void qc.invalidateQueries({ queryKey: ['login-users', orgId] });
+    },
+  });
+}
+
 function useRemoveExclusion() {
   const orgId = useOrgId();
   const qc = useQueryClient();
@@ -455,6 +508,7 @@ function emptyDraft(staff?: StaffWithUser): StaffProfileDraft {
     color: staff?.color ?? DEFAULT_CALENDAR_COLOR.hex,
     phone: staff?.phone ?? '',
     email: staff?.email ?? '',
+    birth_date: staff?.birth_date ?? '',
     employee_code: staff?.employee_code ?? '',
     default_pay_cycle: staff?.default_pay_cycle ?? 'monthly',
     notes: staff?.notes ?? '',
@@ -471,8 +525,15 @@ function StaffProfileForm({
   const [draft, setDraft] = useState<StaffProfileDraft>(() => emptyDraft(staff));
   const { mutateAsync: create, isPending: creating } = useCreateStaff();
   const { mutateAsync: update, isPending: updating } = useUpdateStaff();
+  const { mutateAsync: updateUser, isPending: updatingUser } = useUpdateAppUserProfile();
   const { show } = useToast();
-  const isPending = creating || updating;
+  const isPending = creating || updating || updatingUser;
+
+  // En la rama UNION ALL de la query, el "staff" es un app_user sin perfil de
+  // colaboradora: `id` es el app_user.id, no un staff_member.id. Un UPDATE a
+  // staff_member con ese id afectaría 0 filas. Detectamos ese caso y guardamos
+  // los campos editables (teléfono, email, cumpleaños) directo en app_user.
+  const isUserOnly = !!staff && staff.user_id !== null && staff.id === staff.user_id;
 
   function set<K extends keyof StaffProfileDraft>(k: K, v: StaffProfileDraft[K]) {
     setDraft((d) => ({ ...d, [k]: v }));
@@ -485,7 +546,11 @@ function StaffProfileForm({
     }
     try {
       if (staff) {
-        await update({ id: staff.id, draft });
+        if (isUserOnly && staff.user_id) {
+          await updateUser({ userId: staff.user_id, draft });
+        } else {
+          await update({ id: staff.id, draft });
+        }
         show({ title: 'Perfil actualizado', tone: 'success' });
       } else {
         await create(draft);
@@ -530,23 +595,30 @@ function StaffProfileForm({
       </div>
 
       <div className="grid grid-cols-2 gap-3">
+        <DateInput
+          label="Cumpleaños"
+          mode="birthday"
+          value={draft.birth_date}
+          onChange={(v) => set('birth_date', v ?? '')}
+        />
         <Input
           label="Código empleado"
           value={draft.employee_code}
           onChange={(e) => set('employee_code', e.target.value)}
         />
-        <Select
-          label="Ciclo de pago"
-          value={draft.default_pay_cycle}
-          onChange={(e) => set('default_pay_cycle', e.target.value)}
-        >
-          {PAY_CYCLE_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </Select>
       </div>
+
+      <Select
+        label="Ciclo de pago"
+        value={draft.default_pay_cycle}
+        onChange={(e) => set('default_pay_cycle', e.target.value)}
+      >
+        {PAY_CYCLE_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </Select>
 
       <Input
         label="Notas"
@@ -761,6 +833,47 @@ function ExclusionsList({
   );
 }
 
+/* ─── RoleSelector ────────────────────────────────────────────────────────── */
+
+/**
+ * Edita el rol del `app_user` vinculado a la colaboradora. Guarda al perder
+ * foco (onChange) para evitar un botón extra: el rol es un dato chico y la
+ * mutación invalida la query, así que el usuario ve el cambio al instante.
+ */
+function RoleSelector({
+  userId,
+  currentRole,
+}: {
+  userId: string;
+  currentRole: string | null;
+}) {
+  const { mutate, isPending } = useUpdateUserRole();
+  const { show } = useToast();
+  const value = (currentRole ?? 'staff') as UserRole;
+
+  function handleChange(e: ChangeEvent<HTMLSelectElement>) {
+    const next = e.target.value as UserRole;
+    if (next === value) return;
+    mutate(
+      { userId, role: next },
+      {
+        onSuccess: () => show({ title: 'Rol actualizado', tone: 'success' }),
+        onError: () => show({ title: 'Error al cambiar rol', tone: 'danger' }),
+      },
+    );
+  }
+
+  return (
+    <Select label="Rol" value={value} onChange={handleChange} disabled={isPending}>
+      {ASSIGNABLE_ROLES.map((r) => (
+        <option key={r} value={r}>
+          {ROLE_LABELS[r] ?? r}
+        </option>
+      ))}
+    </Select>
+  );
+}
+
 /* ─── EditModal ───────────────────────────────────────────────────────────── */
 
 function EditModal({
@@ -813,7 +926,11 @@ function EditModal({
                 </Button>
               </div>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-3">
+                <RoleSelector
+                  userId={staff.user_id}
+                  currentRole={staff.role}
+                />
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <p className="text-sm font-medium text-white">@{staff.username}</p>
@@ -933,6 +1050,12 @@ export function StaffTeamPage() {
   const [editStaff, setEditStaff] = useState<StaffWithUser | null | 'new'>(null);
   const [specialtiesStaff, setSpecialtiesStaff] = useState<StaffWithUser | null>(null);
 
+  // Crear, editar perfil, rol y especialidades son acciones de administración:
+  // solo quienes tienen `manage_team_roles` (owner/admin). Los demás con
+  // `manage_staff` (p. ej. gerente) ven el equipo pero no lo modifican.
+  const role = useSession((s) => s.user?.role);
+  const canManageRoles = hasPermission(role, 'manage_team_roles');
+
   const { data: staffList = [], isLoading } = useStaffWithUsers();
   const { data: allCategories = [] } = useStaffCategories();
   const { data: allExclusions = [] } = useStaffExclusions();
@@ -946,9 +1069,11 @@ export function StaffTeamPage() {
           <h1 className="text-2xl font-semibold text-white">Miembros del equipo</h1>
           <p className="text-sm text-white/40">Colaboradoras, especialidades y accesos.</p>
         </div>
-        <Button onClick={() => setEditStaff('new')}>
-          <Plus className="h-4 w-4" /> Nueva colaboradora
-        </Button>
+        {canManageRoles && (
+          <Button onClick={() => setEditStaff('new')}>
+            <Plus className="h-4 w-4" /> Nueva colaboradora
+          </Button>
+        )}
       </div>
 
       {/* Tabla */}
@@ -970,13 +1095,19 @@ export function StaffTeamPage() {
             <thead>
               <tr className="border-b border-white/10 text-xs uppercase tracking-wider text-white/40">
                 <th className="px-4 py-2.5 text-left font-medium">Nombre</th>
+                <th className="px-4 py-2.5 text-left font-medium">Rol</th>
                 <th className="hidden px-4 py-2.5 text-left font-medium md:table-cell">
                   Teléfono
+                </th>
+                <th className="hidden px-4 py-2.5 text-left font-medium lg:table-cell">
+                  Cumpleaños
                 </th>
                 <th className="hidden px-4 py-2.5 text-left font-medium sm:table-cell">
                   Cuenta
                 </th>
-                <th className="px-4 py-2.5 text-right font-medium">Acciones</th>
+                {canManageRoles && (
+                  <th className="px-4 py-2.5 text-right font-medium">Acciones</th>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-white/[0.06]">
@@ -993,7 +1124,7 @@ export function StaffTeamPage() {
                     key={staff.id}
                     className="transition-colors hover:bg-white/[0.02]"
                   >
-                    {/* Nombre + rol */}
+                    {/* Nombre */}
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2.5">
                         <span
@@ -1001,14 +1132,7 @@ export function StaffTeamPage() {
                           style={{ background: staff.color ?? '#64748b' }}
                         />
                         <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium text-white">{displayName}</span>
-                            {staff.role && (
-                              <Badge tone={ROLE_TONES[staff.role] ?? 'muted'}>
-                                {ROLE_LABELS[staff.role] ?? staff.role}
-                              </Badge>
-                            )}
-                          </div>
+                          <span className="font-medium text-white">{displayName}</span>
                           {/* Cuenta en mobile */}
                           <div className="mt-0.5 sm:hidden">
                             {staff.user_id ? (
@@ -1026,6 +1150,17 @@ export function StaffTeamPage() {
                       </div>
                     </td>
 
+                    {/* Rol */}
+                    <td className="px-4 py-3">
+                      {staff.role ? (
+                        <Badge tone={ROLE_TONES[staff.role] ?? 'muted'}>
+                          {roleLabel(staff.role as UserRole)}
+                        </Badge>
+                      ) : (
+                        <span className="text-xs text-white/25">—</span>
+                      )}
+                    </td>
+
                     {/* Teléfono (md+) */}
                     <td className="hidden px-4 py-3 md:table-cell">
                       {staff.phone ? (
@@ -1039,6 +1174,17 @@ export function StaffTeamPage() {
                           <MessageCircle className="h-3.5 w-3.5 shrink-0" />
                           {staff.phone}
                         </a>
+                      ) : (
+                        <span className="text-xs text-white/25">—</span>
+                      )}
+                    </td>
+
+                    {/* Cumpleaños (lg+) */}
+                    <td className="hidden px-4 py-3 lg:table-cell">
+                      {staff.birth_date ? (
+                        <span className="text-xs text-white/60">
+                          {birthdayDayMonth(staff.birth_date)}
+                        </span>
                       ) : (
                         <span className="text-xs text-white/25">—</span>
                       )}
@@ -1060,37 +1206,39 @@ export function StaffTeamPage() {
                       )}
                     </td>
 
-                    {/* Acciones */}
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-2">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => setSpecialtiesStaff(staff)}
-                          title={
-                            staffCategories.length > 0
-                              ? `${staffCategories.length} categoría(s)`
-                              : 'Sin especialidades'
-                          }
-                        >
-                          <Star className="h-3.5 w-3.5" />
-                          <span className="hidden sm:inline">Especialidades</span>
-                          {staffCategories.length > 0 && (
-                            <span className="ml-0.5 text-xs text-white/50">
-                              ({staffCategories.length})
-                            </span>
-                          )}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => setEditStaff(staff)}
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                          <span className="hidden sm:inline">Editar</span>
-                        </Button>
-                      </div>
-                    </td>
+                    {/* Acciones (solo admin) */}
+                    {canManageRoles && (
+                      <td className="px-4 py-3">
+                        <div className="flex items-center justify-end gap-2">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setSpecialtiesStaff(staff)}
+                            title={
+                              staffCategories.length > 0
+                                ? `${staffCategories.length} categoría(s)`
+                                : 'Sin especialidades'
+                            }
+                          >
+                            <Star className="h-3.5 w-3.5" />
+                            <span className="hidden sm:inline">Especialidades</span>
+                            {staffCategories.length > 0 && (
+                              <span className="ml-0.5 text-xs text-white/50">
+                                ({staffCategories.length})
+                              </span>
+                            )}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setEditStaff(staff)}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                            <span className="hidden sm:inline">Editar</span>
+                          </Button>
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 );
               })}

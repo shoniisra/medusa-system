@@ -15,9 +15,7 @@ import {
   Settings,
   BellRing,
   ShoppingCart,
-  History,
   Receipt,
-  Star,
   BarChart3,
   ArrowLeftRight,
   Landmark,
@@ -91,9 +89,12 @@ export function Sidebar() {
   const role = useSession((s) => s.user?.role);
   const can = useHasPermission(role);
 
-  // Secciones colapsadas por defecto; se abren con el chevron o cuando un
-  // hijo está activo (no se pueden cerrar mientras hay un hijo activo).
-  const [openSections, setOpenSections] = useState<Set<string>>(new Set());
+  // Agenda arranca expandida porque es la sección más usada; el resto queda
+  // colapsado y se abre con el chevron o cuando un hijo está activo (no se
+  // pueden cerrar mientras hay un hijo activo).
+  const [openSections, setOpenSections] = useState<Set<string>>(
+    () => new Set([ROUTES.tasks]),
+  );
 
   function isSectionOpen(to: string, children: NavItem[] | undefined): boolean {
     if (!children) return false;
@@ -124,9 +125,6 @@ export function Sidebar() {
           icon: LayoutDashboard,
           end: true,
         },
-        ...(can("view_own_summary")
-          ? [{ to: ROUTES.myServices, label: "Mis servicios", icon: Star }]
-          : []),
         ...(can("use_pos")
           ? [
               {
@@ -142,23 +140,16 @@ export function Sidebar() {
       title: "Citas Agendadas",
       items: [
         {
-          to: ROUTES.calendar,
+          to: ROUTES.tasks,
           label: "Agenda",
           icon: CalendarDays,
           children: [
-            {
-              to: ROUTES.calendar,
-              label: "Lista",
-              icon: CalendarDays,
-              end: true,
-            },
+            { to: ROUTES.tasks, label: "Tablero", icon: ClipboardList, end: true },
             {
               to: ROUTES.calendarView,
               label: "Calendario",
               icon: CalendarRange,
             },
-            { to: ROUTES.tasks, label: "Tablero", icon: ClipboardList },
-            { to: ROUTES.history, label: "Historial", icon: History },
           ],
         },
         { to: ROUTES.reminders, label: "Recordatorios", icon: BellRing },
@@ -271,9 +262,15 @@ export function Sidebar() {
                         cn(
                           "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors",
                           children ? "pr-9" : "",
-                          isActive || parentActive
-                            ? "bg-gold/10 text-gold-200 shadow-gold-glow"
-                            : "text-white/60 hover:bg-white/5 hover:text-white",
+                          children
+                            ? // El padre que agrupa submenús nunca toma la "chip" dorada
+                              // llena, para no competir visualmente con el hijo activo.
+                              isActive || parentActive
+                              ? "text-gold-200/85 hover:bg-white/5"
+                              : "text-white/60 hover:bg-white/5 hover:text-white"
+                            : isActive
+                              ? "bg-gold/10 text-gold-200 shadow-gold-glow"
+                              : "text-white/60 hover:bg-white/5 hover:text-white",
                         )
                       }
                     >

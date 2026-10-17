@@ -269,7 +269,7 @@ async function handleSetPassword(request: Request, env: Env): Promise<Response> 
     const token = parseCookieToken(request);
     if (!token) return Response.json({ error: 'No autorizado' }, { status: 401 });
     const payload = await verifyToken(token, env.SESSION_SECRET);
-    if (!payload || !['owner', 'admin', 'manager'].includes(payload.role)) {
+    if (!payload || !['admin', 'manager'].includes(payload.role)) {
       return Response.json({ error: 'Sin permisos' }, { status: 403 });
     }
     orgId = payload.orgId;

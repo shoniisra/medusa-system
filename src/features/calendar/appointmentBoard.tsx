@@ -406,6 +406,8 @@ export function KanbanView({
   onSelect,
   onMove,
   columns = STATUS_ORDER,
+  extras,
+  extraCounts,
 }: {
   rows: AppointmentRow[];
   /** Click en una tarjeta: abre el menú de acciones de la cita. */
@@ -414,6 +416,10 @@ export function KanbanView({
   onMove?: (a: AppointmentRow, toStatus: AppointmentStatus) => void;
   /** Columnas visibles (por defecto todos los estados, en orden). */
   columns?: AppointmentStatus[];
+  /** Nodos adicionales por columna (p. ej. ventas sin cita en 'attended'). */
+  extras?: Partial<Record<AppointmentStatus, React.ReactNode>>;
+  /** Cantidad de extras por columna para el contador del header. */
+  extraCounts?: Partial<Record<AppointmentStatus, number>>;
 }) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overStatus, setOverStatus] = useState<AppointmentStatus | null>(null);
@@ -444,6 +450,8 @@ export function KanbanView({
       {columns.map((status) => {
         const meta = APPOINTMENT_STATUS[status];
         const items = byStatus[status];
+        const colExtras = extras?.[status];
+        const colExtraCount = extraCounts?.[status] ?? 0;
         // ¿Se puede soltar acá la tarjeta que se arrastra?
         const droppable =
           canDrag &&
@@ -477,11 +485,11 @@ export function KanbanView({
             <div className="mb-2 flex items-center justify-between gap-2 rounded-lg bg-white/[0.04] px-2 py-1.5">
               <Badge tone={meta.tone}>{meta.label}</Badge>
               <span className="rounded-md bg-white/10 px-1.5 py-0.5 text-[11px] font-semibold text-white/60">
-                {items.length}
+                {items.length + colExtraCount}
               </span>
             </div>
             <div className="space-y-2">
-              {items.length === 0 ? (
+              {items.length === 0 && !colExtras ? (
                 <div className="rounded-xl border border-dashed border-white/10 py-6 text-center text-xs text-white/30">
                   {isOver ? 'Soltar acá' : 'Vacío'}
                 </div>
@@ -549,6 +557,7 @@ export function KanbanView({
                   );
                 })
               )}
+              {colExtras}
             </div>
           </div>
         );

@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ExternalLink, HandHelping } from 'lucide-react';
+import { HandHelping, Maximize2 } from 'lucide-react';
 import { execute, query, queryOne } from '@/lib/db';
 import { dateShort, genId, money, timeShort } from '@/lib/format';
 import { invalidateFinance } from '@/lib/queryClient';
@@ -227,13 +227,39 @@ export function SaleDetailModal({
   const title = sale ? `Venta ${sale.head.sale_number}` : 'Venta';
   const paid = sale?.payments.reduce((a, p) => a + p.amount, 0) ?? 0;
 
+  // Si el modal se abrió por una cita (o la venta pertenece a una), ofrecemos
+  // ir a la ficha completa de la cita con un botón de "ampliar". Es el reemplazo
+  // visual del viejo botón "Ver" del menú de acciones.
+  const openAppointmentId = sale?.head.appointment_id ?? appointmentId ?? null;
+  const openFullAppointment = openAppointmentId
+    ? () => {
+        onClose();
+        navigate(`${ROUTES.appointment}/${openAppointmentId}`);
+      }
+    : null;
+
   return (
     <Modal open onClose={onClose} title={title} className="sm:max-w-xl">
+      {openFullAppointment && (
+        <div className="-mt-2 mb-3 flex justify-end">
+          <button
+            type="button"
+            onClick={openFullAppointment}
+            title="Ver detalle en pantalla completa"
+            className="tap inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs font-medium text-white/80 hover:border-gold-400/50 hover:text-gold-200"
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+            Ampliar
+          </button>
+        </div>
+      )}
       {data.isLoading ? (
         <p className="py-6 text-center text-sm text-white/50">Cargando venta…</p>
       ) : !sale ? (
         <p className="py-6 text-center text-sm text-white/50">
-          No se encontró la venta.
+          {appointmentId
+            ? 'Esta cita todavía no tiene venta registrada.'
+            : 'No se encontró la venta.'}
         </p>
       ) : (
         <div className="space-y-5">
@@ -255,17 +281,6 @@ export function SaleDetailModal({
               {sale.head.created_by_name ? ` · registró ${sale.head.created_by_name}` : ''}
               {sale.head.requires_invoice ? ' · con factura' : ''}
             </p>
-            {sale.head.appointment_id && (
-              <button
-                onClick={() => {
-                  onClose();
-                  navigate(`${ROUTES.appointment}/${sale.head.appointment_id}`);
-                }}
-                className="inline-flex items-center gap-1 text-xs font-medium text-gold-300 hover:underline"
-              >
-                Abrir cita <ExternalLink className="h-3 w-3" />
-              </button>
-            )}
           </div>
 
           {/* Líneas + colaboradoras */}

@@ -9,23 +9,20 @@ import {
   Plus,
   Wallet,
   Contact,
-  ClipboardList,
   BellRing,
   Users,
   FileText,
   Settings,
   BarChart3,
   LogOut,
-  History,
   Receipt,
-  Star,
 } from "lucide-react";
 import { ROUTES } from "@/config/constants";
 import { useSession } from "@/store/session";
 import { fullName } from "@/lib/format";
 import { Modal } from "@/components/ui";
 import { cn } from "@/lib/cn";
-import { useHasPermission } from "@/config/permissions";
+import { roleLabel, useHasPermission } from "@/config/permissions";
 
 type NavEntry = {
   to: string;
@@ -49,21 +46,16 @@ export function MobileNav() {
 
   const TABS: NavEntry[] = [
     { to: ROUTES.dashboard, label: "Inicio", icon: CalendarRange, end: true },
-    { to: ROUTES.calendar, label: "Agenda", icon: CalendarDays },
+    { to: ROUTES.tasks, label: "Agenda", icon: CalendarDays },
     ...(can("use_pos")
       ? [{ to: ROUTES.pos, label: "POS", icon: ShoppingCart }]
       : []),
   ];
 
   const MORE: NavEntry[] = [
-    ...(can("view_own_summary")
-      ? [{ to: ROUTES.myServices, label: "Mis servicios", icon: Star }]
-      : []),
     ...(can("view_metrics")
       ? [{ to: ROUTES.metrics, label: "Métricas", icon: BarChart3 }]
       : []),
-    { to: ROUTES.tasks, label: "Tablero", icon: ClipboardList },
-    { to: ROUTES.history, label: "Historial", icon: History },
     ...(can("view_finance")
       ? [{ to: ROUTES.cashflow, label: "Finanzas", icon: Wallet }]
       : []),
@@ -208,8 +200,8 @@ export function MobileNav() {
             <span className="block truncate text-sm font-medium text-white">
               {user ? fullName(user.full_name) : "Sesión"}
             </span>
-            <span className="block text-xs capitalize text-white/40">
-              {user?.role ?? "—"}
+            <span className="block text-xs text-white/40">
+              {roleLabel(user?.role)}
             </span>
           </span>
           <LogOut className="h-5 w-5 shrink-0 text-white/50" />

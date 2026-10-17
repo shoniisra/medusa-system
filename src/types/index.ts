@@ -52,14 +52,7 @@ export interface Branch {
 
 /* ────────────────────────────── Usuarios / auth ──────────────────────────── */
 
-export type UserRole =
-  | 'owner'
-  | 'admin'
-  | 'manager'
-  | 'cashier'
-  | 'reception'
-  | 'staff'
-  | 'viewer';
+export type UserRole = 'admin' | 'manager' | 'cashier' | 'staff';
 
 export interface AppUser {
   id: ID;

@@ -84,14 +84,10 @@ export const ROUTES = {
   client: '/clientes', // + /:id
   calendar: '/agenda',
   calendarView: '/calendario',
-  /** Citas atendidas + ventas del POS: lo que ya pasó. */
-  history: '/historial',
   tasks: '/tareas',
   reminders: '/recordatorios',
   appointmentNew: '/agenda/cita/nueva',
   appointment: '/agenda/cita', // + /:id
   invoices: '/facturacion',
   settings: '/configuracion',
-  /** Vista personal de la colaboradora: sus servicios del día y comisiones. */
-  myServices: '/mis-servicios',
 } as const;

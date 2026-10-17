@@ -56,11 +56,6 @@ const AppointmentPage = lazyPage(() =>
     default: m.AppointmentPage,
   })),
 );
-const HistoryPage = lazyPage(() =>
-  import('@/features/history/HistoryPage').then((m) => ({
-    default: m.HistoryPage,
-  })),
-);
 const TasksPage = lazyPage(() =>
   import('@/features/tasks/TasksPage').then((m) => ({ default: m.TasksPage })),
 );
@@ -79,12 +74,6 @@ const SettingsPage = lazyPage(() =>
     default: m.SettingsPage,
   })),
 );
-const MyServicesPage = lazyPage(() =>
-  import('@/features/staff/MyServicesPage').then((m) => ({
-    default: m.MyServicesPage,
-  })),
-);
-
 function PageFallback() {
   return (
     <div className="flex h-64 items-center justify-center">
@@ -109,13 +98,11 @@ export const router = createBrowserRouter([
         children: [
           // Rutas disponibles para todos los roles autenticados.
           { path: ROUTES.dashboard, element: <HomePage /> },
-          { path: ROUTES.myServices, element: lazyRoute(<MyServicesPage />) },
           { path: ROUTES.calendar, element: lazyRoute(<CalendarPage />) },
           { path: ROUTES.calendarView, element: lazyRoute(<CalendarViewPage />) },
           { path: ROUTES.appointmentNew, element: lazyRoute(<AppointmentPage />) },
           { path: `${ROUTES.appointment}/:id`, element: lazyRoute(<AppointmentPage />) },
           { path: ROUTES.tasks, element: lazyRoute(<TasksPage />) },
-          { path: ROUTES.history, element: lazyRoute(<HistoryPage />) },
           { path: ROUTES.reminders, element: lazyRoute(<RemindersPage />) },
           { path: ROUTES.clients, element: lazyRoute(<ClientsPage />) },
           { path: `${ROUTES.client}/:id`, element: lazyRoute(<ClientDetailPage />) },

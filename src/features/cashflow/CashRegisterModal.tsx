@@ -542,9 +542,12 @@ function RolloverBody({
   const expectedQ = useExpectedCash(oldSession);
   const expected = expectedQ.data ?? oldSession.opening_cash;
 
+  // En el rollover sólo bloqueamos por vencidas (citas de días pasados sin
+  // resolver): las reservadas de hoy aún no sucedieron y recién se procesan
+  // durante el día — no son un bloqueante para cerrar la caja de ayer.
   const pending = usePendingAppointments(ctx.branchId);
   const blockers = pending.data ?? { reservedToday: 0, overdue: 0, total: 0 };
-  const blocked = blockers.total > 0;
+  const blocked = blockers.overdue > 0;
 
   const [bulkOpen, setBulkOpen] = useState(false);
   const [counted, setCounted] = useState('');
@@ -645,7 +648,7 @@ function RolloverBody({
 
       {blocked && (
         <BlockingPanel
-          reservedToday={blockers.reservedToday}
+          reservedToday={0}
           overdue={blockers.overdue}
           onOpenBulk={() => setBulkOpen(true)}
           onGoTasks={() => {
