@@ -5,8 +5,8 @@ import type { InValue } from '@libsql/client/web';
  *
  * - Producción: pega al proxy del Worker en POST /api/db. El token de Turso vive
  *   como secret del Worker, NUNCA en el bundle del navegador.
- * - Desarrollo (import.meta.env.DEV): usa un cliente directo a Turso (src/lib/db.dev.ts)
- *   con las VITE_TURSO_* del .env local, para conservar HMR. Ese branch se elimina
+ * - Desarrollo: las lecturas usan un cliente directo a Turso (src/lib/db.dev.ts)
+ *   con las VITE_TURSO_*; las escrituras pasan por el Worker local para auditar. El branch se elimina
  *   del bundle de producción por dead-code elimination.
  *
  * Las firmas query/queryOne/execute/batch se mantienen: los 21 call sites no cambian.
@@ -37,7 +37,7 @@ async function execRaw(
   sql: string,
   args: InValue[],
 ): Promise<{ rows: unknown[]; rowsAffected: number }> {
-  if (import.meta.env.DEV) {
+  if (import.meta.env.DEV && /^\s*(SELECT|WITH)\b/i.test(sql)) {
     const { devExecute } = await import('./db.dev');
     return devExecute(sql, args);
   }
@@ -48,10 +48,6 @@ async function execRaw(
 async function batchRaw(
   stmts: { sql: string; args?: InValue[] }[],
 ): Promise<void> {
-  if (import.meta.env.DEV) {
-    const { devBatch } = await import('./db.dev');
-    return devBatch(stmts);
-  }
   await callApi({ batch: stmts.map((s) => ({ sql: s.sql, args: s.args ?? [] })) });
 }
 

@@ -13,6 +13,7 @@ import {
   Users,
   FileText,
   Settings,
+  History,
   BarChart3,
   LogOut,
   Receipt,
@@ -68,6 +69,9 @@ export function MobileNav() {
       : []),
     ...(can("view_invoices")
       ? [{ to: ROUTES.invoices, label: "Facturación", icon: FileText }]
+      : []),
+    ...(can("view_audit")
+      ? [{ to: ROUTES.audit, label: "Auditoría", icon: History }]
       : []),
     ...(can("manage_settings")
       ? [{ to: ROUTES.settings, label: "Configuración", icon: Settings }]

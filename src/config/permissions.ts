@@ -10,6 +10,7 @@ import type { UserRole } from '@/types';
  *   de `manage_settings` para que un gerente pueda tocar catálogos sin ver logs.
  */
 export type Permission =
+  | 'view_audit'
   | 'view_dashboard'
   | 'view_metrics'
   | 'manage_appointments'
@@ -28,6 +29,7 @@ export type Permission =
   | 'view_tasks';
 
 const ALL: Permission[] = [
+  'view_audit',
   'view_dashboard',
   'view_metrics',
   'manage_appointments',

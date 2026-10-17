@@ -81,7 +81,7 @@ describe('aislamiento al cambiar de usuario', () => {
 
   it('invalida las sesiones persistidas antes del arreglo', async () => {
     const options = useSession.persist.getOptions();
-    expect(options.version).toBe(1);
+    expect(options.version).toBe(2);
     expect(await options.migrate?.({ user: kelly, organization, branch }, 0)).toEqual({
       user: null, organization: null, branch: null, cashSession: null,
     });

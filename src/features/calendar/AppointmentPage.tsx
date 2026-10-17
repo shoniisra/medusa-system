@@ -1,3 +1,4 @@
+import { AuditHistoryLink } from '@/features/audit/AuditHistoryLink';
 import { BookingCustomerHistory } from './BookingCustomerHistory';
 import { hasPermission } from '@/config/permissions';
 import { AppointmentCustomerCard } from './AppointmentCustomerCard';
@@ -2572,7 +2573,7 @@ function EditAppointment({ id }: { id: string }) {
       <PageHeader
         title="Atención de cita"
         onBack={goBack}
-        right={<Badge tone={meta.tone}>{meta.label}</Badge>}
+        right={<div className="flex items-center gap-3"><AuditHistoryLink entityType="appointment" id={id} /><Badge tone={meta.tone}>{meta.label}</Badge></div>}
       />
 
       <AppointmentCustomerCard

@@ -74,6 +74,8 @@ const SettingsPage = lazyPage(() =>
     default: m.SettingsPage,
   })),
 );
+const AuditPage = lazyPage(() => import('@/features/audit/AuditPage').then((m) => ({ default: m.AuditPage })));
+
 function PageFallback() {
   return (
     <div className="flex h-64 items-center justify-center">
@@ -164,6 +166,11 @@ export const router = createBrowserRouter([
             children: [
               { path: ROUTES.invoices, element: lazyRoute(<InvoicesPage />) },
             ],
+          },
+
+          {
+            element: <RequirePermission permission="view_audit" />,
+            children: [{ path: ROUTES.audit, element: lazyRoute(<AuditPage />) }],
           },
 
           // Configuración: requiere manage_settings.

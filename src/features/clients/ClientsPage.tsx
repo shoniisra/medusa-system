@@ -1,3 +1,4 @@
+import { AuditHistoryLink } from '@/features/audit/AuditHistoryLink';
 import { ColorRecordsCard, ManicureRecordsCard } from './ColorRecordsCard';
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -908,6 +909,8 @@ function ClientDetail({ customer }: { customer: Customer }) {
           }}
         />
       )}
+
+      <AuditHistoryLink entityType="customer" id={id ?? ''} />
 
       {/* Métricas */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">

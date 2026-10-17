@@ -124,7 +124,9 @@ export async function verifyToken(
 
   try {
     const payload = JSON.parse(atob(body)) as TokenPayload;
-    if (payload.exp < Date.now()) return null;
+    if (!Number.isFinite(payload.exp) || payload.exp <= Date.now() ||
+        typeof payload.userId !== 'string' || typeof payload.orgId !== 'string' ||
+        typeof payload.branchId !== 'string' || typeof payload.role !== 'string') return null;
     return payload;
   } catch {
     return null;
@@ -165,7 +167,10 @@ export function clearCookie(secure: boolean): string {
 export function parseCookieToken(req: Request): string | null {
   const header = req.headers.get('Cookie') ?? '';
   for (const part of header.split(';')) {
-    const [k, v] = part.trim().split('=');
+    const value = part.trim();
+    const separator = value.indexOf('=');
+    const k = value.slice(0, separator);
+    const v = value.slice(separator + 1);
     if (k === SESSION_COOKIE && v) return v;
   }
   return null;

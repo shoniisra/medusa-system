@@ -1,3 +1,5 @@
+import { actorForAudit, auditedBatch, isReadStatement, readAudit, validateActorWrites, validateAppStatement, withSystemAudit } from './audit';
+import { ApiError, requireActor, sessionSigningSecret } from './session';
 import { createClient, type Client, type InValue } from '@libsql/client/web';
 import { handleGcalSync } from './gcalSync';
 import { handleGcal } from './gcal';
@@ -197,10 +199,11 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
     );
   }
 
-  // Verificación de contraseña:
-  //  - NULL password_hash → acceso sin contraseña (admins existentes sin hash).
-  //  - Con hash → verificar PBKDF2.
-  if (user.password_hash !== null && user.password_hash !== '') {
+  // Sin una credencial verificada no se puede atribuir autoría de forma fiable.
+  if (!user.password_hash) {
+    return Response.json({ error: 'Usuario sin token configurado.' }, { status: 401 });
+  }
+  {
     if (!password) {
       return Response.json(
         { error: 'Se requiere contraseña.' },
@@ -224,12 +227,12 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
       /* best-effort */
     });
 
-  // Si hay SESSION_SECRET, emitir token. Si no (dev sin secret), devolver sin cookie.
+  // Emitir siempre la cookie que identifica al autor de las escrituras.
   const headers = new Headers({ 'Content-Type': 'application/json' });
-  if (env.SESSION_SECRET) {
+  {
     const token = await signToken(
       { userId: user.id, orgId: org_id, branchId: branch_id, role: user.role },
-      env.SESSION_SECRET,
+      sessionSigningSecret(env),
     );
     const secure = new URL(request.url).protocol === 'https:';
     headers.set('Set-Cookie', sessionCookie(token, secure));
@@ -262,31 +265,12 @@ async function handleSetPassword(request: Request, env: Env): Promise<Response> 
     );
   }
 
-  let orgId: string;
-
-  if (env.SESSION_SECRET) {
-    // Con SESSION_SECRET: verificar token HMAC y extraer orgId del payload.
-    const token = parseCookieToken(request);
-    if (!token) return Response.json({ error: 'No autorizado' }, { status: 401 });
-    const payload = await verifyToken(token, env.SESSION_SECRET);
-    if (!payload || !['admin', 'manager'].includes(payload.role)) {
-      return Response.json({ error: 'Sin permisos' }, { status: 403 });
-    }
-    orgId = payload.orgId;
-  } else {
-    // Sin SESSION_SECRET: requiere org_id en el body.
-    // La barrera exterior es Cloudflare Access (allowlist por correo).
-    if (!body.org_id) {
-      return Response.json(
-        { error: 'org_id requerido cuando SESSION_SECRET no está configurado.' },
-        { status: 400 },
-      );
-    }
-    orgId = body.org_id;
-  }
+  const db = makeDb(env);
+  const actor = await requireActor(request, env, db);
+  if (!['admin', 'manager'].includes(actor.role)) return Response.json({ error: 'Sin permisos' }, { status: 403 });
+  const orgId = actor.organization_id;
 
   const hash = await hashPassword(String(body.password));
-  const db = makeDb(env);
   const now = new Date().toISOString();
   await db.execute({
     sql: `UPDATE app_user SET password_hash = ?, updated_at = ? WHERE id = ? AND organization_id = ?`,
@@ -303,7 +287,7 @@ export default {
     // Webhook de sincronización desde Google Calendar (vía Apps Script).
     if (url.pathname === '/api/gcal-sync' && request.method === 'POST') {
       try {
-        return await handleGcalSync(request, env, makeDb(env));
+        return await handleGcalSync(request, env, withSystemAudit(makeDb(env)));
       } catch (e) {
         return Response.json(
           { error: e instanceof Error ? e.message : String(e) },
@@ -334,18 +318,31 @@ export default {
     }
 
     if (url.pathname === '/api/set-password' && request.method === 'POST') {
-      return handleSetPassword(request, env);
+      return handleSetPassword(request, env).catch((error: unknown) => Response.json(
+        { error: error instanceof Error ? error.message : 'Error de sesión' },
+        { status: error instanceof ApiError ? error.status : 500 },
+      ));
     }
 
     // Verifica la sesión y devuelve el payload del token (para que el cliente
     // pueda re-hidratar la sesión en una recarga sin re-loguear).
     if (url.pathname === '/api/session' && request.method === 'GET') {
       const token = parseCookieToken(request);
-      if (!token || !env.SESSION_SECRET) {
+      if (!token) {
         return Response.json({ user: null }, { status: 200 });
       }
-      const payload = await verifyToken(token, env.SESSION_SECRET);
+      const payload = await verifyToken(token, sessionSigningSecret(env));
       return Response.json({ user: payload }, { status: 200 });
+    }
+
+    if (url.pathname === '/api/audit' && request.method === 'GET') {
+      try {
+        const db = makeDb(env);
+        return await readAudit(url, await requireActor(request, env, db), db);
+      } catch (error) {
+        return Response.json({ error: error instanceof Error ? error.message : 'Error de auditoría' },
+          { status: error instanceof ApiError ? error.status : 500, headers: { 'Cache-Control': 'no-store' } });
+      }
     }
 
     if (url.pathname === '/api/db' && request.method === 'POST') {
@@ -358,11 +355,11 @@ export default {
         const DB_TIMEOUT_MS = 20_000;
 
         if (Array.isArray(body.batch)) {
+          body.batch.forEach((statement) => validateAppStatement(statement.sql));
+          const actor = await requireActor(request, env, db);
+          validateActorWrites(body.batch, actor);
           await withTimeout(
-            db.batch(
-              body.batch.map((s) => ({ sql: s.sql, args: s.args ?? [] })),
-              'write',
-            ),
+            auditedBatch(db, body.batch.map((s) => ({ sql: s.sql, args: s.args ?? [] })), actorForAudit(actor)),
             DB_TIMEOUT_MS,
             'batch',
           );
@@ -370,8 +367,16 @@ export default {
         }
 
         if (typeof body.sql === 'string') {
+          validateAppStatement(body.sql);
+          const statement = { sql: body.sql, args: body.args ?? [] };
+          const operation = isReadStatement(body.sql)
+            ? db.execute(statement)
+            : requireActor(request, env, db).then(async (actor) => {
+              validateActorWrites([statement], actor);
+              return (await auditedBatch(db, [statement], actorForAudit(actor)))[0];
+            });
           const rs = await withTimeout(
-            db.execute({ sql: body.sql, args: body.args ?? [] }),
+            operation,
             DB_TIMEOUT_MS,
             'execute',
           );
@@ -381,7 +386,7 @@ export default {
         return Response.json({ error: 'Payload inválido' }, { status: 400 });
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
-        const status = message.startsWith('Timeout de ') ? 504 : 400;
+        const status = e instanceof ApiError ? e.status : message.startsWith('Timeout de ') ? 504 : 400;
         // Solo registramos los fallos de infra (timeouts / errores del driver).
         // Los 400 por payload inválido son ruido y no indican incidente.
         if (status >= 500) {

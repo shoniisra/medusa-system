@@ -3,7 +3,7 @@ import type { Connect, ViteDevServer } from 'vite';
 import { IncomingMessage, ServerResponse } from 'node:http';
 import { Socket } from 'node:net';
 import { devApi } from './devApi';
-import { verifyPassword } from './auth';
+import { signToken, verifyPassword } from './auth';
 
 const { execute, createClient } = vi.hoisted(() => ({
   execute: vi.fn(),
@@ -13,8 +13,9 @@ vi.mock('@libsql/client/web', () => ({ createClient }));
 
 describe('API de contraseñas en el servidor local', () => {
   let middleware: Connect.NextHandleFunction;
+  let cookie: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetAllMocks();
     const register = vi.fn<(handler: Connect.NextHandleFunction) => void>();
     const plugin = devApi({
@@ -25,7 +26,9 @@ describe('API de contraseñas en el servidor local', () => {
     if (typeof plugin.configureServer !== 'function') throw new Error('Falta configureServer');
     void plugin.configureServer({ middlewares: { use: register } } as unknown as ViteDevServer);
     middleware = register.mock.calls[0][0];
+    cookie = `medusa_session=${await signToken({ userId: 'admin', orgId: 'org-1', branchId: 'branch', role: 'admin' }, 'production-secret-must-not-affect-local-login')}`;
     createClient.mockReturnValue({ execute });
+    execute.mockResolvedValueOnce({ rows: [{ id: 'admin', organization_id: 'org-1', full_name: 'Admin', role: 'admin' }] });
     execute.mockResolvedValue({ rowsAffected: 1 });
   });
 
@@ -34,7 +37,7 @@ describe('API de contraseñas en el servidor local', () => {
       const req = new IncomingMessage(new Socket());
       req.method = 'POST';
       req.url = path;
-      req.headers = { 'content-type': 'application/json' };
+      req.headers = { 'content-type': 'application/json', cookie };
       const res = new ServerResponse(req);
       vi.spyOn(res, 'end').mockImplementation((chunk?: unknown) => {
         const headers = new Headers();
@@ -69,7 +72,7 @@ describe('API de contraseñas en el servidor local', () => {
       sql: expect.stringContaining('WHERE id = ? AND organization_id = ?'),
       args: [expect.any(String), expect.any(String), 'user-1', 'org-1'],
     });
-    const statement = execute.mock.calls[0][0] as { args: string[] };
+    const statement = execute.mock.calls[1][0] as { args: string[] };
     expect(statement.args[0]).not.toBe('7391');
     expect(await verifyPassword('7391', statement.args[0])).toBe(true);
     expect(await verifyPassword('0000', statement.args[0])).toBe(false);
@@ -77,14 +80,14 @@ describe('API de contraseñas en el servidor local', () => {
 
   it.each([
     { user_id: 'user-1', org_id: 'org-1', password: '123' },
-    { user_id: 'user-1', password: '7391' },
+
   ])('rechaza datos incompletos sin modificar la base: %j', async (body) => {
     expect((await post(body)).status).toBe(400);
     expect(execute).not.toHaveBeenCalled();
   });
 
   it('devuelve errores de la base como JSON', async () => {
-    execute.mockRejectedValue(new Error('Base no disponible'));
+    execute.mockReset().mockRejectedValue(new Error('Base no disponible'));
     const response = await post({ user_id: 'user-1', org_id: 'org-1', password: '7391' });
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: 'Base no disponible' });

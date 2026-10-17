@@ -9,7 +9,8 @@ export function devApi(env: Record<string, string>): Plugin {
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
-        if (req.method !== 'POST' || !['/api/gcal', '/api/set-password'].includes(pathname)) {
+        const method = ['/api/audit', '/api/session'].includes(pathname) ? 'GET' : 'POST';
+        if (req.method !== method || !['/api/gcal', '/api/set-password', '/api/login', '/api/logout', '/api/db', '/api/audit', '/api/session'].includes(pathname)) {
           return next();
         }
 
@@ -17,17 +18,15 @@ export function devApi(env: Record<string, string>): Plugin {
         req.on('data', (chunk: Buffer) => chunks.push(chunk));
         req.on('end', () => {
           const request = new Request(`http://localhost${req.url}`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: Buffer.concat(chunks).toString('utf8'),
+            method,
+            headers: { 'content-type': 'application/json', cookie: req.headers.cookie ?? '' },
+            body: method === 'POST' ? Buffer.concat(chunks).toString('utf8') : undefined,
           });
           void worker.fetch(request, {
             // Usar la misma base que el cliente de desarrollo (src/lib/db.dev.ts).
             TURSO_DATABASE_URL: env.VITE_TURSO_DATABASE_URL,
             TURSO_AUTH_TOKEN: env.VITE_TURSO_AUTH_TOKEN,
-            // El login local valida directamente contra la DB y no emite cookie.
-            // El handler compartido exige org_id en este modo de desarrollo.
-            SESSION_SECRET: '',
+            SESSION_SECRET: env.SESSION_SECRET ?? '',
             GCAL_SYNC_SECRET: '',
             GCAL_SA_EMAIL: env.GCAL_SA_EMAIL,
             GCAL_SA_PRIVATE_KEY: env.GCAL_SA_PRIVATE_KEY,

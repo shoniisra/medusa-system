@@ -1,11 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { authenticateUser } from './authenticateUser';
 import { queryOne } from '@/lib/db';
-import { verifyPassword } from '@/lib/auth';
 import { waitForLogout } from '@/store/session';
 
 vi.mock('@/lib/db', () => ({ queryOne: vi.fn() }));
-vi.mock('@/lib/auth', () => ({ verifyPassword: vi.fn() }));
 vi.mock('@/store/session', () => ({ waitForLogout: vi.fn() }));
 
 const user = { id: 'user_leslie', organization_id: 'org', role: 'staff', active: 1 };
@@ -13,14 +11,14 @@ describe('identidad y rol verificados en login', () => {
   beforeEach(() => { vi.resetAllMocks(); });
   afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
-  it('en desarrollo toma el rol fresco de Lesly y no conserva su hash', async () => {
+  it('en desarrollo también autentica con el servidor para obtener la cookie de auditoría', async () => {
     vi.stubEnv('DEV', true);
-    vi.mocked(queryOne).mockResolvedValue({ ...user, password_hash: 'hash' });
-    vi.mocked(verifyPassword).mockResolvedValue(true);
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ user }));
+    vi.stubGlobal('fetch', fetchMock);
     const result = await authenticateUser('user_leslie', 'org', 'branch', '1234');
     expect(result.role).toBe('staff');
-    expect(result).not.toHaveProperty('password_hash');
-    expect(queryOne).toHaveBeenCalledWith(expect.stringContaining('WHERE id = ? AND organization_id = ? AND active = 1'), ['user_leslie', 'org']);
+    expect(fetchMock).toHaveBeenCalledWith('/api/login', expect.objectContaining({ credentials: 'include' }));
+    expect(queryOne).not.toHaveBeenCalled();
   });
 
   it('en producción toma el rol del usuario devuelto por el servidor', async () => {

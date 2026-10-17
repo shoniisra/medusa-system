@@ -13,6 +13,7 @@ import {
   ClipboardList,
   FileText,
   Settings,
+  History,
   BellRing,
   ShoppingCart,
   Receipt,
@@ -199,6 +200,9 @@ export function Sidebar() {
           : []),
         ...(can("view_invoices")
           ? [{ to: ROUTES.invoices, label: "Facturación", icon: FileText }]
+          : []),
+        ...(can("view_audit")
+          ? [{ to: ROUTES.audit, label: "Auditoría", icon: History }]
           : []),
         ...(can("manage_settings")
           ? [{ to: ROUTES.settings, label: "Configuración", icon: Settings }]

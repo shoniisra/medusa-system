@@ -90,4 +90,5 @@ export const ROUTES = {
   appointment: '/agenda/cita', // + /:id
   invoices: '/facturacion',
   settings: '/configuracion',
+  audit: '/auditoria',
 } as const;

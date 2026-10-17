@@ -17,6 +17,7 @@ export default defineConfig(({ mode }) => {
   },
   plugins: [
     react(),
+    // Login, sesión y escrituras auditadas usan el Worker también en desarrollo.
     devApi(env),
     VitePWA({
       registerType: 'autoUpdate',

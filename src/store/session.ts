@@ -68,8 +68,8 @@ export const useSession = create<SessionState>()(
     }),
     {
       name: 'medusa-session',
-      // Invalidar sesiones anteriores que pudieron persistir un rol del caché.
-      version: 1,
+      // Exigir un login nuevo para obtener la cookie verificada que identifica la auditoría.
+      version: 2,
       migrate: () => EMPTY_SESSION,
       partialize: ({ user, organization, branch, cashSession }) => ({
         user, organization, branch, cashSession,

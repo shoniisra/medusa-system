@@ -1,3 +1,4 @@
+import { AuditHistoryLink } from '@/features/audit/AuditHistoryLink';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { HandHelping, Maximize2 } from 'lucide-react';
@@ -240,6 +241,7 @@ export function SaleDetailModal({
 
   return (
     <Modal open onClose={onClose} title={title} className="sm:max-w-xl">
+      {sale && <div className="mb-3"><AuditHistoryLink entityType="sale" id={sale.head.id} /></div>}
       {openFullAppointment && (
         <div className="-mt-2 mb-3 flex justify-end">
           <button

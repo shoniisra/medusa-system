@@ -7,8 +7,8 @@
  *
  *   node scripts/migrate.mjs docs/migrations/2026-10-01-customer-alias.sql
  *
- * Parte el archivo por ';' (sin triggers ni cadenas con punto y coma, que es lo
- * que hay) y corre cada sentencia por separado, informando cuál falló. Un
+ * Los archivos tradicionales se parten por ';'. Los archivos con triggers
+ * usan '-- statement-breakpoint' y se aplican en una transacción. Un
  * `ALTER TABLE ... ADD COLUMN` que choca con una columna que ya existe se
  * reporta como "ya aplicada" en vez de cortar: así el script es reejecutable.
  */
@@ -45,13 +45,29 @@ const db = createClient({ url, authToken: env.VITE_TURSO_AUTH_TOKEN });
 // Quitamos los comentarios ANTES de partir por ';': un comentario que
 // contiene un punto y coma (p.ej. "CREATE TABLE IF NOT EXISTS; reejecutable")
 // rompía el split al cortar en medio de la línea comentada.
-const statements = readFileSync(file, 'utf8')
+const source = readFileSync(file, 'utf8');
+const statements = source
   .split('\n')
-  .filter((l) => !l.trim().startsWith('--'))
+  .filter((l) => l.trim() === '-- statement-breakpoint' || !l.trim().startsWith('--'))
   .join('\n')
-  .split(';')
+  .split(source.includes('-- statement-breakpoint') ? /-- statement-breakpoint/ : ';')
   .map((s) => s.trim())
   .filter(Boolean);
+
+// Los archivos con triggers delimitan bloques completos. Se aplican de forma
+// atómica para no dejar una instalación con solo parte de la auditoría activa.
+if (source.includes('-- statement-breakpoint')) {
+  try {
+    await db.batch(statements.map((sql) => ({ sql, args: [] })), 'write');
+    console.log(`✓ Migración transaccional aplicada (${statements.length} sentencias).`);
+    db.close();
+    process.exit(0);
+  } catch (error) {
+    console.error(`✗ La migración se revirtió: ${error instanceof Error ? error.message : String(error)}`);
+    db.close();
+    process.exit(1);
+  }
+}
 
 let failed = false;
 for (const sql of statements) {
