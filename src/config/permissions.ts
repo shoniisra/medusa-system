@@ -67,7 +67,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
   // Caja/Recepción: fusión de los antiguos roles cashier + reception.
   cashier: FRONT_DESK,
   // Colaboradora de servicio: agenda, atiende, cobra, POS, caja, resumen propio.
-  staff: FRONT_DESK,
+  staff: FRONT_DESK.filter((p) => p !== 'manage_clients'),
 };
 
 const PERMISSION_SETS = Object.fromEntries(

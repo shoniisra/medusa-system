@@ -194,7 +194,9 @@ export function Sidebar() {
               } as NavItemWithChildren,
             ]
           : []),
-        { to: ROUTES.clients, label: "Clientes", icon: Contact },
+        ...(can("manage_clients")
+          ? [{ to: ROUTES.clients, label: "Clientes", icon: Contact }]
+          : []),
         ...(can("view_invoices")
           ? [{ to: ROUTES.invoices, label: "Facturación", icon: FileText }]
           : []),

@@ -1,6 +1,22 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { AppUser, Branch, CashSession, Organization } from '@/types';
+import { queryClient } from '@/lib/queryClient';
+import { usePosDraft } from './posDraft';
+
+let pendingLogout: Promise<unknown> = Promise.resolve();
+
+/** Evita que una respuesta tardía de logout borre la cookie del nuevo login. */
+export async function waitForLogout(): Promise<void> {
+  await pendingLogout;
+}
+
+function clearSessionData() {
+  queryClient.clear();
+  usePosDraft.getState().reset();
+}
+
+const EMPTY_SESSION = { user: null, organization: null, branch: null, cashSession: null };
 
 /**
  * Estado global de sesión: usuario activo, organización, sucursal actual y
@@ -34,22 +50,31 @@ export const useSession = create<SessionState>()(
       branch: null,
       cashSession: null,
 
-      setSession: ({ user, organization, branch }) =>
-        set({ user, organization, branch }),
+      setSession: ({ user, organization, branch }) => {
+        clearSessionData();
+        set({ user, organization, branch, cashSession: null });
+      },
       setBranch: (branch) => set({ branch, cashSession: null }),
       setCashSession: (cashSession) => set({ cashSession }),
       logout: () => {
-        // Limpiar cookie de sesión del Worker en segundo plano (best-effort).
-        void fetch('/api/logout', { method: 'POST', credentials: 'include' }).catch(
-          () => undefined,
-        );
-        set({ user: null, organization: null, branch: null, cashSession: null });
+        set(EMPTY_SESSION);
+        clearSessionData();
+        pendingLogout = fetch('/api/logout', { method: 'POST', credentials: 'include' })
+          .catch(() => undefined);
       },
 
       isAuthenticated: () => get().user !== null,
       hasOpenCash: () => get().cashSession?.status === 'open',
     }),
-    { name: 'medusa-session' },
+    {
+      name: 'medusa-session',
+      // Invalidar sesiones anteriores que pudieron persistir un rol del caché.
+      version: 1,
+      migrate: () => EMPTY_SESSION,
+      partialize: ({ user, organization, branch, cashSession }) => ({
+        user, organization, branch, cashSession,
+      }),
+    },
   ),
 );
 

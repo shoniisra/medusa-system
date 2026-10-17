@@ -36,11 +36,10 @@ export function useCustomers() {
   return useQuery({
     queryKey: ['customers', orgId],
     enabled: !!orgId,
-    queryFn: () =>
-      query<Customer>(
-        'SELECT * FROM customer WHERE organization_id = ? AND active = 1 ORDER BY first_name',
-        [orgId],
-      ),
+    queryFn: () => query<Customer>(
+      'SELECT * FROM customer WHERE organization_id = ? AND active = 1 ORDER BY first_name',
+      [orgId],
+    ),
   });
 }
 

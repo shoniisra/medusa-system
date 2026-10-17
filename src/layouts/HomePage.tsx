@@ -3,6 +3,7 @@ import { DashboardPage } from '@/features/dashboard/DashboardPage';
 import { StaffDashboardPage } from '@/features/dashboard/StaffDashboardPage';
 import { CalendarViewPage } from '@/features/calendar/CalendarViewPage';
 import { useSession } from '@/store/session';
+import { hasPermission } from '@/config/permissions';
 
 /**
  * Pantalla principal: en escritorio, el tablero con las métricas; en móvil, el
@@ -26,7 +27,8 @@ export function HomePage() {
     return () => mq.removeEventListener('change', onChange);
   }, []);
 
+  if (!role) return null;
   if (role === 'staff') return <StaffDashboardPage />;
-  if (isMobile) return <CalendarViewPage />;
+  if (isMobile || !hasPermission(role, 'view_metrics')) return <CalendarViewPage />;
   return <DashboardPage />;
 }

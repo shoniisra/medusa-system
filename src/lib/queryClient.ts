@@ -49,6 +49,7 @@ export function invalidateAppointments(
 ): void {
   const keys: unknown[][] = [
     ['appointments'],
+    ['manicure-history'],
     ['dashboard-metrics'],
     ['week-availability'],
     ['overdue-pending'],
@@ -78,6 +79,10 @@ export function invalidateCustomers(qc: QueryClient, orgId: string): void {
   invalidateAll(qc, [
     ['customers', orgId],
     ['clients', orgId],
+    ['customer-care', orgId],
+    ['customer-row'],
+    ['manicure-history', orgId],
+    ['appt-customer-extras'],
   ]);
 }
 

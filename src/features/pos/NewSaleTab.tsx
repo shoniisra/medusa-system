@@ -1,3 +1,4 @@
+import { CustomerCareCard } from '@/features/clients/CustomerCareCard';
 import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -86,7 +87,6 @@ export function NewSaleTab() {
   const draft = usePosDraft();
   const services = useServices();
   const products = useProducts();
-  const customers = useCustomers();
   const staff = useStaff();
   const assistTypes = useAssistTypes();
 
@@ -97,6 +97,7 @@ export function NewSaleTab() {
   const [lastName, setLastName] = useState('');
   const [phone, setPhone] = useState('');
   const [clientSearch, setClientSearch] = useState('');
+  const customers = useCustomers();
   const searchRef = useRef<HTMLInputElement>(null);
   const phoneRef = useRef<HTMLInputElement>(null);
 
@@ -295,6 +296,7 @@ export function NewSaleTab() {
           />
 
           <CustomerPicker
+            revealSelectedContact
             customerId={customerId}
             newClient={newClient}
             selectedCustomer={selectedCustomer}
@@ -340,6 +342,8 @@ export function NewSaleTab() {
             }
           />
         </Card>
+
+        {customerId && <CustomerCareCard key={customerId} customerId={customerId} />}
 
         {/* Detalle de venta (mismo editor que Atención de cita) */}
         <SaleItemsEditor

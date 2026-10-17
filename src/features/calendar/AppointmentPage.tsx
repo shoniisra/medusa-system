@@ -1,3 +1,6 @@
+import { BookingCustomerHistory } from './BookingCustomerHistory';
+import { hasPermission } from '@/config/permissions';
+import { AppointmentCustomerCard } from './AppointmentCustomerCard';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   useLocation,
@@ -12,7 +15,6 @@ import {
   Check,
   UserRound,
   AlertTriangle,
-  Pencil,
   Plus,
   Lock,
   Wallet,
@@ -131,8 +133,6 @@ import { ymd } from '@/lib/date';
 import { isNoCharge, stripNoCharge } from './appointmentBoard';
 import { PaymentsHistoryCard, type PaymentRow } from './PaymentsHistoryCard';
 import {
-  CustomerCareNotes,
-  CustomerHistoryCard,
   loadCustomerHistory,
 } from './CustomerHistoryCard';
 import type {
@@ -293,12 +293,11 @@ function NewAppointment() {
   const qc = useQueryClient();
   const [params] = useSearchParams();
 
-  const customers = useCustomers();
   const staff = useStaff();
   // Ausencias/cierres para respetar vacaciones, permisos y días cerrados.
   const timeOff = useTimeOff();
 
-  // Paso del asistente: 1) qué · 2) cuándo · 3) cliente y abono.
+  // El cliente se elige antes de los pasos: 1) qué · 2) cuándo · 3) abono y confirmación.
   const [step, setStep] = useState<1 | 2 | 3>(1);
 
   // Cliente
@@ -308,6 +307,7 @@ function NewAppointment() {
   const [lastName, setLastName] = useState('');
   const [phone, setPhone] = useState('');
   const [clientSearch, setClientSearch] = useState('');
+  const customers = useCustomers();
   const searchRef = useRef<HTMLInputElement>(null);
   const phoneRef = useRef<HTMLInputElement>(null);
 
@@ -375,7 +375,7 @@ function NewAppointment() {
 
   // ── Cliente: buscador con foco automático y creación al vuelo ──
   useEffect(() => {
-    if (step === 3 && !hasClient) searchRef.current?.focus();
+    if (!hasClient && (step === 1 || step === 3)) searchRef.current?.focus();
   }, [step, hasClient]);
 
   const clientMatches = useMemo(
@@ -1229,6 +1229,71 @@ function NewAppointment() {
         }
       />
 
+      {/* Cliente */}
+      <Card>
+        <CardHeader title="Cliente" subtitle="Consultá sus últimos procesos antes de elegir servicios y horario." />
+
+        <CustomerPicker
+          customerId={customerId}
+          newClient={newClient}
+          selectedCustomer={selectedCustomer}
+          firstName={firstName}
+          lastName={lastName}
+          phone={phone}
+          clientSearch={clientSearch}
+          clientMatches={clientMatches}
+          phoneTaken={phoneTaken}
+          renameTo={renameTo}
+          useExistingBusy={useExistingClient.isPending}
+          searchPlaceholder="Buscar por nombre o WhatsApp…"
+          phoneUseHint="Usá esa ficha para esta cita en vez de crear un contacto nuevo."
+          searchRef={searchRef}
+          phoneRef={phoneRef}
+          onSearchChange={setClientSearch}
+          onPhoneChange={setPhone}
+          onPickExisting={pickExisting}
+          onStartNewClient={startNewClient}
+          onClear={clearClient}
+          onUseExisting={() => useExistingClient.mutate()}
+          newClientBefore={
+            <div className="grid grid-cols-2 gap-2">
+              <Input
+                label="Nombre"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+                placeholder="Nombre"
+              />
+              <Input
+                label="Apellido"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+                placeholder="Apellido"
+              />
+            </div>
+          }
+          newClientAfter={
+            <>
+              <Button
+                variant="outline"
+                className="w-full"
+                loading={createClient.isPending}
+                disabled={
+                  !firstName.trim() || !!validatePhone(phone) || !!phoneTaken
+                }
+                onClick={() => createClient.mutate()}
+              >
+                Guardar cliente
+              </Button>
+              <p className="text-xs text-white/40">
+                Queda registrado en la lista de clientes al guardarlo, aunque
+                todavía no agendes la cita.
+              </p>
+            </>
+          }
+        />
+        <BookingCustomerHistory key={customerId} customerId={customerId} />
+      </Card>
+
       {/* Indicador de pasos: en móvil solo el paso activo + barra de progreso */}
       <Steps step={step} />
 
@@ -1506,73 +1571,9 @@ function NewAppointment() {
         </div>
       )}
 
-      {/* ── Paso 3 · Cliente y abono ── */}
+      {/* ── Paso 3 · Abono y confirmación ── */}
       {step === 3 && (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 lg:gap-5">
-          {/* Cliente */}
-          <Card>
-            <CardHeader title="Cliente" />
-
-            <CustomerPicker
-              customerId={customerId}
-              newClient={newClient}
-              selectedCustomer={selectedCustomer}
-              firstName={firstName}
-              lastName={lastName}
-              phone={phone}
-              clientSearch={clientSearch}
-              clientMatches={clientMatches}
-              phoneTaken={phoneTaken}
-              renameTo={renameTo}
-              useExistingBusy={useExistingClient.isPending}
-              searchPlaceholder="Buscar por nombre o WhatsApp…"
-              phoneUseHint="Usá esa ficha para esta cita en vez de crear un contacto nuevo."
-              searchRef={searchRef}
-              phoneRef={phoneRef}
-              onSearchChange={setClientSearch}
-              onPhoneChange={setPhone}
-              onPickExisting={pickExisting}
-              onStartNewClient={startNewClient}
-              onClear={clearClient}
-              onUseExisting={() => useExistingClient.mutate()}
-              newClientBefore={
-                <div className="grid grid-cols-2 gap-2">
-                  <Input
-                    label="Nombre"
-                    value={firstName}
-                    onChange={(e) => setFirstName(e.target.value)}
-                    placeholder="Nombre"
-                  />
-                  <Input
-                    label="Apellido"
-                    value={lastName}
-                    onChange={(e) => setLastName(e.target.value)}
-                    placeholder="Apellido"
-                  />
-                </div>
-              }
-              newClientAfter={
-                <>
-                  <Button
-                    variant="outline"
-                    className="w-full"
-                    loading={createClient.isPending}
-                    disabled={
-                      !firstName.trim() || !!validatePhone(phone) || !!phoneTaken
-                    }
-                    onClick={() => createClient.mutate()}
-                  >
-                    Guardar cliente
-                  </Button>
-                  <p className="text-xs text-white/40">
-                    Queda registrado en la lista de clientes al guardarlo, aunque
-                    todavía no agendes la cita.
-                  </p>
-                </>
-              }
-            />
-          </Card>
-
           {/* Pago / abono */}
           <Card gold>
             <CardHeader
@@ -1743,8 +1744,8 @@ function NewAppointment() {
             </div>
           </Card>
 
-          {/* Resumen (ancho completo) */}
-          <Card className="lg:col-span-2">
+          {/* Confirmación junto al abono */}
+          <Card>
             <CardHeader title="Resumen" />
             <div className="space-y-4">
               {/* Observaciones de la cita: viaja a la ficha y al evento de Google. */}
@@ -1954,7 +1955,7 @@ function NewAppointment() {
 }
 
 /** Indicador de pasos del asistente: compacto en móvil, con etiquetas en ≥sm. */
-const STEP_LABELS = ['Qué', 'Cuándo', 'Cliente y abono'];
+const STEP_LABELS = ['Qué', 'Cuándo', 'Confirmar'];
 
 function Steps({ step }: { step: 1 | 2 | 3 }) {
   return (
@@ -2237,6 +2238,8 @@ function EditAppointment({ id }: { id: string }) {
   // atendida CON venta queda congelada.
   const noCharge = !!head.data && isNoCharge(head.data);
   const attendedWithSale = head.data?.status === 'attended' && !noCharge;
+  const staffContacts = useSession((s) => s.user?.role === 'staff');
+  const maskContact = staffContacts && head.data?.status !== 'confirmed';
 
   const orgId = useOrgId();
   const branchId = useBranchId();
@@ -2572,117 +2575,42 @@ function EditAppointment({ id }: { id: string }) {
         right={<Badge tone={meta.tone}>{meta.label}</Badge>}
       />
 
+      <AppointmentCustomerCard
+        key={head.data.customer_id ?? id}
+        customer={{
+          id: head.data.customer_id, name: head.data.customer_name,
+          phone: head.data.customer_phone, email: head.data.customer_email,
+          allergies: head.data.customer_allergies, hairNotes: head.data.customer_hair_notes,
+          birthDate: head.data.customer_birth_date,
+        }}
+        maskContact={maskContact}
+        onEditCustomer={() => setCustomerOpen(true)}
+        dateLabel={<><span className="sm:hidden">{fechaCorta}</span><span className="hidden sm:inline">{fechaLarga}</span></>}
+        startAt={head.data.start_at}
+        endAt={head.data.end_at}
+        duration={reservedMinutes > 0 ? fmtDuration(reservedMinutes) : null}
+        history={customerHistory.data}
+        historyLoading={customerHistory.isLoading}
+        historyError={customerHistory.isError}
+        schedulingInfo={<>
+          <p>Agendado el {dateShort(createdIso)}{createdIso ? ` · ${timeShort(createdIso)}` : ''}</p>
+          <p>Por {head.data.created_by_name ?? 'Sistema'}</p>
+        </>}
+        noteEditor={<div>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-white/60">Observaciones de la cita</span>
+            <textarea value={notesValue} onChange={(e) => setNotesDraft(e.target.value)} rows={3}
+              placeholder="Pedido del cliente, avisos para el equipo…" className="input-base w-full resize-y" />
+          </label>
+          {notesDirty && <div className="mt-2 flex flex-wrap justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setNotesDraft(null)}>Descartar</Button>
+            <Button size="sm" aria-label="Guardar observaciones de la cita" loading={saveNotes.isPending} onClick={() => saveNotes.mutate()}>Guardar</Button>
+          </div>}
+        </div>}
+      />
+
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-3 lg:gap-6">
         <div className="space-y-4 lg:col-span-2">
-          {/* Cliente + datos de la cita */}
-          <Card>
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="min-w-0">
-                <p className="text-xs uppercase tracking-wide text-white/40">
-                  Cliente
-                </p>
-                <h2 className="truncate text-xl font-semibold text-white">
-                  {head.data.customer_name ?? 'Sin cliente'}
-                </h2>
-                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-white/45">
-                  {head.data.customer_phone && (
-                    <span>{head.data.customer_phone}</span>
-                  )}
-                  {head.data.customer_email && (
-                    <span className="truncate">{head.data.customer_email}</span>
-                  )}
-                  <button
-                    onClick={() => setCustomerOpen(true)}
-                    className="flex items-center gap-1 font-medium text-gold-300 hover:underline"
-                  >
-                    <Pencil className="h-3 w-3" />
-                    {head.data.customer_id ? 'Editar datos' : 'Agregar cliente'}
-                  </button>
-                </div>
-              </div>
-              <div className="grid w-full grid-cols-2 gap-x-6 gap-y-2 text-sm sm:w-auto sm:flex sm:flex-wrap sm:gap-x-8 sm:gap-y-1">
-                <div>
-                  <span className="block text-xs text-white/40 sm:inline">
-                    Fecha{' '}
-                  </span>
-                  <span className="text-white first-letter:uppercase">
-                    <span className="sm:hidden">{fechaCorta}</span>
-                    <span className="hidden sm:inline">{fechaLarga}</span>
-                  </span>
-                </div>
-                <div>
-                  <span className="block text-xs text-white/40 sm:inline">
-                    Hora{' '}
-                  </span>
-                  <span className="text-white">
-                    {timeShort(head.data.start_at)} – {timeShort(head.data.end_at)}
-                  </span>
-                </div>
-                {reservedMinutes > 0 && (
-                  <div>
-                    <span className="block text-xs text-white/40 sm:inline">
-                      Duración{' '}
-                    </span>
-                    <span className="text-white">
-                      {fmtDuration(reservedMinutes)}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Datos del agendamiento del turno */}
-            <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 border-t border-white/10 pt-3 text-xs text-white/40">
-              <span>
-                Agendado el{' '}
-                <span className="text-white/70">
-                  {dateShort(createdIso)}
-                  {createdIso ? ` · ${timeShort(createdIso)}` : ''}
-                </span>
-              </span>
-              <span>
-                Agendado por{' '}
-                <span className="text-white/70">
-                  {head.data.created_by_name ?? 'Sistema'}
-                </span>
-              </span>
-            </div>
-
-            {/* Observaciones de la cita (lo que pidió el cliente, avisos…) */}
-            <div className="mt-3 border-t border-white/10 pt-3">
-              <label className="block">
-                <span className="mb-1 block text-xs font-medium text-white/60">
-                  Observaciones de la cita
-                </span>
-                <textarea
-                  value={notesValue}
-                  onChange={(e) => setNotesDraft(e.target.value)}
-                  rows={2}
-                  placeholder="Pedido del cliente, avisos para el equipo…"
-                  className="input-base w-full resize-y"
-                />
-              </label>
-              {notesDirty && (
-                <div className="mt-2 flex justify-end gap-2">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setNotesDraft(null)}
-                  >
-                    Descartar
-                  </Button>
-                  <Button
-                    size="sm"
-                    loading={saveNotes.isPending}
-                    onClick={() => saveNotes.mutate()}
-                  >
-                    Guardar observaciones
-                  </Button>
-                </div>
-              )}
-            </div>
-          </Card>
-
           {/* Detalle de venta */}
           <SaleItemsEditor
             items={withAssists}
@@ -2706,18 +2634,6 @@ function EditAppointment({ id }: { id: string }) {
             onRemoveAssist={removeAssist}
             onUpdateAssist={updateAssist}
           />
-
-          <CustomerCareNotes
-            allergies={head.data.customer_allergies}
-            hairNotes={head.data.customer_hair_notes}
-          />
-
-          {head.data.customer_id && (
-            <CustomerHistoryCard
-              history={customerHistory.data}
-              loading={customerHistory.isLoading}
-            />
-          )}
 
         </div>
 
@@ -2922,12 +2838,10 @@ function EditAppointment({ id }: { id: string }) {
             </div>
           </Card>
 
-          {paymentsList.length > 0 && (
-            <PaymentsHistoryCard
-              payments={paymentsList}
-              onVoid={(row) => voidPayment.mutate(row)}
-            />
-          )}
+          <PaymentsHistoryCard
+            payments={paymentsList}
+            onVoid={(row) => voidPayment.mutate(row)}
+          />
           </div>
         </div>
       </div>
@@ -2985,6 +2899,7 @@ function EditAppointment({ id }: { id: string }) {
 
       {customerOpen && (
         <ApptCustomerModal
+          maskContact={maskContact}
           appointmentId={id}
           orgId={orgId}
           customerId={head.data.customer_id}
@@ -3062,6 +2977,7 @@ function EditAppointment({ id }: { id: string }) {
  * crea uno y queda vinculado (el teléfono es único: se avisa si ya existe).
  */
 function ApptCustomerModal({
+  maskContact,
   appointmentId,
   orgId,
   customerId,
@@ -3076,6 +2992,7 @@ function ApptCustomerModal({
   onClose,
   onDone,
 }: {
+  maskContact: boolean;
   appointmentId: string;
   orgId: string;
   customerId: string | null;
@@ -3104,6 +3021,7 @@ function ApptCustomerModal({
   const [error, setError] = useState('');
   /** Ficha que ya tiene el número que se acaba de escribir. */
   const [owner, setOwner] = useState<Customer | null>(null);
+  const canManageClients = useSession((s) => hasPermission(s.user?.role, 'manage_clients'));
   const [mergeOpen, setMergeOpen] = useState(false);
 
   // Ficha completa del cliente de la cita: hace falta para combinar (el
@@ -3271,6 +3189,7 @@ function ApptCustomerModal({
       >
         <div className="space-y-4">
           <CustomerFields
+            maskContact={maskContact && !!customerId}
             draft={draft}
             set={set}
             notice={
@@ -3281,7 +3200,7 @@ function ApptCustomerModal({
                 // combinan. Sin ficha (cita importada sin cliente) no hay nada
                 // que combinar, se usa la que existe.
                 onMerge={
-                  customerId && current.data
+                  canManageClients && customerId && current.data
                     ? () => setMergeOpen(true)
                     : undefined
                 }

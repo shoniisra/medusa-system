@@ -97,6 +97,7 @@ export function PaymentsHistoryCard({
         title="Cobros"
         subtitle="Abonos y pagos vinculados a esta cita"
       />
+      {payments.length === 0 && <p className="text-xs text-white/40">Todavía no hay abonos ni pagos registrados.</p>}
       <ul className="divide-y divide-white/5">
         {active.map((p) => rowContent(p, true))}
         {voided.map((p) => rowContent(p, false))}

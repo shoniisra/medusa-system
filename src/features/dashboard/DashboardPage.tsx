@@ -36,6 +36,7 @@ import type { NextAppointment } from './useDashboardMetrics';
 import type { AppointmentStatus } from '@/types';
 import { startAttention } from '@/features/calendar/appointmentBoard';
 import { customerNameSql } from '@/features/clients/customerNameSql';
+import { hasPermission } from '@/config/permissions';
 
 const SECTION_KEYS = [
   'stats',
@@ -87,6 +88,12 @@ function useSectionOrder() {
 }
 
 export function DashboardPage() {
+  const role = useSession((s) => s.user?.role);
+  if (!hasPermission(role, 'view_metrics')) return null;
+  return <ManagerDashboardContent />;
+}
+
+function ManagerDashboardContent() {
   const branchName = useSession((s) => s.branch?.name ?? '');
   const navigate = useNavigate();
   const qc = useQueryClient();

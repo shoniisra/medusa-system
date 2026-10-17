@@ -1,3 +1,4 @@
+import { maskCustomerPhone, maskCustomerEmail } from './contactPrivacy';
 import type { ReactNode } from 'react';
 import { DateInput, EmailInput, Input, PhoneInput } from '@/components/ui';
 
@@ -38,10 +39,12 @@ export function CustomerFields({
   draft,
   set,
   notice,
+  maskContact = false,
 }: {
   draft: CustomerDraft;
   set: <K extends keyof CustomerDraft>(key: K, value: CustomerDraft[K]) => void;
   notice?: ReactNode;
+  maskContact?: boolean;
 }) {
   return (
     <>
@@ -77,17 +80,17 @@ export function CustomerFields({
           onChange={(e) => set('importedName', e.target.value)}
         />
       </div>
-      <PhoneInput
-        label="WhatsApp"
-        value={draft.phone}
-        onChange={(v) => set('phone', v)}
-      />
+      {maskContact ? (
+        <Input label="WhatsApp" readOnly value={maskCustomerPhone(draft.phone)} />
+      ) : (
+        <PhoneInput label="WhatsApp" value={draft.phone} onChange={(v) => set('phone', v)} />
+      )}
       {notice}
-      <EmailInput
-        label="Email"
-        value={draft.email}
-        onChange={(v) => set('email', v)}
-      />
+      {maskContact ? (
+        <Input label="Email" readOnly value={maskCustomerEmail(draft.email)} />
+      ) : (
+        <EmailInput label="Email" value={draft.email} onChange={(v) => set('email', v)} />
+      )}
       <Input
         label="Cédula o RUC"
         placeholder="Opcional, para factura"

@@ -1,8 +1,9 @@
+import { maskCustomerPhone } from '@/features/clients/contactPrivacy';
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { MessageCircle, Check, BellRing, Cake } from 'lucide-react';
 import { query } from '@/lib/db';
-import { useBranchId, useOrgId } from '@/store/session';
+import { useBranchId, useOrgId, useSession } from '@/store/session';
 import { timeShort, dateShort } from '@/lib/format';
 import {
   daysUntilBirthday,
@@ -76,6 +77,7 @@ function loadReminded(key: string): Set<string> {
 }
 
 export function RemindersPage() {
+  const staffContacts = useSession((s) => s.user?.role === 'staff');
   const branchId = useBranchId();
   const day = tomorrowYmd();
   const storeKey = `reminded:${day}`;
@@ -183,26 +185,30 @@ export function RemindersPage() {
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     <Badge tone={meta.tone}>{meta.label}</Badge>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={!isValidPhone(a.phone)}
-                      title={
-                        isValidPhone(a.phone)
-                          ? 'Abrir WhatsApp Web con el recordatorio'
-                          : 'Número de teléfono no válido'
-                      }
-                      className="text-emerald-300"
-                      onClick={() =>
-                        window.open(
-                          waReminder(a.phone!, a.customer_name, a.start_at),
-                          '_blank',
-                          'noopener,noreferrer',
-                        )
-                      }
-                    >
-                      <MessageCircle className="h-4 w-4" /> Recordar
-                    </Button>
+                    {staffContacts ? (
+                      <span className="text-xs text-white/40">{maskCustomerPhone(a.phone)}</span>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!isValidPhone(a.phone)}
+                        title={
+                          isValidPhone(a.phone)
+                            ? 'Abrir WhatsApp Web con el recordatorio'
+                            : 'Número de teléfono no válido'
+                        }
+                        className="text-emerald-300"
+                        onClick={() =>
+                          window.open(
+                            waReminder(a.phone!, a.customer_name, a.start_at),
+                            '_blank',
+                            'noopener,noreferrer',
+                          )
+                        }
+                      >
+                        <MessageCircle className="h-4 w-4" /> Recordar
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant={done ? 'gold' : 'ghost'}
@@ -237,6 +243,7 @@ const BIRTHDAY_HORIZON = 30;
 
 /** Cumpleañeros próximos: equipo y clientes, ordenados por cercanía. */
 function UpcomingBirthdays() {
+  const staffContacts = useSession((s) => s.user?.role === 'staff');
   const orgId = useOrgId();
   const now = new Date();
   // Ventana de 30 días: nunca cruza más de dos meses.
@@ -315,26 +322,30 @@ function UpcomingBirthdays() {
                     </p>
                   </div>
                 </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={!isValidPhone(b.phone)}
-                  title={
-                    isValidPhone(b.phone)
-                      ? 'Abrir WhatsApp Web con el saludo'
-                      : 'Número de teléfono no válido'
-                  }
-                  className="shrink-0 text-emerald-300"
-                  onClick={() =>
-                    window.open(
-                      waBirthday(b.phone!, b.name),
-                      '_blank',
-                      'noopener,noreferrer',
-                    )
-                  }
-                >
-                  <MessageCircle className="h-4 w-4" /> Saludar
-                </Button>
+                {staffContacts && b.kind === 'client' ? (
+                  <span className="text-xs text-white/40">{maskCustomerPhone(b.phone)}</span>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!isValidPhone(b.phone)}
+                    title={
+                      isValidPhone(b.phone)
+                        ? 'Abrir WhatsApp Web con el saludo'
+                        : 'Número de teléfono no válido'
+                    }
+                    className="shrink-0 text-emerald-300"
+                    onClick={() =>
+                      window.open(
+                        waBirthday(b.phone!, b.name),
+                        '_blank',
+                        'noopener,noreferrer',
+                      )
+                    }
+                  >
+                    <MessageCircle className="h-4 w-4" /> Saludar
+                  </Button>
+                )}
               </li>
             );
           })}

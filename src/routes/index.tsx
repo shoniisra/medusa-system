@@ -104,8 +104,13 @@ export const router = createBrowserRouter([
           { path: `${ROUTES.appointment}/:id`, element: lazyRoute(<AppointmentPage />) },
           { path: ROUTES.tasks, element: lazyRoute(<TasksPage />) },
           { path: ROUTES.reminders, element: lazyRoute(<RemindersPage />) },
-          { path: ROUTES.clients, element: lazyRoute(<ClientsPage />) },
-          { path: `${ROUTES.client}/:id`, element: lazyRoute(<ClientDetailPage />) },
+          {
+            element: <RequirePermission permission="manage_clients" />,
+            children: [
+              { path: ROUTES.clients, element: lazyRoute(<ClientsPage />) },
+              { path: `${ROUTES.client}/:id`, element: lazyRoute(<ClientDetailPage />) },
+            ],
+          },
 
           // POS: requiere use_pos.
           {

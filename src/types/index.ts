@@ -177,6 +177,21 @@ export interface CustomerColorRecord {
   created_at: ISODateTime;
 }
 
+/** Registro técnico de manicura de un cliente, conservado entre visitas. */
+export interface CustomerManicureRecord {
+  id: ID;
+  organization_id: ID;
+  customer_id: ID;
+  record_date: ISODate;
+  technique: string | null;
+  products: string | null;
+  shade: string | null;
+  notes: string | null;
+  staff_member_id: ID | null;
+  created_by: ID | null;
+  created_at: ISODateTime;
+}
+
 /** Tipo de movimiento de saldo a favor del cliente. */
 export type CreditKind = 'load' | 'redeem' | 'adjustment' | 'refund';
 

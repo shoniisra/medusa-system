@@ -22,6 +22,7 @@ const TABLE_LABELS: Record<string, [string, string]> = {
   appointment: ['cita', 'citas'],
   sale: ['venta', 'ventas'],
   customer_color_record: ['ficha de color', 'fichas de color'],
+  customer_manicure_record: ['proceso de manicura', 'procesos de manicura'],
   invoice_request: ['solicitud de factura', 'solicitudes de factura'],
   invoice: ['factura', 'facturas'],
   payment: ['pago', 'pagos'],

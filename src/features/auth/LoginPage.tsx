@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Scissors, Eye, EyeOff } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { query, queryOne } from '@/lib/db';
-import { verifyPassword } from '@/lib/auth';
+import { authenticateUser } from './authenticateUser';
 import { useSession } from '@/store/session';
 import { APP_NAME, ROUTES } from '@/config/constants';
 import { Button, Card, Select, Input } from '@/components/ui';
@@ -69,6 +69,7 @@ export function LoginPage() {
   /* eslint-enable react-hooks/set-state-in-effect */
 
   async function handleEnter() {
+    if (loading) return;
     if (!orgId || !userId) {
       setError('Seleccioná un usuario.');
       return;
@@ -95,50 +96,18 @@ export function LoginPage() {
         return;
       }
 
-      if (import.meta.env.DEV) {
-        // En dev no hay Worker: validamos el hash directo contra la DB.
-        const row = await queryOne<{ password_hash: string | null }>(
-          `SELECT password_hash FROM app_user WHERE id = ? AND organization_id = ? AND active = 1`,
-          [userId, orgId],
-        );
-        if (!row?.password_hash) {
-          setError('Usuario sin token configurado.');
-          return;
-        }
-        const ok = await verifyPassword(password, row.password_hash);
-        if (!ok) {
-          setError('Token incorrecto.');
-          return;
-        }
-      } else {
-        const res = await fetch('/api/login', {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            user_id: userId,
-            org_id: orgId,
-            branch_id: branchId,
-            password,
-          }),
-        });
-        if (!res.ok) {
-          const data = (await res.json().catch(() => ({}))) as { error?: string };
-          setError(data.error ?? 'No se pudo iniciar sesión.');
-          return;
-        }
-      }
+      const authenticatedUser = await authenticateUser(userId, orgId, branchId, password);
 
       // Hidratar sesión local.
       const branch = await queryOne<Branch>(
-        `SELECT * FROM branch WHERE id = ? AND active = 1`,
-        [branchId],
+        `SELECT * FROM branch WHERE id = ? AND organization_id = ? AND active = 1`,
+        [branchId, orgId],
       );
-      if (!org || !selectedUser || !branch) {
+      if (!org || !branch) {
         setError('Error al cargar los datos de sesión.');
         return;
       }
-      setSession({ organization: org, user: selectedUser, branch });
+      setSession({ organization: org, user: authenticatedUser, branch });
       navigate(ROUTES.dashboard, { replace: true });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo conectar.');
@@ -165,7 +134,7 @@ export function LoginPage() {
             label="Usuario"
             value={userId}
             onChange={(e) => setUserId(e.target.value)}
-            disabled={!orgId || users.isLoading}
+            disabled={loading || !orgId || users.isLoading}
           >
             <option value="">Seleccionar…</option>
             {users.data?.map((u) => (
@@ -188,7 +157,7 @@ export function LoginPage() {
               inputMode="numeric"
               maxLength={4}
               autoComplete="one-time-code"
-              disabled={!userId}
+              disabled={loading || !userId}
             />
             <button
               type="button"

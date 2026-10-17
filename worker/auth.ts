@@ -12,7 +12,7 @@ function b64(buf: ArrayBuffer): string {
   return btoa(String.fromCharCode(...new Uint8Array(buf)));
 }
 
-function fromB64(s: string): Uint8Array {
+function fromB64(s: string) {
   return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 }
 

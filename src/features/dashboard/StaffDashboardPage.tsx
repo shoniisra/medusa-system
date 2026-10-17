@@ -1,3 +1,4 @@
+import { maskCustomerPhone } from '@/features/clients/contactPrivacy';
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -263,16 +264,7 @@ export function StaffDashboardPage() {
                         onClick={(e) => e.stopPropagation()}
                       >
                         {a.phone && (
-                          <a
-                            href={waReminder(a.phone, a.customer_name, a.start_at)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            title="Recordar por WhatsApp"
-                            aria-label="Recordar por WhatsApp"
-                            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-emerald-400/25 text-emerald-400 hover:bg-emerald-400/10"
-                          >
-                            <MessageCircle className="h-4 w-4" />
-                          </a>
+                          <span className="text-xs text-white/40">{maskCustomerPhone(a.phone)}</span>
                         )}
                         <Button
                           size="sm"
@@ -452,16 +444,4 @@ function apptDay(iso: string): string {
   return d
     .toLocaleDateString('es-EC', { day: 'numeric', month: 'short' })
     .replace('.', '');
-}
-
-function waReminder(
-  phone: string,
-  name: string | null,
-  startAt: string,
-): string {
-  const saludo = name ? `Hola ${name.split(' ')[0]}` : 'Hola';
-  const text = `${saludo} 👋 Te recordamos tu cita en Medusa Estudio el ${dateShort(
-    startAt,
-  )} a las ${timeShort(startAt)}. ¿La confirmás? 💇`;
-  return `https://wa.me/${normalizePhone(phone)}?text=${encodeURIComponent(text)}`;
 }

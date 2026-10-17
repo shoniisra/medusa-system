@@ -1,3 +1,4 @@
+import { ColorRecordsCard, ManicureRecordsCard } from './ColorRecordsCard';
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -5,8 +6,6 @@ import {
   Users,
   UserPlus,
   Search,
-  Trash2,
-  Plus,
   Palette,
   Scissors,
   TriangleAlert,
@@ -35,19 +34,16 @@ import {
   timeShort,
   customerName,
   fullName,
-  todayISO,
   toLocalNaive,
 } from '@/lib/format';
 import { customerHaystack } from './customerSearch';
-import { useOrgId, useSession } from '@/store/session';
+import { useOrgId } from '@/store/session';
 import { useStaff } from '@/features/pos/useCatalog';
 import {
   Card,
   CardHeader,
   StatCard,
   Button,
-  DateInput,
-  Input,
   Select,
   Modal,
   Badge,
@@ -61,7 +57,7 @@ import { normalizeEmail, validateEmail } from '@/lib/email';
 import { findCustomerByPhone } from './customerLookup';
 import { CustomerCreditCard } from './CustomerCreditCard';
 import { DuplicatePhoneNotice } from './DuplicatePhoneNotice';
-import type { Customer, CustomerColorRecord } from '@/types';
+import type { Customer } from '@/types';
 import {
   duplicateGroups,
   fillCustomerGaps,
@@ -959,6 +955,7 @@ function ClientDetail({ customer }: { customer: Customer }) {
           )}
 
           <ColorRecordsCard customerId={id} />
+          <ManicureRecordsCard customerId={id} />
 
           <CustomerCreditCard customerId={id} customerLabel={customerName(customer)} />
 
@@ -1379,209 +1376,6 @@ function ClientForm({
 }
 
 /* ─────────────────────────── Procesos de color ─────────────────────────── */
-
-function ColorRecordsCard({ customerId }: { customerId: string }) {
-  const orgId = useOrgId();
-  const userId = useSession((s) => s.user?.id ?? null);
-  const staff = useStaff();
-  const qc = useQueryClient();
-  const toast = useToast();
-  const [open, setOpen] = useState(false);
-
-  const records = useQuery({
-    queryKey: ['color-records', customerId],
-    enabled: !!customerId,
-    queryFn: () =>
-      query<CustomerColorRecord>(
-        `SELECT * FROM customer_color_record
-          WHERE customer_id = ? ORDER BY record_date DESC, created_at DESC`,
-        [customerId],
-      ),
-  });
-
-  const [date, setDate] = useState(todayISO());
-  const [formula, setFormula] = useState('');
-  const [brand, setBrand] = useState('');
-  const [developer, setDeveloper] = useState('');
-  const [result, setResult] = useState('');
-  const [notes, setNotes] = useState('');
-  const [staffId, setStaffId] = useState('');
-
-  const add = useMutation({
-    mutationFn: () =>
-      execute(
-        `INSERT INTO customer_color_record
-           (id, organization_id, customer_id, record_date, formula, brand,
-            developer, result, notes, staff_member_id, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          genId(),
-          orgId,
-          customerId,
-          date,
-          formula.trim() || null,
-          brand.trim() || null,
-          developer.trim() || null,
-          result.trim() || null,
-          notes.trim() || null,
-          staffId || null,
-          userId,
-        ],
-      ),
-    onSuccess: () => {
-      setFormula('');
-      setBrand('');
-      setDeveloper('');
-      setResult('');
-      setNotes('');
-      setStaffId('');
-      setDate(todayISO());
-      setOpen(false);
-      void qc.invalidateQueries({ queryKey: ['color-records', customerId] });
-      toast.success('Proceso de color registrado');
-    },
-    onError: (e: Error) => toast.error('No se pudo registrar', e.message),
-  });
-
-  const del = useMutation({
-    mutationFn: (recId: string) =>
-      execute('DELETE FROM customer_color_record WHERE id = ?', [recId]),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['color-records', customerId] });
-      toast.info('Proceso de color eliminado');
-    },
-    onError: (e: Error) => toast.error('No se pudo eliminar', e.message),
-  });
-
-  const staffName = (sid: string | null) => {
-    const s = staff.data?.find((x) => x.id === sid);
-    return s ? fullName(s.first_name, s.last_name) : null;
-  };
-
-  return (
-    <Card>
-      <CardHeader
-        title="Procesos de color"
-        subtitle="Registro capilar: fórmulas, marcas y resultados"
-        action={
-          <Button size="sm" onClick={() => setOpen(true)}>
-            <Plus className="h-4 w-4" /> Registrar
-          </Button>
-        }
-      />
-      {records.data && records.data.length > 0 ? (
-        <ul className="space-y-3">
-          {records.data.map((r) => (
-            <li
-              key={r.id}
-              className="rounded-xl border border-white/10 bg-white/[0.02] p-3"
-            >
-              <div className="mb-1 flex items-center justify-between">
-                <p className="flex items-center gap-1.5 text-sm font-medium text-gold-200">
-                  <Palette className="h-4 w-4" />
-                  {dateShort(r.record_date)}
-                  {staffName(r.staff_member_id) && (
-                    <span className="text-xs font-normal text-white/40">
-                      · {staffName(r.staff_member_id)}
-                    </span>
-                  )}
-                </p>
-                <button
-                  onClick={() => del.mutate(r.id)}
-                  className="text-white/30 hover:text-danger"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-              {r.formula && (
-                <p className="text-sm text-white/80">
-                  <span className="text-white/40">Fórmula:</span> {r.formula}
-                </p>
-              )}
-              <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-white/50">
-                {r.brand && <span>Marca: {r.brand}</span>}
-                {r.developer && <span>Oxidante: {r.developer}</span>}
-                {r.result && <span>Resultado: {r.result}</span>}
-              </div>
-              {r.notes && (
-                <p className="mt-1 text-xs text-white/50">{r.notes}</p>
-              )}
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <EmptyState
-          icon={Palette}
-          title="Sin procesos de color"
-          description="Registrá la fórmula y el resultado de cada color."
-        />
-      )}
-
-      <Modal open={open} onClose={() => setOpen(false)} title="Registrar color">
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <DateInput
-              label="Fecha"
-              value={date}
-              onChange={setDate}
-              clearable={false}
-            />
-            <Select
-              label="Estilista"
-              value={staffId}
-              onChange={(e) => setStaffId(e.target.value)}
-            >
-              <option value="">Sin asignar</option>
-              {staff.data?.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {fullName(s.first_name, s.last_name)}
-                </option>
-              ))}
-            </Select>
-          </div>
-          <TextArea
-            label="Fórmula"
-            value={formula}
-            onChange={setFormula}
-            placeholder="Ej. 7.1 + 60ml oxidante 20vol, 30 min"
-          />
-          <div className="grid grid-cols-2 gap-3">
-            <Input
-              label="Marca"
-              value={brand}
-              onChange={(e) => setBrand(e.target.value)}
-            />
-            <Input
-              label="Oxidante"
-              value={developer}
-              onChange={(e) => setDeveloper(e.target.value)}
-              placeholder="10/20/30 vol"
-            />
-          </div>
-          <Input
-            label="Resultado"
-            value={result}
-            onChange={(e) => setResult(e.target.value)}
-            placeholder="Tono obtenido"
-          />
-          <TextArea
-            label="Notas"
-            value={notes}
-            onChange={setNotes}
-            placeholder="Observaciones, reacción, próximos pasos…"
-          />
-          <Button
-            className="w-full"
-            loading={add.isPending}
-            onClick={() => add.mutate()}
-          >
-            Guardar registro
-          </Button>
-        </div>
-      </Modal>
-    </Card>
-  );
-}
 
 /* ─────────────────────────────── Auxiliares ─────────────────────────────── */
 

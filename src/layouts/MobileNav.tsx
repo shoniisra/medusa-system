@@ -59,7 +59,9 @@ export function MobileNav() {
     ...(can("view_finance")
       ? [{ to: ROUTES.cashflow, label: "Finanzas", icon: Wallet }]
       : []),
-    { to: ROUTES.clients, label: "Clientes", icon: Contact },
+    ...(can("manage_clients")
+      ? [{ to: ROUTES.clients, label: "Clientes", icon: Contact }]
+      : []),
     { to: ROUTES.reminders, label: "Recordatorios", icon: BellRing },
     ...(can("view_staff_finance")
       ? [{ to: ROUTES.staff, label: "Equipo", icon: Users }]

@@ -1,3 +1,5 @@
+import { useSession } from '@/store/session';
+import { maskCustomerPhone, maskCustomerEmail } from './contactPrivacy';
 import type { ReactNode, Ref } from 'react';
 import { Search, UserPlus, UserRound, X } from 'lucide-react';
 import { customerName, fullName } from '@/lib/format';
@@ -30,6 +32,7 @@ export function CustomerPicker({
   renameTo,
   useExistingBusy,
   searchPlaceholder,
+  revealSelectedContact = false,
   phoneUseHint,
   emptyHint,
   newClientBefore,
@@ -55,6 +58,7 @@ export function CustomerPicker({
   renameTo: string | null;
   useExistingBusy: boolean;
   searchPlaceholder: string;
+  revealSelectedContact?: boolean;
   phoneUseHint: string;
   emptyHint?: ReactNode;
   newClientBefore?: ReactNode;
@@ -68,6 +72,7 @@ export function CustomerPicker({
   onClear: () => void;
   onUseExisting: () => void;
 }) {
+  const maskContacts = useSession((s) => s.user?.role === 'staff');
   const hasClient = !!customerId || newClient;
   const displayName = newClient
     ? fullName(firstName, lastName) || 'Cliente nuevo'
@@ -76,7 +81,13 @@ export function CustomerPicker({
       : '';
   const subline = newClient
     ? 'Se creará como cliente nuevo'
-    : selectedCustomer?.phone || 'Sin WhatsApp';
+    : (maskContacts && !revealSelectedContact
+      ? maskCustomerPhone(selectedCustomer?.phone)
+      : selectedCustomer?.phone) || 'Sin WhatsApp';
+
+  const selectedEmail = maskContacts && !revealSelectedContact
+    ? maskCustomerEmail(selectedCustomer?.email)
+    : selectedCustomer?.email;
 
   if (hasClient) {
     return (
@@ -89,6 +100,7 @@ export function CustomerPicker({
             <div className="min-w-0">
               <p className="truncate text-sm font-medium text-white">{displayName}</p>
               <p className="truncate text-xs text-white/40">{subline}</p>
+              {!newClient && selectedEmail && <p className="truncate text-xs text-white/40">{selectedEmail}</p>}
             </div>
           </div>
           <button
@@ -152,9 +164,10 @@ export function CustomerPicker({
                 className="flex w-full items-center justify-between gap-3 px-3 py-3.5 text-left hover:bg-white/10"
               >
                 <span className="truncate text-sm text-white/90">{customerName(c)}</span>
-                {c.phone && (
-                  <span className="shrink-0 text-xs text-white/40">{c.phone}</span>
-                )}
+                <span className="shrink-0 text-right text-xs text-white/40">
+                  {c.phone && <span className="block">{maskContacts ? maskCustomerPhone(c.phone) : c.phone}</span>}
+                  {c.email && <span className="block">{maskContacts ? maskCustomerEmail(c.email) : c.email}</span>}
+                </span>
               </button>
             </li>
           ))}
