@@ -20,6 +20,10 @@ Las fichas de cita, venta y cliente incluyen «Ver auditoría» para abrir el
 historial filtrado de ese registro. Cobros y transacciones se consultan desde
 el módulo de auditoría.
 
+Si la cuenta admin no tenía token, una gerente puede entrar a **Equipo →
+Miembros del equipo → Cuentas pendientes de token** y asignarle uno de cuatro
+dígitos. Esa acción no habilita la edición de roles para gerencia.
+
 El login siempre emite una cookie HttpOnly firmada. Se recomienda configurar
 `SESSION_SECRET` como secreto independiente. Para instalaciones existentes que
 no lo tienen, se usa una clave de firma con dominio separado basada en

@@ -34,6 +34,7 @@ import { genId } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { birthdayDayMonth } from '@/lib/date';
 import type { Service, UserRole } from '@/types';
+import { PendingAccessPanel } from './PendingAccessPanel';
 
 /* ─── Constantes ─────────────────────────────────────────────────────────── */
 
@@ -647,8 +648,8 @@ function PasswordForm({ userId, onDone }: { userId: string; onDone: () => void }
   const { show } = useToast();
 
   async function save() {
-    if (pw.length < 4) {
-      show({ title: 'Mínimo 4 caracteres', tone: 'danger' });
+    if (!/^\d{4}$/.test(pw)) {
+      show({ title: 'Ingresá un token de 4 dígitos', tone: 'danger' });
       return;
     }
     if (pw !== confirm) {
@@ -667,17 +668,21 @@ function PasswordForm({ userId, onDone }: { userId: string; onDone: () => void }
   return (
     <div className="space-y-2 rounded-xl border border-gold/20 bg-gold/5 p-3">
       <Input
-        label="Nueva contraseña (mín. 4 caracteres)"
+        label="Nuevo token (4 dígitos)"
         type="password"
         value={pw}
-        onChange={(e) => setPw(e.target.value)}
+        onChange={(e) => setPw(e.target.value.replace(/\D/g, '').slice(0, 4))}
+        inputMode="numeric"
+        maxLength={4}
         autoComplete="new-password"
       />
       <Input
         label="Confirmar"
         type="password"
         value={confirm}
-        onChange={(e) => setConfirm(e.target.value)}
+        onChange={(e) => setConfirm(e.target.value.replace(/\D/g, '').slice(0, 4))}
+        inputMode="numeric"
+        maxLength={4}
         onKeyDown={(e) => e.key === 'Enter' && void save()}
         autoComplete="new-password"
       />
@@ -1047,6 +1052,7 @@ function SpecialtiesPanel({
 /* ─── StaffTeamPage ───────────────────────────────────────────────────────── */
 
 export function StaffTeamPage() {
+  const [accessUserId, setAccessUserId] = useState<string | null>(null);
   const [editStaff, setEditStaff] = useState<StaffWithUser | null | 'new'>(null);
   const [specialtiesStaff, setSpecialtiesStaff] = useState<StaffWithUser | null>(null);
 
@@ -1075,6 +1081,14 @@ export function StaffTeamPage() {
           </Button>
         )}
       </div>
+
+      <PendingAccessPanel role={role} accounts={staffList.flatMap((staff) => staff.user_id ? [{
+        userId: staff.user_id, name: [staff.first_name, staff.last_name].filter(Boolean).join(' '), hasPassword: staff.has_password === 1,
+      }] : [])} onSelect={setAccessUserId} />
+
+      {role === 'manager' && accessUserId && <Modal open onClose={() => setAccessUserId(null)} title="Asignar token de acceso">
+        <PasswordForm userId={accessUserId} onDone={() => setAccessUserId(null)} />
+      </Modal>}
 
       {/* Tabla */}
       {isLoading ? (
