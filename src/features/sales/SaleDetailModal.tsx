@@ -8,7 +8,7 @@ import { invalidateFinance } from '@/lib/queryClient';
 import { ROUTES } from '@/config/constants';
 import { useBranchId } from '@/store/session';
 import { Badge, Modal, Select, useToast } from '@/components/ui';
-import { useStaff } from '@/features/pos/useCatalog';
+import { useStaff, useAssignableStaff } from '@/features/pos/useCatalog';
 import { customerNameSql } from '@/features/clients/customerNameSql';
 import { commissionForItem, loadCommissionRules } from '@/features/pos/createSale';
 import type { ParticipationRole, SaleStatus } from '@/types';
@@ -154,6 +154,7 @@ export function SaleDetailModal({
   const navigate = useNavigate();
   const branchId = useBranchId();
   const staffList = useStaff();
+  const assignableStaff = useAssignableStaff();
 
   const data = useQuery({
     queryKey: ['sale-detail', saleId, appointmentId],
@@ -322,7 +323,7 @@ export function SaleDetailModal({
                             label="Sin colaboradora"
                             value=""
                             disabled={!editable || changeStaff.isPending}
-                            staff={staffList.data ?? []}
+                            staff={assignableStaff.data ?? []}
                             onChange={(staffId) =>
                               changeStaff.mutate({ item: it, row: null, staffId })
                             }
@@ -335,7 +336,7 @@ export function SaleDetailModal({
                               value={r.staff_member_id}
                               hint={`Comisión ${money(r.commission_amount)}`}
                               disabled={!editable || changeStaff.isPending}
-                              staff={staffList.data ?? []}
+                              staff={assignableStaff.data ?? []}
                               fallbackName={staffName(r.staff_member_id)}
                               onChange={(staffId) =>
                                 changeStaff.mutate({ item: it, row: r, staffId })

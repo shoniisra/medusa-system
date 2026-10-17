@@ -61,7 +61,7 @@ import {
   useCustomers,
   useServices,
   useProducts,
-  useStaff,
+  useAssignableStaff,
   useAssistTypes,
 } from '@/features/pos/useCatalog';
 import { useCategorySkills } from '@/features/staff/useCategorySkills';
@@ -294,7 +294,7 @@ function NewAppointment() {
   const qc = useQueryClient();
   const [params] = useSearchParams();
 
-  const staff = useStaff();
+  const staff = useAssignableStaff();
   // Ausencias/cierres para respetar vacaciones, permisos y días cerrados.
   const timeOff = useTimeOff();
 
@@ -2119,7 +2119,7 @@ function EditAppointment({ id }: { id: string }) {
   const qc = useQueryClient();
   const services = useServices();
   const products = useProducts();
-  const staff = useStaff();
+  const staff = useAssignableStaff();
   const assistTypes = useAssistTypes();
 
   // Volver a la pantalla de origen (tareas, agenda, dashboard, clientes…). Si se

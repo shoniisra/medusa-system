@@ -285,6 +285,8 @@ function useToggleCategory() {
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['staff-categories-all', orgId] });
+      void qc.invalidateQueries({ queryKey: ['assignable-staff', orgId] });
+      void qc.invalidateQueries({ queryKey: ['staff-category-skills', orgId] });
     },
   });
 }
@@ -422,6 +424,8 @@ function useRemoveExclusion() {
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['staff-exclusions-all', orgId] });
+      void qc.invalidateQueries({ queryKey: ['assignable-staff', orgId] });
+      void qc.invalidateQueries({ queryKey: ['staff-category-skills', orgId] });
     },
   });
 }
@@ -457,6 +461,8 @@ function useAddExclusion() {
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['staff-exclusions-all', orgId] });
+      void qc.invalidateQueries({ queryKey: ['assignable-staff', orgId] });
+      void qc.invalidateQueries({ queryKey: ['staff-category-skills', orgId] });
     },
   });
 }

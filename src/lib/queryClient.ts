@@ -103,6 +103,8 @@ export function invalidateFinance(qc: QueryClient, branchId?: string): void {
     ['cash-expected'],
     ['cash-carryover'],
     ['commission-balance'],
+    ['staff-movements'],
+    ['team-activity'],
     ['payable-summary'],
     ['sales'],
   ];

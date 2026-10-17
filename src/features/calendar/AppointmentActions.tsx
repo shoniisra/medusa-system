@@ -28,7 +28,7 @@ import {
   Select,
   useToast,
 } from '@/components/ui';
-import { useStaff } from '@/features/pos/useCatalog';
+import { useAssignableStaff } from '@/features/pos/useCatalog';
 import { AppointmentCustomerExtras, CustomerCareNotes } from './CustomerHistoryCard';
 import type { AppointmentStatus } from '@/types';
 import { isNoCharge, isOverdue, ymd } from './appointmentBoard';
@@ -103,7 +103,7 @@ export function AppointmentActionsModal({
 }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const staff = useStaff();
+  const staff = useAssignableStaff();
   const toast = useToast();
 
   const [mode, setMode] = useState<Mode>('menu');

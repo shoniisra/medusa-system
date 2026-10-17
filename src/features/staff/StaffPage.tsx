@@ -5,7 +5,6 @@ import {
   Users,
   Plus,
   HandCoins,
-  Scissors,
   Scale,
   CalendarOff,
   ChevronRight,
@@ -24,7 +23,10 @@ import {
   EmptyState,
   useToast,
 } from '@/components/ui';
-import { ymd } from '@/lib/date';
+import { activityTotals, groupingForPeriod, periodBounds, timestampBounds, weekBounds, type ActivityRow, type Period } from './activityModel';
+import { ActivityTable } from './ActivityTable';
+import { ADJUST_COMMISSION_MARK, COMMISSION_BALANCE_SQL, commissionBalance, type CommissionBalanceData, type CommissionBalanceRow } from './commissionBalanceModel';
+import { StaffMovements } from './StaffMovements';
 import { ROUTES } from '@/config/constants';
 import { useTimeOff } from './useTimeOff';
 import { invalidateFinance } from '@/lib/queryClient';
@@ -40,14 +42,6 @@ import type {
   CashSession,
   StaffMember,
 } from '@/types';
-
-/**
- * Marca de un ajuste de comisión (cuadre del saldo acumulado por colaborador).
- * Se guarda como `staff_advance` con esta marca en `notes`: descuenta del saldo
- * acumulado de comisiones pero NO genera egreso ni movimiento de caja, y se
- * excluye de la liquidación semanal (es solo un ajuste de arranque).
- */
-const ADJUST_COMMISSION_MARK = '[Ajuste de comisión]';
 
 /** Color de reserva para colaboradores sin color asignado. */
 const NO_COLOR = '#64748b';
@@ -140,9 +134,9 @@ export function StaffPage() {
   const [advanceOpen, setAdvanceOpen] = useState(false);
 
   return (
-    <div className="mx-auto max-w-[1500px] space-y-6">
+    <div className="mx-auto max-w-[1500px] space-y-3">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-white">Comisiones</h1>
+        <h1 className="text-xl font-semibold text-white">Comisiones</h1>
         <Button onClick={() => setAdvanceOpen(true)}>
           <HandCoins className="h-4 w-4" /> Adelanto
         </Button>
@@ -157,390 +151,171 @@ export function StaffPage() {
   );
 }
 
-interface DailyServiceRow {
-  staff_id: string;
-  staff_name: string;
-  service: string;
-  client: string | null;
-  /** Lo cobrado por el servicio (base de la comisión). */
-  amount: number;
-  /** La comisión que le corresponde al colaborador por ese servicio. */
-  commission: number;
-  /** 'primary' = responsable; 'assistant' = ayuda interna (no facturó). */
-  role: string;
-  /** Qué ayuda fue, cuando `role` es 'assistant'. */
-  assist_label: string | null;
-  sold_at: string;
-}
-
-type RangeKey = 'today' | 'yesterday' | 'week' | 'month';
-
-const RANGE_LABELS: Record<RangeKey, string> = {
-  today: 'Hoy',
-  yesterday: 'Ayer',
-  week: 'Esta semana',
-  month: 'Este mes',
-};
-
-/** Límites locales (YYYY-MM-DD, inclusivos) del rango elegido. */
-function rangeBounds(key: RangeKey): { from: string; to: string } {
-  const now = new Date();
-  if (key === 'today') return { from: todayISO(), to: todayISO() };
-  if (key === 'yesterday') {
-    const y = new Date(now);
-    y.setDate(now.getDate() - 1);
-    return { from: ymd(y), to: ymd(y) };
-  }
-  if (key === 'week') return weekBounds(now);
-  const first = new Date(now.getFullYear(), now.getMonth(), 1);
-  const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-  return { from: ymd(first), to: ymd(last) };
-}
-
-/**
- * Actividad del equipo en un rango (hoy, ayer, esta semana, este mes): cada
- * tarjeta muestra al colaborador y los servicios que facturó en ese rango, con
- * su total. Fusiona el equipo con los servicios del período.
- */
 function TeamActivitySection({ orgId }: { orgId: string }) {
   const branchId = useBranchId();
-  const [range, setRange] = useState<RangeKey>('today');
-  const { from, to } = useMemo(() => rangeBounds(range), [range]);
-  const multiDay = from !== to;
-
+  const [period, setPeriod] = useState<Period>('day');
+  const [anchor, setAnchor] = useState(todayISO);
+  const grouping = groupingForPeriod(period);
+  const [staffId, setStaffId] = useState('');
+  const [tab, setTab] = useState<'activity' | 'movements'>('activity');
+  const bounds = periodBounds(period, anchor);
+  const { from, to } = bounds ?? { from: '', to: '' };
+  const timestamps = bounds ? timestampBounds(from, to) : { start: '', end: '' };
   const staff = useQuery({
-    queryKey: ['staff', orgId],
-    enabled: !!orgId,
-    queryFn: () =>
-      query<StaffMember>(
-        'SELECT * FROM staff_member WHERE organization_id = ? ORDER BY active DESC, first_name',
-        [orgId],
-      ),
+    queryKey: ['staff', orgId], enabled: !!orgId,
+    queryFn: () => query<StaffMember>('SELECT * FROM staff_member WHERE organization_id = ? ORDER BY active DESC, first_name', [orgId]),
   });
-
   const rows = useQuery({
-    queryKey: ['team-activity', branchId, from, to],
-    enabled: !!branchId,
-    queryFn: () =>
-      query<DailyServiceRow>(
-        `SELECT sss.staff_member_id AS staff_id,
-                sm.first_name || CASE WHEN sm.last_name IS NOT NULL THEN ' ' || sm.last_name ELSE '' END AS staff_name,
-                si.description AS service,
-                c.first_name || CASE WHEN c.last_name IS NOT NULL THEN ' ' || c.last_name ELSE '' END AS client,
-                sss.basis_amount AS amount,
-                sss.commission_amount AS commission,
-                sss.participation_role AS role,
-                sss.assist_label AS assist_label,
-                s.sold_at AS sold_at
-           FROM sale s
-           JOIN sale_item si ON si.sale_id = s.id
-           JOIN sale_service_staff sss ON sss.sale_item_id = si.id
-           JOIN staff_member sm ON sm.id = sss.staff_member_id
-           LEFT JOIN customer c ON c.id = s.customer_id
-          WHERE s.branch_id = ?
-            AND s.status IN ('completed','partially_refunded')
-            AND date(s.sold_at) BETWEEN ? AND ?
-          ORDER BY sm.first_name, s.sold_at`,
-        [branchId, from, to],
-      ),
+    queryKey: ['team-activity', branchId, from, to, timestamps.start, timestamps.end],
+    enabled: !!branchId && !!bounds && tab === 'activity',
+    queryFn: () => query<ActivityRow>(
+      `SELECT sss.staff_member_id AS staff_id, si.description AS service,
+              c.first_name || CASE WHEN c.last_name IS NOT NULL THEN ' ' || c.last_name ELSE '' END AS client,
+              sss.basis_amount AS amount, sss.commission_amount AS commission,
+              sss.participation_role AS role, sss.assist_label,
+              s.sold_at, s.id AS sale_id, s.sale_number, s.appointment_id
+       FROM sale s JOIN sale_item si ON si.sale_id = s.id
+       JOIN sale_service_staff sss ON sss.sale_item_id = si.id
+       LEFT JOIN customer c ON c.id = s.customer_id
+       WHERE s.branch_id = ? AND s.status IN ('completed','partially_refunded')
+         AND datetime(s.sold_at) >= datetime(?) AND datetime(s.sold_at) < datetime(?)
+       ORDER BY s.sold_at DESC, s.id, si.id`,
+      [branchId, timestamps.start, timestamps.end]),
   });
-
-  /** Servicios del rango agrupados por colaborador, con ambos totales. */
   const byStaff = useMemo(() => {
-    const m = new Map<
-      string,
-      { items: DailyServiceRow[]; billed: number; commission: number }
-    >();
-    for (const r of rows.data ?? []) {
-      const g = m.get(r.staff_id) ?? { items: [], billed: 0, commission: 0 };
-      g.items.push(r);
-      // Una ayuda no facturó nada: solo reparte comisión, no suma a "Cobrado".
-      g.billed += r.role === 'assistant' ? 0 : (r.amount ?? 0);
-      g.commission += r.commission ?? 0;
-      m.set(r.staff_id, g);
+    const map = new Map<string, ActivityRow[]>();
+    for (const row of rows.data ?? []) {
+      const items = map.get(row.staff_id) ?? [];
+      items.push(row);
+      map.set(row.staff_id, items);
     }
-    return m;
+    return map;
   }, [rows.data]);
-
-  const members = staff.data ?? [];
+  const members = (staff.data ?? []).filter(s => !staffId || s.id === staffId);
+  const working = members.filter(s => byStaff.has(s.id));
+  const idle = members.filter(s => !byStaff.has(s.id));
+  const totals = activityTotals((rows.data ?? []).filter(row => !staffId || row.staff_id === staffId));
 
   return (
-    <Card>
-      <CardHeader
-        title="Actividad del equipo"
-        subtitle="Lo cobrado por cada servicio y la comisión del colaborador"
-        action={
-          <div className="flex flex-wrap gap-1 rounded-xl bg-white/5 p-1">
-            {(Object.keys(RANGE_LABELS) as RangeKey[]).map((k) => (
-              <button
-                key={k}
-                onClick={() => setRange(k)}
-                className={
-                  range === k
-                    ? 'rounded-lg bg-gradient-to-b from-gold-300 to-gold-500 px-3 py-1.5 text-xs font-semibold text-ink-950 shadow-gold-glow'
-                    : 'rounded-lg px-3 py-1.5 text-xs font-medium text-white/60 hover:bg-white/10 hover:text-white'
-                }
-              >
-                {RANGE_LABELS[k]}
-              </button>
-            ))}
-          </div>
-        }
-      />
-      {members.length > 0 ? (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {members.map((s) => {
-            const g = byStaff.get(s.id);
-            const c = s.color || NO_COLOR;
-            return (
-              <div
-                key={s.id}
-                className="flex flex-col rounded-xl border p-3"
-                style={{
-                  borderColor: tint(c, 0.4),
-                  borderLeftWidth: 3,
-                  borderLeftColor: c,
-                  background: `linear-gradient(135deg, ${tint(c, 0.18)}, transparent 65%)`,
-                }}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2.5">
-                    <StaffInitials
-                      first={s.first_name}
-                      last={s.last_name}
-                      color={s.color}
-                    />
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-white">
-                        {fullName(s.first_name, s.last_name)}
-                      </p>
-                      <p className="text-xs text-white/40">
-                        {s.employee_code ?? 'Sin código'} · Ciclo{' '}
-                        {s.default_pay_cycle}
-                      </p>
-                    </div>
-                  </div>
-                  <Badge tone={s.active ? 'success' : 'muted'}>
-                    {s.active ? 'Activo' : 'Inactivo'}
-                  </Badge>
-                </div>
-
-                {g ? (
-                  <div className="mt-3">
-                    {/* Cabecera de columnas */}
-                    <div
-                      className="flex items-center gap-2 border-t pb-1.5 pt-2 text-[11px] font-medium uppercase tracking-wide text-white/40"
-                      style={{ borderTopColor: tint(c, 0.35) }}
-                    >
-                      <span className="flex-1">Servicio</span>
-                      <span className="w-20 shrink-0 text-right">Cobrado</span>
-                      <span className="w-20 shrink-0 text-right">Comisión</span>
-                    </div>
-                    <ul className="divide-y divide-white/5">
-                      {g.items.map((it, i) => (
-                        <li
-                          key={i}
-                          className="flex items-center gap-2 py-1.5 text-sm"
-                        >
-                          <span className="flex min-w-0 flex-1 items-center gap-2">
-                            <span
-                              className="h-1.5 w-1.5 shrink-0 rounded-full"
-                              style={{ backgroundColor: c }}
-                            />
-                            <span className="min-w-0 truncate text-white/80">
-                              {it.role === 'assistant'
-                                ? `Ayuda: ${it.assist_label ?? 'asistencia'}`
-                                : it.service}
-                              <span className="text-white/40">
-                                {it.client ? ` · ${it.client}` : ''}
-                                {multiDay ? ` · ${dateShort(it.sold_at)}` : ''}
-                              </span>
-                            </span>
-                          </span>
-                          <span className="w-20 shrink-0 text-right text-white/70">
-                            {it.role === 'assistant' ? '—' : money(it.amount)}
-                          </span>
-                          <span
-                            className="w-20 shrink-0 text-right font-medium"
-                            style={{ color: c }}
-                          >
-                            {money(it.commission)}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                    {/* Dos totales */}
-                    <div
-                      className="flex items-center gap-2 border-t pt-2 text-sm font-semibold"
-                      style={{ borderTopColor: tint(c, 0.35) }}
-                    >
-                      <span className="flex-1 text-white/60">Total</span>
-                      <span className="w-20 shrink-0 text-right text-white">
-                        {money(g.billed)}
-                      </span>
-                      <span
-                        className="w-20 shrink-0 text-right"
-                        style={{ color: c }}
-                      >
-                        {money(g.commission)}
-                      </span>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="mt-3 flex items-center gap-1.5 text-xs text-white/40">
-                    <Scissors className="h-3.5 w-3.5" /> Sin servicios en el período
-                  </p>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        <EmptyState icon={Users} title="Sin colaboradores" />
-      )}
+    <Card className="!p-3 sm:!p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+      <h2 className="text-sm font-semibold text-white">Actividad del equipo</h2>
+      <div className="flex flex-wrap gap-1">
+        {(['activity', 'movements'] as const).map(value => <button key={value} type="button" aria-pressed={tab === value}
+          onClick={() => setTab(value)} className={`rounded-lg px-3 py-1.5 text-xs font-medium ${tab === value ? 'bg-gold-400 text-ink-950' : 'text-white/60 hover:bg-white/5'}`}>
+          {value === 'activity' ? 'Servicios y comisiones' : 'Adelantos y pagos'}
+        </button>)}
+      </div>
+      </div>
+      <div className="mb-2 grid gap-2 sm:grid-cols-3">
+        <Select label="Período" value={period} onChange={e => setPeriod(e.target.value as Period)}>
+          <option value="day">Día</option><option value="week">Semana</option><option value="month">Mes</option>
+        </Select>
+        <Input label={period === 'week' ? 'Fecha de la semana' : period === 'month' ? 'Fecha del mes' : 'Fecha'} type="date" value={anchor} onChange={e => setAnchor(e.target.value)} />
+        <Select label="Colaborador" value={staffId} onChange={e => setStaffId(e.target.value)}>
+          <option value="">Todo el equipo</option>{(staff.data ?? []).map(s => <option key={s.id} value={s.id}>{fullName(s.first_name, s.last_name)}</option>)}
+        </Select>
+      </div>
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-white/50">
+        <button type="button" className="rounded-lg border border-white/15 px-3 py-1.5 hover:bg-white/5" onClick={() => { setAnchor(todayISO()); setPeriod('day'); }}>Ir a hoy</button>
+        {bounds ? <span>{dateShort(from + 'T12:00:00')} {from !== to && `— ${dateShort(to + 'T12:00:00')}`}</span> : <span role="alert" className="text-danger">Selecciona una fecha válida.</span>}
+      </div>
+      {bounds && (tab === 'movements' ? <StaffMovements branchId={branchId} from={from} to={to} staffId={staffId} /> : (
+        rows.isError || staff.isError ? <p role="alert" className="text-sm text-danger">No se pudo cargar la actividad. <button onClick={() => { void rows.refetch(); void staff.refetch(); }} className="underline">Reintentar</button></p>
+          : rows.isPending || staff.isPending ? <p role="status" className="text-sm text-white/50">Cargando actividad…</p> : <>
+            <div className="mb-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-white/50">
+              <span>{working.length} colaboradores con actividad</span>
+              <span>Cobrado <strong className="text-white">{money(totals.billed)}</strong></span>
+              <span>Comisiones <strong className="text-gold-200">{money(totals.commission)}</strong></span>
+            </div>
+            <div className="grid items-start gap-3 xl:grid-cols-2">
+              {working.map(s => {
+                const items = byStaff.get(s.id)!;
+                const total = activityTotals(items);
+                return <details key={`${s.id}:${grouping}:${from}:${to}`} open className="rounded-xl border border-white/10" style={{ borderLeft: `3px solid ${s.color || NO_COLOR}` }}>
+                  <summary className="cursor-pointer rounded-xl p-2 text-white focus-visible:outline focus-visible:outline-gold-300">
+                    <span className="ml-2 inline-flex max-w-full flex-wrap items-center gap-2 align-middle">
+                      <StaffInitials first={s.first_name} last={s.last_name} color={s.color} />
+                      <span className="text-sm font-semibold">{fullName(s.first_name, s.last_name)}</span>
+                      <span className="text-xs text-white/50">{items.length} servicios · Cobrado {money(total.billed)}</span>
+                      <span className="text-sm font-semibold text-gold-200">Comisión {money(total.commission)}</span>
+                    </span>
+                  </summary>
+                  <ActivityTable items={items} period={period} />
+                </details>;
+              })}
+              {!working.length && <EmptyState icon={Users} title="Sin servicios en este período" />}
+              {idle.length > 0 && <details className="rounded-xl border border-dashed border-white/10 p-3 text-sm text-white/50"><summary className="cursor-pointer">Sin actividad en el período ({idle.length})</summary><div className="mt-3 flex flex-wrap gap-2">{idle.map(s => <span key={s.id} className="flex items-center gap-2 rounded-lg bg-white/5 px-3 py-2"><StaffDot color={s.color} />{fullName(s.first_name, s.last_name)}{!s.active && <Badge tone="muted">Inactivo</Badge>}</span>)}</div></details>}
+            </div>
+          </>
+      ))}
     </Card>
   );
 }
 
-/** Límites (lunes–domingo) de la semana que contiene a `ref`. */
-function weekBounds(ref: Date): { from: string; to: string } {
-  const diffToMon = (ref.getDay() + 6) % 7; // 0 = lunes
-  const mon = new Date(ref);
-  mon.setDate(ref.getDate() - diffToMon);
-  const sun = new Date(mon);
-  sun.setDate(mon.getDate() + 6);
-  return { from: ymd(mon), to: ymd(sun) };
-}
-
-interface CommissionBalanceRow {
-  staff_member_id: string;
-  staff_name: string;
-  color: string | null;
-  accrued: number;
-  advances: number;
-  paid: number;
-  pending: number;
-}
-
-/**
- * Saldo de comisiones acumulado a la fecha por colaborador:
- * comisiones acumuladas (de todas las ventas) − adelantos − pagos = pendiente.
- * Permite «cuadrar» el pendiente real (p. ej. comisiones ya pagadas antes de
- * usar el sistema) y «pagar/liquidar» el pendiente en un paso (egreso + baja).
- */
+/** Saldo actual y movimientos de la semana, con arrastre de semanas anteriores. */
 function CommissionBalanceSection({ orgId }: { orgId: string }) {
   const branchId = useBranchId();
   const [adjust, setAdjust] = useState<CommissionBalanceRow | null>(null);
   const [pay, setPay] = useState<CommissionBalanceRow | null>(null);
+  const [showZero, setShowZero] = useState(false);
 
+  const week = weekBounds(new Date());
+  const today = todayISO();
+  const weekStart = timestampBounds(week.from, week.to).start;
   const bal = useQuery({
-    queryKey: ['commission-balance', branchId, orgId],
+    queryKey: ['commission-balance', branchId, orgId, week.from, today, weekStart],
     enabled: !!branchId && !!orgId,
     queryFn: async (): Promise<CommissionBalanceRow[]> => {
-      // "A la fecha" = hasta este instante. Se compara contra el timestamp UTC
-      // actual (no contra date(...) con el día local): sold_at y paid_at se
-      // guardan con toISOString() en UTC, así que un pago o venta de la noche
-      // en UTC−5 ya cae en el día siguiente en UTC y date(x) <= hoy-local lo
-      // dejaba fuera. Por eso un pago recién registrado no bajaba el pendiente.
-      const nowIso = new Date().toISOString();
-      const [staff, accrued, advances, payments] = await Promise.all([
-        query<{ id: string; name: string; color: string | null }>(
-          `SELECT id,
-                  first_name || CASE WHEN last_name IS NOT NULL THEN ' ' || last_name ELSE '' END AS name,
-                  color
-             FROM staff_member
-            WHERE organization_id = ? AND active = 1
-            ORDER BY first_name`,
-          [orgId],
-        ),
-        query<{ staff_member_id: string; total: number }>(
-          `SELECT sss.staff_member_id AS staff_member_id,
-                  ROUND(SUM(sss.commission_amount), 2) AS total
-             FROM sale_service_staff sss
-             JOIN sale_item si ON si.id = sss.sale_item_id
-             JOIN sale s ON s.id = si.sale_id
-            WHERE s.branch_id = ?
-              AND s.status IN ('completed', 'partially_refunded')
-              AND s.sold_at <= ?
-            GROUP BY sss.staff_member_id`,
-          [branchId, nowIso],
-        ),
-        // incluye ajustes (marca [Ajuste de comisión]) para el acumulado
-        query<{ staff_member_id: string; total: number }>(
-          `SELECT staff_member_id, ROUND(SUM(amount), 2) AS total
-             FROM staff_advance
-            WHERE branch_id = ? AND status = 'confirmed'
-              AND advance_date <= ?
-            GROUP BY staff_member_id`,
-          [branchId, nowIso],
-        ),
-        // pagos de comisiones ya liquidados
-        query<{ staff_member_id: string; total: number }>(
-          `SELECT staff_member_id, ROUND(SUM(net_paid), 2) AS total
-             FROM staff_payment
-            WHERE branch_id = ? AND status = 'confirmed'
-              AND paid_at <= ?
-            GROUP BY staff_member_id`,
-          [branchId, nowIso],
-        ),
+      const data = await query<CommissionBalanceData>(COMMISSION_BALANCE_SQL, [
+        orgId, branchId, weekStart, week.from, today, new Date().toISOString(),
       ]);
-      const accMap = new Map(accrued.map((c) => [c.staff_member_id, c.total]));
-      const advMap = new Map(advances.map((a) => [a.staff_member_id, a.total]));
-      const payMap = new Map(payments.map((p) => [p.staff_member_id, p.total]));
-      return staff.map((s) => {
-        const acc = accMap.get(s.id) ?? 0;
-        const adv = advMap.get(s.id) ?? 0;
-        const pd = payMap.get(s.id) ?? 0;
-        return {
-          staff_member_id: s.id,
-          staff_name: s.name,
-          color: s.color,
-          accrued: acc,
-          advances: adv,
-          paid: pd,
-          pending: Math.round((acc - adv - pd) * 100) / 100,
-        };
-      });
+      return data.map(commissionBalance);
     },
   });
 
   const rows = bal.data ?? [];
+  const visibleRows = rows.filter(r => showZero || r.opening !== 0 || r.earned_week !== 0 || r.advances_week !== 0 || r.paid_week !== 0 || r.adjustments_week !== 0 || r.pending !== 0);
+  const zeroCount = rows.length - visibleRows.length;
+  const hasAdjustments = rows.some(r => r.adjustments_week !== 0);
   const totalPending = rows.reduce((a, r) => a + r.pending, 0);
 
   return (
-    <Card>
+    <Card className="!p-3 sm:!p-4">
       <CardHeader
-        title="Saldo de comisiones a la fecha"
-        subtitle="Comisiones acumuladas − adelantos = pendiente de pagar"
+        title="Comisiones · saldo actual"
+        subtitle={`Esta semana: ${dateShort(week.from)} — ${dateShort(week.to)} · Movimientos hasta hoy`}
+        action={<label className="flex items-center gap-2 text-xs text-white/50"><input type="checkbox" checked={showZero} onChange={e => setShowZero(e.target.checked)} className="rounded border-white/20 bg-white/5 text-gold-400" />Mostrar sin saldo ni actividad{zeroCount > 0 ? ` (${zeroCount})` : ''}</label>}
       />
-      {rows.length > 0 ? (
+      <p className="mb-3 text-xs text-white/50">Saldo anterior + generado esta semana − adelantos − pagos{hasAdjustments ? ' − cuadres' : ''} = pendiente actual.</p>
+      {bal.isError ? <p role="alert" className="text-sm text-danger">No se pudieron cargar los saldos. <button className="underline" onClick={() => void bal.refetch()}>Reintentar</button></p>
+        : bal.isPending ? <p role="status" className="text-sm text-white/50">Cargando saldos…</p>
+        : rows.length > 0 ? (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs uppercase text-white/40">
                 <th className="pb-2">Colaborador</th>
-                <th className="pb-2 text-right">Acumulado</th>
-                <th className="pb-2 text-right">Adelantos</th>
-                <th className="pb-2 text-right">Pagado</th>
-                <th className="pb-2 text-right">Pendiente</th>
+                <th className="px-2 pb-2 text-right" title="Saldo que quedó al iniciar el lunes, incluidos pendientes o créditos anteriores">Saldo anterior</th>
+                <th className="px-2 pb-2 text-right">Generado<span className="block text-[10px] font-normal normal-case">esta semana</span></th>
+                <th className="px-2 pb-2 text-right">Adelantos<span className="block text-[10px] font-normal normal-case">esta semana</span></th>
+                <th className="px-2 pb-2 text-right">Pagos<span className="block text-[10px] font-normal normal-case">esta semana</span></th>
+                {hasAdjustments && <th className="px-2 pb-2 text-right">Cuadres<span className="block text-[10px] font-normal normal-case">esta semana</span></th>}
+                <th className="bg-gold-400/5 px-3 pb-2 text-right text-gold-200">Pendiente actual<span className="block text-[10px] font-normal normal-case text-white/40">incluye saldos anteriores</span></th>
                 <th className="pb-2 text-right">Acciones</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
-              {rows.map((r) => (
+              {visibleRows.map((r) => (
                 <tr key={r.staff_member_id} style={staffRowStyle(r.color)}>
                   <StaffNameCell color={r.color} name={r.staff_name} />
-                  <td className="py-2 text-right text-white/70">
-                    {money(r.accrued)}
-                  </td>
-                  <td className="py-2 text-right text-danger">
-                    {r.advances > 0 ? `−${money(r.advances)}` : money(0)}
-                  </td>
-                  <td className="py-2 text-right text-white/50">
-                    {r.paid > 0 ? `−${money(r.paid)}` : money(0)}
-                  </td>
+                  <td className="px-2 py-2 text-right tabular-nums text-white/50">{money(r.opening)}</td>
+                  <td className="px-2 py-2 text-right tabular-nums text-white/80">{money(r.earned_week)}</td>
+                  <td className="px-2 py-2 text-right tabular-nums text-white/60">{r.advances_week ? `−${money(r.advances_week)}` : '—'}</td>
+                  <td className="px-2 py-2 text-right tabular-nums text-white/60">{r.paid_week ? `−${money(r.paid_week)}` : '—'}</td>
+                  {hasAdjustments && <td className="px-2 py-2 text-right tabular-nums text-white/50">{r.adjustments_week ? `${r.adjustments_week > 0 ? '−' : '+'}${money(Math.abs(r.adjustments_week))}` : '—'}</td>}
                   <td
-                    className={`py-2 text-right font-semibold ${
+                    className={`bg-gold-400/5 px-3 py-2 text-right font-semibold tabular-nums ${
                       r.pending >= 0 ? 'text-gold-200' : 'text-danger'
                     }`}
                   >
@@ -567,8 +342,8 @@ function CommissionBalanceSection({ orgId }: { orgId: string }) {
             </tbody>
             <tfoot>
               <tr className="border-t border-white/10 text-sm font-semibold">
-                <td className="pt-2 text-white/70" colSpan={4}>
-                  Total pendiente
+                <td className="pt-2 text-white/70" colSpan={hasAdjustments ? 6 : 5}>
+                  Saldo pendiente total
                 </td>
                 <td className="pt-2 text-right text-gold-200">
                   {money(totalPending)}
@@ -585,11 +360,11 @@ function CommissionBalanceSection({ orgId }: { orgId: string }) {
           description="Agregá colaboradores para ver su saldo de comisiones."
         />
       )}
-      <p className="mt-3 text-xs text-white/40">
-        El cuadre ajusta el pendiente al valor real (por ejemplo, comisiones ya
-        pagadas antes de usar el sistema). Se registra como ajuste, no cuenta como
-        egreso ni afecta la caja, y no aparece en la liquidación semanal.
-      </p>
+      <details className="mt-2 text-xs text-white/40">
+        <summary className="cursor-pointer">Cómo leer estos saldos</summary>
+        <p className="mt-1">Saldo anterior: pendiente al iniciar el lunes. Generado, adelantos y pagos: solo esta semana. El pendiente actual incluye todo lo que aún se debe; un importe negativo es saldo a favor del negocio. Los adelantos de semanas anteriores ya están incluidos en el saldo anterior y no se descuentan otra vez. El historial completo sigue en Adelantos y pagos.</p>
+        <p className="mt-1">Los cuadres ajustan el saldo sin representar dinero entregado ni afectar la caja.</p>
+      </details>
 
       {adjust && (
         <AdjustCommissionModal
@@ -659,6 +434,7 @@ function AdjustCommissionModal({
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['commission-balance'] });
+      void qc.invalidateQueries({ queryKey: ['staff-movements'] });
       onClose();
       toast.success('Comisiones cuadradas', `${row.staff_name} · ${money(Number(real) || 0)}`);
     },

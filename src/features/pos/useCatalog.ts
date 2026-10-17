@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { execute, query } from '@/lib/db';
 import { genId } from '@/lib/format';
+import { ASSIGNABLE_STAFF_SQL } from '@/features/staff/assignmentPolicy';
 import { useOrgId } from '@/store/session';
 import type { AssistType, Customer, Product, Service, StaffMember } from '@/types';
 
@@ -53,6 +54,16 @@ export function useStaff() {
         'SELECT * FROM staff_member WHERE organization_id = ? AND active = 1 ORDER BY first_name',
         [orgId],
       ),
+  });
+}
+
+/** Personal disponible para nuevas asignaciones; no modifica usuarios ni roles. */
+export function useAssignableStaff() {
+  const orgId = useOrgId();
+  return useQuery({
+    queryKey: ['assignable-staff', orgId],
+    enabled: !!orgId,
+    queryFn: () => query<StaffMember>(ASSIGNABLE_STAFF_SQL, [orgId]),
   });
 }
 
@@ -203,6 +214,8 @@ export function useCreateService() {
         [...(old ?? []), s].sort((a, b) => a.name.localeCompare(b.name)),
       );
       void qc.invalidateQueries({ queryKey: ['services', orgId] });
+      void qc.invalidateQueries({ queryKey: ['assignable-staff', orgId] });
+      void qc.invalidateQueries({ queryKey: ['staff-category-skills', orgId] });
     },
   });
 }

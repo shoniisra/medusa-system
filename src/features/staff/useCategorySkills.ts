@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { query } from '@/lib/db';
+import { AVAILABLE_CATEGORY_SERVICE_SQL } from './assignmentPolicy';
 import { useOrgId } from '@/store/session';
 
 /** Estilista habilitada para una categoría, con su prioridad (1 = primaria). */
@@ -26,6 +27,7 @@ export function useCategorySkills() {
            FROM staff_category sc
            JOIN staff_member sm ON sm.id = sc.staff_member_id
           WHERE sm.organization_id = ? AND sc.active = 1 AND sm.active = 1
+            AND ${AVAILABLE_CATEGORY_SERVICE_SQL}
           ORDER BY sc.category, sc.priority`,
         [orgId],
       ),

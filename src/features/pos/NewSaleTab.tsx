@@ -27,7 +27,7 @@ import {
   useCustomers,
   useServices,
   useProducts,
-  useStaff,
+  useAssignableStaff,
   useAssistTypes,
 } from './useCatalog';
 import { useCategorySkills } from '@/features/staff/useCategorySkills';
@@ -87,7 +87,7 @@ export function NewSaleTab() {
   const draft = usePosDraft();
   const services = useServices();
   const products = useProducts();
-  const staff = useStaff();
+  const staff = useAssignableStaff();
   const assistTypes = useAssistTypes();
 
   // Cliente (mostrador por defecto): buscar existente o crear al vuelo.
