@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
-  CalendarDays,
   CalendarPlus,
   CalendarRange,
   ShoppingCart,
@@ -17,6 +16,7 @@ import {
   BarChart3,
   LogOut,
   History,
+  Home,
 } from 'lucide-react';
 import { ROUTES } from '@/config/constants';
 import { useSession } from '@/store/session';
@@ -27,8 +27,9 @@ import { cn } from '@/lib/cn';
 
 /** Pestañas principales: lo que se usa todos los días. El resto vive en "Más". */
 const TABS = [
-  { to: ROUTES.dashboard, label: 'Inicio', icon: CalendarRange, end: true },
-  { to: ROUTES.calendar, label: 'Agenda', icon: CalendarDays },
+  { to: ROUTES.dashboard, label: 'Inicio', icon: Home, end: true },
+  // Agenda abre directo el calendario; desde ahí se cambia a lista o tablero.
+  { to: ROUTES.calendarView, label: 'Agenda', icon: CalendarRange },
   { to: ROUTES.pos, label: 'POS', icon: ShoppingCart },
 ];
 
