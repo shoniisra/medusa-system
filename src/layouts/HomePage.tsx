@@ -6,13 +6,14 @@ import { useSession } from '@/store/session';
 import { hasPermission } from '@/config/permissions';
 
 /**
- * Pantalla principal: en escritorio, el tablero con las métricas; en móvil, el
- * calendario a pantalla completa — lo que la mayoría del tiempo necesita ver,
- * agendar, atender y vender sin cita. Las métricas quedan a un clic en
- * "Ver tus métricas" del cierre de caja y en Finanzas → Resumen.
+ * Pantalla principal.
  *
- * Para el rol `staff` (colaboradora) el tablero muestra solo información
- * personal: sus ingresos, su saldo y sus citas — nada del resto del equipo.
+ * - `staff` y `cashier` ven su tablero personal (comisiones, saldo, citas): la
+ *   cajera también es colaboradora, así que al entrar quiere lo suyo, no el
+ *   calendario del salón.
+ * - En móvil, los roles con `view_metrics` (admin/gerente) ven el calendario a
+ *   pantalla completa — lo que la mayoría del tiempo necesitan a mano.
+ * - En escritorio, admin y gerente ven el tablero gerencial.
  */
 export function HomePage() {
   const role = useSession((s) => s.user?.role ?? null);
@@ -28,7 +29,7 @@ export function HomePage() {
   }, []);
 
   if (!role) return null;
-  if (role === 'staff') return <StaffDashboardPage />;
+  if (role === 'staff' || role === 'cashier') return <StaffDashboardPage />;
   if (isMobile || !hasPermission(role, 'view_metrics')) return <CalendarViewPage />;
   return <DashboardPage />;
 }

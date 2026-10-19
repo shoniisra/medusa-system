@@ -48,14 +48,13 @@ const ALL: Permission[] = [
   'view_tasks',
 ];
 
-/** Permisos operativos del día a día: agenda, POS, caja, clientes, tareas. */
+/** Permisos operativos del día a día: agenda, POS, caja, tareas. */
 const FRONT_DESK: Permission[] = [
   'view_dashboard',
   'manage_appointments',
   'attend_appointments',
   'use_pos',
   'use_cash_register',
-  'manage_clients',
   'view_tasks',
   'view_reminders',
 ];
@@ -67,9 +66,10 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     (p) => p !== 'view_diagnostics' && p !== 'manage_team_roles',
   ),
   // Caja/Recepción: fusión de los antiguos roles cashier + reception.
+  // Sin `manage_clients`: cobran y agendan, pero no ven la ficha de clientes.
   cashier: FRONT_DESK,
   // Colaboradora de servicio: agenda, atiende, cobra, POS, caja, resumen propio.
-  staff: FRONT_DESK.filter((p) => p !== 'manage_clients'),
+  staff: FRONT_DESK,
 };
 
 const PERMISSION_SETS = Object.fromEntries(

@@ -24,8 +24,10 @@ describe('dashboard según usuario activo', () => {
     expect(html).toContain('Mi dashboard personal');
     expect(html).not.toContain('Información gerencial');
   });
-  it('recepción tampoco accede a métricas gerenciales desde el inicio', () => {
+  it('recepción ve su dashboard personal (nunca el gerencial)', () => {
     state.role = 'cashier';
-    expect(renderToStaticMarkup(<HomePage />)).toContain('Agenda operativa');
+    const html = renderToStaticMarkup(<HomePage />);
+    expect(html).toContain('Mi dashboard personal');
+    expect(html).not.toContain('Información gerencial');
   });
 });

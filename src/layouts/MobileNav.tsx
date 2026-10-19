@@ -17,6 +17,7 @@ import {
   BarChart3,
   LogOut,
   Receipt,
+  Home,
 } from "lucide-react";
 import { ROUTES } from "@/config/constants";
 import { useSession } from "@/store/session";
@@ -46,8 +47,10 @@ export function MobileNav() {
   const can = useHasPermission(role);
 
   const TABS: NavEntry[] = [
-    { to: ROUTES.dashboard, label: "Inicio", icon: CalendarRange, end: true },
-    { to: ROUTES.tasks, label: "Agenda", icon: CalendarDays },
+    { to: ROUTES.dashboard, label: "Inicio", icon: Home, end: true },
+    // Agenda abre directo el calendario; el switcher al tope cambia a lista
+    // o tablero.
+    { to: ROUTES.calendarView, label: "Agenda", icon: CalendarRange },
     ...(can("use_pos")
       ? [{ to: ROUTES.pos, label: "POS", icon: ShoppingCart }]
       : []),

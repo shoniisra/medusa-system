@@ -32,6 +32,7 @@ import {
   useAppointments,
 } from './appointmentBoard';
 import { AppointmentActionsModal } from './AppointmentActions';
+import { AgendaViewSwitcher } from './AgendaViewSwitcher';
 import { invalidateAppointments } from '@/lib/queryClient';
 
 const VIEW_LABEL: Record<string, string> = {
@@ -248,6 +249,11 @@ export function CalendarViewPage() {
       className="flex h-full flex-col overflow-hidden"
       style={{ paddingBottom: 'var(--nav-h)' }}
     >
+      {/* Móvil: cambio de vista + alta rápida de cita. */}
+      <div className="shrink-0 px-3 pt-3 lg:hidden">
+        <AgendaViewSwitcher current="calendar" />
+      </div>
+
       {/* Título: misma posición que Lista/Tablero. El padding va afuera (como
           el `p-6` del `main` en esas pantallas) y el centrado adentro, para
           que quede exactamente en el mismo punto y no "salte" al navegar. */}

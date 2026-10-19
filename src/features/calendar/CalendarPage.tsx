@@ -11,6 +11,7 @@ import {
   startAttention,
 } from "./appointmentBoard";
 import { AppointmentActionsModal } from "./AppointmentActions";
+import { AgendaViewSwitcher } from "./AgendaViewSwitcher";
 import { FilterBar } from "./FilterBar";
 import { useAppointmentListFilters } from "./useAppointmentListFilters";
 import { AppointmentsEmptyState } from "./AppointmentsEmptyState";
@@ -63,8 +64,10 @@ export function CalendarPage() {
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-3 lg:space-y-5">
-      {/* Título y acción: en móvil el alta de cita ya vive en el botón central
-          de la barra inferior, así que no se repite acá. */}
+      {/* Móvil: cambio de vista + alta rápida. */}
+      <AgendaViewSwitcher current="list" />
+
+      {/* Título y acción (escritorio). */}
       <div className="hidden items-center justify-between gap-3 lg:flex">
         <div className="flex items-center gap-2.5">
           <h1 className="text-2xl font-semibold text-white">Agenda</h1>
@@ -90,15 +93,6 @@ export function CalendarPage() {
         overdueInView={overdueInView}
         resultCount={filteredRows.length}
         resultNoun="citas"
-        mobileExtra={
-          <Link
-            to={ROUTES.calendarView}
-            aria-label="Ver calendario"
-            className="tap flex shrink-0 items-center justify-center rounded-xl bg-ink-800/60 px-3 text-white/60 active:bg-white/10"
-          >
-            <CalendarRange className="h-5 w-5" />
-          </Link>
-        }
       />
 
       {appts.isLoading ? (
