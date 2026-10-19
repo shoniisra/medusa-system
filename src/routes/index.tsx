@@ -5,6 +5,7 @@ import { AppLayout } from '@/layouts/AppLayout';
 import { HomePage } from '@/layouts/HomePage';
 import { lazyPage } from '@/lib/staleBuild';
 import { ProtectedRoute } from './ProtectedRoute';
+import { RequireClientsAccess } from './RequireClientsAccess';
 import { RouteError } from './RouteError';
 import { ROUTES } from '@/config/constants';
 import { LoginPage } from '@/features/auth/LoginPage';
@@ -114,10 +115,15 @@ export const router = createBrowserRouter([
             element: lazyRoute(<AppointmentPage />),
           },
           { path: ROUTES.staff, element: lazyRoute(<StaffPage />) },
-          { path: ROUTES.clients, element: lazyRoute(<ClientsPage />) },
           {
-            path: `${ROUTES.client}/:id`,
-            element: lazyRoute(<ClientDetailPage />),
+            element: <RequireClientsAccess />,
+            children: [
+              { path: ROUTES.clients, element: lazyRoute(<ClientsPage />) },
+              {
+                path: `${ROUTES.client}/:id`,
+                element: lazyRoute(<ClientDetailPage />),
+              },
+            ],
           },
           { path: ROUTES.invoices, element: lazyRoute(<InvoicesPage />) },
           { path: ROUTES.settings, element: lazyRoute(<SettingsPage />) },

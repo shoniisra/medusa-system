@@ -16,7 +16,8 @@ import {
 } from "lucide-react";
 import { ROUTES, APP_NAME } from "@/config/constants";
 import { query } from "@/lib/db";
-import { useBranchId } from "@/store/session";
+import { useBranchId, useSession } from "@/store/session";
+import { canViewClients } from "@/lib/perms";
 import { cn } from "@/lib/cn";
 import { ymd } from "@/features/calendar/appointmentBoard";
 
@@ -118,6 +119,14 @@ export function Sidebar() {
   const overdue = useOverdueCount();
   const tomorrow = useTomorrowCount();
   const { pathname } = useLocation();
+  const role = useSession((s) => s.user?.role);
+  // La cajera/recepcionista no ve el directorio de clientes.
+  const sections = NAV_SECTIONS.map((section) => ({
+    ...section,
+    items: section.items.filter(
+      (item) => item.to !== ROUTES.clients || canViewClients(role),
+    ),
+  }));
   return (
     <aside className="hidden w-64 shrink-0 flex-col border-r border-white/5 bg-ink-900/80 backdrop-blur-xl lg:flex">
       <div className="flex items-center gap-2 px-6 py-6">
@@ -130,7 +139,7 @@ export function Sidebar() {
       </div>
 
       <nav className="flex-1 space-y-4 px-3">
-        {NAV_SECTIONS.map((section, si) => (
+        {sections.map((section, si) => (
           <div key={section.title ?? si} className="space-y-1">
             {section.title && (
               <p className="px-3 pb-1 pt-2 text-xs font-medium uppercase tracking-wide text-white/30">

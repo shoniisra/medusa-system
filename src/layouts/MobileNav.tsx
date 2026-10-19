@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { ROUTES } from '@/config/constants';
 import { useSession } from '@/store/session';
+import { canViewClients } from '@/lib/perms';
 import { fullName } from '@/lib/format';
 import { Modal } from '@/components/ui';
 import { cn } from '@/lib/cn';
@@ -56,6 +57,10 @@ export function MobileNav() {
   // accidental al tomar el teléfono.
   const [newOpen, setNewOpen] = useState(false);
   const { user, logout } = useSession();
+  // La cajera/recepcionista no ve el directorio de clientes.
+  const moreItems = MORE.filter(
+    (item) => item.to !== ROUTES.clients || canViewClients(user?.role),
+  );
 
   const tabClass = ({ isActive }: { isActive: boolean }) =>
     cn(
@@ -141,7 +146,7 @@ export function MobileNav() {
         className="sm:max-w-md"
       >
         <div className="grid grid-cols-3 gap-2">
-          {MORE.map(({ to, label, icon: Icon }) => (
+          {moreItems.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
