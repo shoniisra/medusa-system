@@ -1,4 +1,5 @@
 import type { InValue } from '@libsql/client/web';
+import { useSession } from '@/store/session';
 
 /**
  * Acceso a datos del frontend.
@@ -27,6 +28,12 @@ async function callApi(payload: unknown): Promise<DbResult> {
     body: JSON.stringify(payload),
   });
   const data = (await res.json().catch(() => ({}))) as DbResult;
+  if (res.status === 401) {
+    // El token del Worker venció pero el estado local seguía marcando al usuario
+    // como logueado: sin esto la app queda trabada mostrando el error de sesión
+    // sin volver nunca a la pantalla de login.
+    useSession.getState().logout();
+  }
   if (!res.ok) {
     throw new Error(data.error ?? `Error de base de datos (${res.status}).`);
   }

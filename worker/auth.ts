@@ -4,7 +4,7 @@
  */
 
 const PBKDF2_ITERATIONS = 100_000;
-const TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 h
+const TOKEN_TTL_MS = 3 * 24 * 60 * 60 * 1000; // 3 días
 
 /* ─── Contraseña / PIN ────────────────────────────────────────────────────── */
 
