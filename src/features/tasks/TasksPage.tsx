@@ -12,6 +12,7 @@ import {
   STATUS_ORDER,
 } from '@/features/calendar/appointmentBoard';
 import { AppointmentActionsModal } from '@/features/calendar/AppointmentActions';
+import { AgendaViewSwitcher } from '@/features/calendar/AgendaViewSwitcher';
 import { FilterBar } from '@/features/calendar/FilterBar';
 import { useAppointmentListFilters } from '@/features/calendar/useAppointmentListFilters';
 import { AppointmentsEmptyState } from '@/features/calendar/AppointmentsEmptyState';
@@ -119,8 +120,11 @@ export function TasksPage() {
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-3">
-      {/* Encabezado compacto: título + pila de vencidas + acciones. */}
-      <div className="flex items-center gap-2">
+      {/* Móvil: cambio de vista + alta rápida. */}
+      <AgendaViewSwitcher current="board" />
+
+      {/* Encabezado compacto: título + pila de vencidas + acciones (escritorio). */}
+      <div className="hidden items-center gap-2 lg:flex">
         <h1 className="text-xl font-semibold text-white sm:text-2xl">Agenda</h1>
         <Badge tone="gold">Tablero</Badge>
         {overdueTotal > 0 && (
@@ -145,6 +149,24 @@ export function TasksPage() {
           </Button>
         </div>
       </div>
+
+      {/* En móvil, "cerrar vencidas" queda al alcance aunque el nuevo switcher
+          se encargue del alta de citas. */}
+      {overdueTotal > 0 && (
+        <div className="flex items-center justify-between gap-2 rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 lg:hidden">
+          <span className="text-xs text-danger">
+            {overdueTotal} vencida{overdueTotal > 1 ? 's' : ''}
+          </span>
+          <button
+            type="button"
+            onClick={() => setCloseOverdue(true)}
+            className="flex items-center gap-1.5 rounded-lg bg-danger/20 px-3 py-1.5 text-xs font-medium text-danger active:bg-danger/30"
+          >
+            <ClipboardCheck className="h-4 w-4" />
+            Cerrar vencidas
+          </button>
+        </div>
+      )}
 
       <FilterBar
         filters={filters}
