@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -39,9 +40,9 @@ import { customerNameSql } from '@/features/clients/customerNameSql';
 import { hasPermission } from '@/config/permissions';
 
 const SECTION_KEYS = [
+  'appointments',
   'stats',
   'chart',
-  'appointments',
   'rankings',
   'availability',
 ] as const;
@@ -127,7 +128,7 @@ function ManagerDashboardContent() {
   const attendance = met ? Math.max(0, 100 - met.noShowRate) : 0;
 
   return (
-    <div className="mx-auto flex max-w-[1500px] flex-col gap-6">
+    <div className="mx-auto flex max-w-[1500px] flex-col gap-3 sm:gap-6">
       {/* Encabezado + acciones */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -155,8 +156,36 @@ function ManagerDashboardContent() {
       <FinanceOverview />
 
       <SortableSection id="stats" order={orderOf('stats')} onMove={move}>
-      {/* Quick stats de hoy */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      {/* Quick stats de hoy: tiles compactos en mobile, StatCard completo en desktop. */}
+      <div className="grid grid-cols-2 gap-2 sm:hidden">
+        <KpiTile
+          label="Citas hoy"
+          value={
+            m.isLoading
+              ? '—'
+              : `${met?.todayAttended ?? 0} / ${met?.todayPending ?? 0}`
+          }
+          icon={CalendarClock}
+        />
+        <KpiTile
+          label="Efectivo esperado"
+          value={isLoading ? '—' : money(expected)}
+          icon={Wallet}
+        />
+        <KpiTile
+          tone="success"
+          label="Recibido hoy"
+          value={isLoading ? '—' : money(col?.total_received)}
+          icon={Banknote}
+        />
+        <KpiTile
+          tone="gold"
+          label="Ventas del mes"
+          value={m.isLoading ? '—' : money(met?.month.sales)}
+          icon={BarChart3}
+        />
+      </div>
+      <div className="hidden grid-cols-2 gap-4 sm:grid lg:grid-cols-4">
         <StatCard
           label="Citas hoy"
           value={
@@ -192,20 +221,22 @@ function ManagerDashboardContent() {
       </SortableSection>
 
       <SortableSection id="chart" order={orderOf('chart')} onMove={move}>
-      {/* Gráfico mensual + gauge de asistencia */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+      {/* Gráfico mensual + asistencia (compactados en mobile) */}
+      <div className="grid grid-cols-1 gap-3 sm:gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader
             title="Resumen de ventas mensuales"
             subtitle="Últimos 6 meses"
           />
           {monthly.data && monthly.data.length > 0 ? (
-            <MiniBarChart data={monthly.data} />
+            <div className="h-24 sm:h-auto">
+              <MiniBarChart data={monthly.data} height={96} />
+            </div>
           ) : (
             <EmptyState icon={BarChart3} title="Sin datos de ventas" />
           )}
           {met && (
-            <div className="mt-4 grid grid-cols-3 gap-3 border-t border-white/5 pt-4">
+            <div className="mt-3 hidden grid-cols-3 gap-3 border-t border-white/5 pt-4 sm:mt-4 sm:grid">
               <MiniStat
                 icon={Banknote}
                 label="Efectivo (mes)"
@@ -230,7 +261,30 @@ function ManagerDashboardContent() {
             title="Asistencia del mes"
             subtitle="Citas cumplidas vs no-show"
           />
-          <div className="flex flex-col items-center justify-center py-4">
+          {/* Mobile: cifra compacta. Desktop: gauge grande. */}
+          <div className="flex items-center justify-between sm:hidden">
+            <div>
+              <p className="kpi-gold text-3xl font-semibold leading-none">
+                {Math.round(attendance)}%
+              </p>
+              <p className="mt-1 text-xs text-white/50">
+                {met?.noShowCount ?? 0} no-show de {met?.monthAppointments ?? 0}
+              </p>
+            </div>
+            <div
+              className={cn(
+                'rounded-full px-2.5 py-1 text-xs font-medium',
+                attendance >= 80
+                  ? 'bg-emerald-400/15 text-emerald-300'
+                  : attendance >= 60
+                  ? 'bg-gold-400/15 text-gold-300'
+                  : 'bg-rose-400/15 text-rose-300',
+              )}
+            >
+              {attendance >= 80 ? 'Excelente' : attendance >= 60 ? 'Aceptable' : 'Baja'}
+            </div>
+          </div>
+          <div className="hidden flex-col items-center justify-center py-4 sm:flex">
             <Gauge
               value={attendance}
               label={`${met?.noShowCount ?? 0} no-show de ${met?.monthAppointments ?? 0}`}
@@ -297,10 +351,11 @@ function ManagerDashboardContent() {
                     </div>
 
                     {/* Acciones en su propia fila: nunca compiten por el ancho
-                        con el nombre del cliente ni se desbordan en un teléfono. */}
+                        con el nombre del cliente ni se desbordan en un teléfono.
+                        En mobile se ocultan: tocar la fila abre el modal con todo. */}
                     {actionable && (
                       <div
-                        className="mt-2.5 flex items-center gap-2 border-t border-white/5 pt-2.5"
+                        className="mt-2.5 hidden items-center gap-2 border-t border-white/5 pt-2.5 sm:flex"
                         onClick={(e) => e.stopPropagation()}
                       >
                         {a.phone && (
@@ -394,7 +449,8 @@ function ManagerDashboardContent() {
       </SortableSection>
 
       <SortableSection id="rankings" order={orderOf('rankings')} onMove={move}>
-      {/* Rankings */}
+      {/* Rankings — colapsados en mobile, abiertos en desktop. */}
+      <MobileCollapsible title="Rendimiento del equipo">
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card>
           <CardHeader title="Estilista del mes" subtitle="Por ingresos generados" />
@@ -461,6 +517,7 @@ function ManagerDashboardContent() {
 
         <BirthdaysCard />
       </div>
+      </MobileCollapsible>
       </SortableSection>
 
       <SortableSection
@@ -468,7 +525,8 @@ function ManagerDashboardContent() {
         order={orderOf('availability')}
         onMove={move}
       >
-      {/* Disponibilidad hoy por estilista */}
+      {/* Disponibilidad hoy — colapsada en mobile. */}
+      <MobileCollapsible title="Disponibilidad de hoy">
       <Card>
         <CardHeader
           title="Disponibilidad de hoy"
@@ -509,6 +567,7 @@ function ManagerDashboardContent() {
           />
         )}
       </Card>
+      </MobileCollapsible>
       </SortableSection>
 
       {selectedAppt && (
@@ -594,6 +653,91 @@ function MiniStat({
         {label}
       </span>
       <span className="text-sm font-medium text-white">{value}</span>
+    </div>
+  );
+}
+
+/** Envuelve una sección: en mobile aparece como botón colapsable; en desktop se
+ *  renderiza siempre expandida sin wrapper visible. Evita duplicar el markup. */
+function MobileCollapsible({
+  title,
+  children,
+  defaultOpen = false,
+}: {
+  title: string;
+  children: ReactNode;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between rounded-xl border border-white/10 bg-white/[0.03] p-3 text-left sm:hidden"
+      >
+        <span className="text-sm font-medium text-white">{title}</span>
+        <ChevronDown
+          className={cn(
+            'h-4 w-4 text-white/40 transition-transform',
+            open && 'rotate-180',
+          )}
+        />
+      </button>
+      <div
+        className={cn(
+          'sm:mt-0 sm:block',
+          open ? 'mt-2 block' : 'hidden',
+        )}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** Tile compacto para los KPIs rápidos del dashboard en mobile. */
+function KpiTile({
+  icon: Icon,
+  label,
+  value,
+  tone = 'default',
+}: {
+  icon: typeof Banknote;
+  label: string;
+  value: string;
+  tone?: 'default' | 'success' | 'gold';
+}) {
+  return (
+    <div
+      className={cn(
+        'rounded-xl border p-2.5',
+        tone === 'gold'
+          ? 'border-gold-400/35 bg-gold-400/[0.07]'
+          : 'border-white/10 bg-white/[0.03]',
+      )}
+    >
+      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-white/50">
+        <Icon
+          className={cn(
+            'h-3.5 w-3.5 shrink-0',
+            tone === 'gold' ? 'text-gold-300' : 'text-white/40',
+          )}
+        />
+        <span className="truncate">{label}</span>
+      </div>
+      <p
+        className={cn(
+          'mt-1 truncate text-base font-semibold leading-tight',
+          tone === 'gold'
+            ? 'kpi-gold'
+            : tone === 'success'
+            ? 'text-success'
+            : 'text-white',
+        )}
+      >
+        {value}
+      </p>
     </div>
   );
 }

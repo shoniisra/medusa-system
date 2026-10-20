@@ -19,13 +19,14 @@ import {
 import { query } from '@/lib/db';
 import { useStaffDashboard } from './useStaffDashboard';
 import {
-  StatCard,
   Card,
   CardHeader,
   Badge,
   Button,
   EmptyState,
 } from '@/components/ui';
+import { cn } from '@/lib/cn';
+import type { LucideIcon } from 'lucide-react';
 import { money, dateShort, timeShort, todayISO } from '@/lib/format';
 import { daysUntilBirthday, birthdayCountdown, birthdayDayMonth } from '@/lib/date';
 import { phoneToWaDigits } from '@/lib/phone';
@@ -80,7 +81,7 @@ export function StaffDashboardPage() {
   const firstName = userFullName.split(' ')[0] || 'Hola';
 
   return (
-    <div className="mx-auto flex max-w-[1200px] flex-col gap-6">
+    <div className="mx-auto flex max-w-[1200px] flex-col gap-3 sm:gap-6">
       {/* Encabezado */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -104,58 +105,38 @@ export function StaffDashboardPage() {
         </div>
       </div>
 
-      {/* Ingresos (comisiones): hoy / semana / mes */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatCard
-          tone="success"
-          glow="green"
-          label="Mis ingresos hoy"
-          value={isLoading ? '—' : money(c?.today ?? 0)}
-          icon={Banknote}
-          hint="Comisiones del día"
-        />
-        <StatCard
-          label="Mis ingresos semana"
+      {/* Métricas compactas: ingresos, saldo, retirado y citas en un solo bloque */}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-4 lg:grid-cols-6">
+        <MiniStat
+          label="Ingresos semana"
           value={isLoading ? '—' : money(c?.week ?? 0)}
           icon={TrendingUp}
-          hint="De lunes a hoy"
         />
-        <StatCard
-          tone="gold"
+        <MiniStat
           gold
-          glow="gold"
-          label="Mis ingresos mes"
+          label="Ingresos mes"
           value={isLoading ? '—' : money(c?.month ?? 0)}
           icon={Wallet}
-          hint="Acumulado del mes"
         />
-      </div>
-
-      {/* Saldo a favor + retirado del mes + citas hoy / semana */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard
+        <MiniStat
           label="Saldo a favor"
           value={isLoading ? '—' : money(b?.pending ?? 0)}
           icon={Wallet}
-          hint="Comisiones pendientes de cobrar"
         />
-        <StatCard
-          label="Retirado este mes"
+        <MiniStat
+          label="Retirado mes"
           value={isLoading ? '—' : money(b?.withdrawnMonth ?? 0)}
           icon={Banknote}
-          hint="Adelantos + pagos del mes"
         />
-        <StatCard
-          label="Mis citas hoy"
+        <MiniStat
+          label="Citas hoy"
           value={isLoading ? '—' : String(counts?.today ?? 0)}
           icon={CalendarClock}
-          hint="Asignadas a ti"
         />
-        <StatCard
-          label="Mis citas semana"
+        <MiniStat
+          label="Citas semana"
           value={isLoading ? '—' : String(counts?.week ?? 0)}
           icon={CalendarDays}
-          hint="De lunes a domingo"
         />
       </div>
 
@@ -429,6 +410,44 @@ function waBirthday(phone: string, name: string | null): string {
   const saludo = name ? `¡Feliz cumpleaños, ${name.split(' ')[0]}!` : '¡Feliz cumpleaños!';
   const text = `${saludo} 🎉 De parte de todo el equipo de Medusa Estudio 💇✨`;
   return `https://wa.me/${normalizePhone(phone)}?text=${encodeURIComponent(text)}`;
+}
+
+interface MiniStatProps {
+  label: string;
+  value: string;
+  icon: LucideIcon;
+  gold?: boolean;
+}
+
+function MiniStat({ label, value, icon: Icon, gold }: MiniStatProps) {
+  return (
+    <div
+      className={cn(
+        'rounded-xl border p-2.5 sm:p-3',
+        gold
+          ? 'border-gold-400/35 bg-gold-400/[0.07]'
+          : 'border-white/10 bg-white/[0.03]',
+      )}
+    >
+      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-white/50 sm:text-[11px]">
+        <Icon
+          className={cn(
+            'h-3.5 w-3.5 shrink-0',
+            gold ? 'text-gold-300' : 'text-white/40',
+          )}
+        />
+        <span className="truncate">{label}</span>
+      </div>
+      <p
+        className={cn(
+          'mt-1 truncate text-base font-semibold leading-tight sm:text-xl',
+          gold ? 'kpi-gold' : 'text-white',
+        )}
+      >
+        {value}
+      </p>
+    </div>
+  );
 }
 
 function apptDay(iso: string): string {

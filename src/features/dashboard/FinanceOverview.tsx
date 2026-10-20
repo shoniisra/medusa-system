@@ -19,7 +19,7 @@ export function FinanceOverview() {
   const { data, isLoading } = usePeriodFinance();
 
   return (
-    <section className="finance-hero relative overflow-hidden rounded-3xl p-4 sm:p-6">
+    <section className="finance-hero relative overflow-hidden rounded-2xl p-3 sm:rounded-3xl sm:p-6">
       {/* halos de fondo del hero */}
       <div
         aria-hidden
@@ -30,19 +30,19 @@ export function FinanceOverview() {
         className="pointer-events-none absolute -bottom-28 -left-16 h-64 w-64 rounded-full bg-emerald-400/10 blur-3xl"
       />
 
-      <div className="relative mb-5 flex items-center gap-3 sm:mb-6">
-        <span className="icon-badge icon-badge-gold h-11 w-11">
-          <Sparkles className="h-5 w-5" />
+      <div className="relative mb-3 flex items-center gap-2 sm:mb-6 sm:gap-3">
+        <span className="icon-badge icon-badge-gold h-8 w-8 sm:h-11 sm:w-11">
+          <Sparkles className="h-4 w-4 sm:h-5 sm:w-5" />
         </span>
         <div>
-          <h2 className="text-base font-semibold text-white">
+          <h2 className="text-sm font-semibold text-white sm:text-base">
             Resumen financiero
           </h2>
-          <p className="text-xs text-white/45">Ingresos vs egresos</p>
+          <p className="hidden text-xs text-white/45 sm:block">Ingresos vs egresos</p>
         </div>
       </div>
 
-      <div className="relative flex flex-col gap-3 sm:flex-row">
+      <div className="relative grid grid-cols-3 gap-2 sm:gap-3">
         {PERIODS.map((p) => (
           <PeriodDonutCard
             key={p.key}
@@ -70,33 +70,53 @@ function PeriodDonutCard({
   const total = f?.profit ?? 0;
 
   return (
-    <div className="flex-1 rounded-2xl border border-white/[0.07] bg-white/[0.03] p-4 transition-all hover:border-white/15">
-      <p className="mb-3 text-sm font-medium text-white">{label}</p>
-      <div className="flex items-center gap-4">
-        <Donut income={income} expense={expense} />
-        <div className="min-w-0 flex-1 space-y-1 text-xs">
-          <div className="flex justify-between">
-            <span className="text-white/50">Ingresos</span>
-            <span className="font-medium text-success">
-              {isLoading ? '—' : money(income)}
-            </span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-white/50">Egresos</span>
-            <span className="font-medium text-danger">
-              {isLoading ? '—' : money(expense)}
-            </span>
-          </div>
-          <div className="flex justify-between border-t border-white/10 pt-1">
-            <span className="text-white/50">Total</span>
-            <span
-              className={cn(
-                'font-semibold',
-                total >= 0 ? 'text-success' : 'text-danger',
-              )}
-            >
-              {isLoading ? '—' : money(total)}
-            </span>
+    <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] p-2 transition-all hover:border-white/15 sm:rounded-2xl sm:p-4">
+      {/* Mobile: dona grande arriba, período + total abajo. Compacto en una fila de 3. */}
+      <div className="flex flex-col items-center gap-1.5 sm:hidden">
+        <p className="text-[10px] font-medium uppercase tracking-wide text-white/60">
+          {label}
+        </p>
+        <Donut income={income} expense={expense} size={56} />
+        <p
+          className={cn(
+            'truncate text-[12px] font-semibold leading-none',
+            total >= 0 ? 'text-success' : 'text-danger',
+          )}
+          title={isLoading ? '' : money(total)}
+        >
+          {isLoading ? '—' : money(total)}
+        </p>
+      </div>
+
+      {/* Desktop: layout original con detalle de ingresos/egresos/total. */}
+      <div className="hidden sm:block">
+        <p className="mb-3 text-sm font-medium text-white">{label}</p>
+        <div className="flex items-center gap-4">
+          <Donut income={income} expense={expense} />
+          <div className="min-w-0 flex-1 space-y-1 text-xs">
+            <div className="flex justify-between">
+              <span className="text-white/50">Ingresos</span>
+              <span className="font-medium text-success">
+                {isLoading ? '—' : money(income)}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-white/50">Egresos</span>
+              <span className="font-medium text-danger">
+                {isLoading ? '—' : money(expense)}
+              </span>
+            </div>
+            <div className="flex justify-between border-t border-white/10 pt-1">
+              <span className="text-white/50">Total</span>
+              <span
+                className={cn(
+                  'font-semibold',
+                  total >= 0 ? 'text-success' : 'text-danger',
+                )}
+              >
+                {isLoading ? '—' : money(total)}
+              </span>
+            </div>
           </div>
         </div>
       </div>
