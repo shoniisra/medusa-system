@@ -122,6 +122,10 @@ export interface BankAccount {
   bank_name: string | null;
   account_number: string | null;
   account_type: string | null;
+  /** Método de pago con el que entra la plata a esta cuenta. NULL para internas. */
+  payment_method_id: ID | null;
+  /** Cuentas internas (ahorros, efectivo-casa): no cobran al cliente. */
+  is_internal: BoolInt;
   active: BoolInt;
 }
 

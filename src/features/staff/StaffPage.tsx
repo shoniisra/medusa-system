@@ -529,7 +529,7 @@ function PayCommissionModal({
 
   const save = useMutation({
     mutationFn: async () => {
-      const method = paymentMethodFor(methods.data, isCash);
+      const method = paymentMethodFor(methods.data, banks.data, account);
       if (!method) throw new Error('No hay un método de pago configurado.');
       const bankId = isCash ? null : account;
 
@@ -697,7 +697,7 @@ function AdvanceModal({
 
   const save = useMutation({
     mutationFn: async () => {
-      const method = paymentMethodFor(methods.data, isCash);
+      const method = paymentMethodFor(methods.data, banks.data, account);
       if (!method) throw new Error('No hay un método de pago configurado.');
       const bankId = isCash ? null : account;
 

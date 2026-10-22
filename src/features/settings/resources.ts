@@ -47,8 +47,8 @@ export interface Field {
   required?: boolean;
   placeholder?: string;
   options?: { value: string; label: string }[];
-  /** Carga dinámica de opciones (FK): sucursal, colaborador o servicio. */
-  optionsKey?: 'branches' | 'staff' | 'services';
+  /** Carga dinámica de opciones (FK). */
+  optionsKey?: 'branches' | 'staff' | 'services' | 'payment_methods';
   colSpan?: 1 | 2;
   /** Valor a guardar cuando el campo queda vacío (la columna es NOT NULL). */
   defaultValue?: string | number;
@@ -331,6 +331,13 @@ export const RESOURCES: ResourceConfig[] = [
       { name: 'bank_name', label: 'Banco', type: 'text' },
       { name: 'account_number', label: 'Nº de cuenta', type: 'text' },
       { name: 'account_type', label: 'Tipo', type: 'text', placeholder: 'ahorros, corriente…' },
+      {
+        name: 'payment_method_id',
+        label: 'Método de pago',
+        type: 'select',
+        optionsKey: 'payment_methods',
+        placeholder: 'Vacío si es cuenta interna (no cobra al cliente)',
+      },
       {
         name: 'is_internal',
         label: 'Cuenta interna (solo admins)',

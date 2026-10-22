@@ -3894,9 +3894,9 @@ function ConfirmSaleModal({
       if (dueInMoney > 0) {
         for (const entry of payments) {
           const eDest = entry.dest || checkoutBanks.data?.[0]?.id || 'cash';
-          if (!paymentMethodFor(target.methods.data, eDest === 'cash'))
+          if (!paymentMethodFor(target.methods.data, target.banks.data, eDest))
             throw new Error(
-              `No hay un método de pago ${eDest === 'cash' ? 'en efectivo' : 'por transferencia'} configurado.`,
+              `No hay un método de pago ${eDest === 'cash' ? 'en efectivo' : 'configurado para esta cuenta'}.`,
             );
         }
       }
@@ -3999,7 +3999,7 @@ function ConfirmSaleModal({
           if (entryAmt <= 0) continue;
           const eDest = entry.dest || checkoutBanks.data?.[0]?.id || 'cash';
           const eCash = eDest === 'cash';
-          const eMethod = paymentMethodFor(target.methods.data, eCash)!;
+          const eMethod = paymentMethodFor(target.methods.data, target.banks.data, eDest)!;
           const paymentId = genId();
           stmts.push({
             sql: `INSERT INTO payment
@@ -4100,7 +4100,7 @@ function ConfirmSaleModal({
           const eDest = p.dest || checkoutBanks.data?.[0]?.id || 'cash';
           return (
             (Number(p.amountStr) || 0) > 0 &&
-            !!paymentMethodFor(target.methods.data, eDest === 'cash')
+            !!paymentMethodFor(target.methods.data, target.banks.data, eDest)
           );
         })));
 

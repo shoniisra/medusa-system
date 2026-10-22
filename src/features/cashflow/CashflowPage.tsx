@@ -631,7 +631,7 @@ function IncomeModal({ ctx, onClose }: { ctx: Ctx; onClose: () => void }) {
     mutationFn: async () => {
       const now = new Date().toISOString();
       const paymentId = genId();
-      const method = paymentMethodFor(methods.data, isCash);
+      const method = paymentMethodFor(methods.data, banks.data, dest);
       if (!method) throw new Error('No hay un método de pago configurado.');
       const bankId = isCash ? null : dest;
 
@@ -774,7 +774,7 @@ function ExpenseModal({ ctx, onClose }: { ctx: Ctx; onClose: () => void }) {
 
   const save = useMutation({
     mutationFn: async () => {
-      const method = paymentMethodFor(methods.data, isCash);
+      const method = paymentMethodFor(methods.data, banks.data, source);
       if (!method) throw new Error('No hay un método de pago configurado.');
       const bankId = isCash ? null : source;
 

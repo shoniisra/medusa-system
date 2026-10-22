@@ -118,6 +118,15 @@ export function ResourceManager({ resource }: { resource: ResourceConfig }) {
         [orgId],
       ),
   });
+  const paymentMethodOpts = useQuery({
+    queryKey: ['payment-methods-options', orgId],
+    enabled: has('payment_methods') && !!orgId,
+    queryFn: () =>
+      query<{ id: string; name: string }>(
+        'SELECT id, name FROM payment_method WHERE organization_id = ? AND active = 1 ORDER BY name',
+        [orgId],
+      ),
+  });
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: listKey });
 
@@ -337,6 +346,11 @@ export function ResourceManager({ resource }: { resource: ResourceConfig }) {
               serviceOpts.data?.map((sv) => ({
                 value: sv.id,
                 label: sv.name,
+              })) ?? [],
+            payment_methods:
+              paymentMethodOpts.data?.map((pm) => ({
+                value: pm.id,
+                label: pm.name,
               })) ?? [],
           }}
           onClose={() => {

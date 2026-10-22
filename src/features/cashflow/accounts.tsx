@@ -88,15 +88,25 @@ export function usePaymentMethods(orgId: string, enabled: boolean) {
 }
 
 /**
- * Método de pago que corresponde a la cuenta elegida en `AccountSelect`: caja →
- * efectivo, cualquier banco → transferencia. Las cinco pantallas que mueven
- * plata buscaban `'cash'` y `'transfer'` por separado para después elegir uno.
+ * Método de pago que corresponde a la cuenta elegida en `AccountSelect`.
+ *
+ * `dest` es `'cash'` o el id de una `bank_account`. La caja va al método tipo
+ * `cash`. Cada cuenta bancaria queda anclada a un método concreto en
+ * `payment_method_id` (una POS a tarjeta, un alias a transferencia). Si la
+ * cuenta todavía no se asignó, se cae a `transfer` para no bloquear el cobro.
  */
 export function paymentMethodFor(
   methods: PaymentMethod[] | undefined,
-  isCash: boolean,
+  banks: BankAccount[] | undefined,
+  dest: string,
 ): PaymentMethod | undefined {
-  return methods?.find((m) => m.method_type === (isCash ? 'cash' : 'transfer'));
+  if (dest === 'cash') return methods?.find((m) => m.method_type === 'cash');
+  const account = banks?.find((b) => b.id === dest);
+  if (account?.payment_method_id) {
+    const anchored = methods?.find((m) => m.id === account.payment_method_id);
+    if (anchored) return anchored;
+  }
+  return methods?.find((m) => m.method_type === 'transfer');
 }
 
 /** Caja abierta de la sucursal: necesaria para cualquier movimiento en efectivo. */
@@ -141,7 +151,7 @@ export function usePaymentTarget(orgId: string, branchId: string, dest: string) 
     hasOpenCashToday: !!today.session,
     effectiveDest,
     isCash,
-    method: paymentMethodFor(methods.data, isCash),
+    method: paymentMethodFor(methods.data, banks.data, effectiveDest),
   };
 }
 
@@ -178,11 +188,17 @@ export function PaymentTargetFields({
         value={target.effectiveDest}
         onChange={(e) => onDest(e.target.value)}
       >
-        {target.banks.data?.map((b) => (
-          <option key={b.id} value={b.id}>
-            {b.name} (transferencia)
-          </option>
-        ))}
+        {target.banks.data?.map((b) => {
+          const method = target.methods.data?.find(
+            (m) => m.id === b.payment_method_id,
+          );
+          const label = method?.name ?? 'transferencia';
+          return (
+            <option key={b.id} value={b.id}>
+              {b.name} ({label.toLowerCase()})
+            </option>
+          );
+        })}
         <option value="cash">Efectivo (caja)</option>
       </Select>
 
