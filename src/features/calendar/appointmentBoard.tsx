@@ -40,6 +40,38 @@ export interface AppointmentRow {
   google_color_hex: string | null;
   /** Citas atendidas previas del mismo cliente. 0 = cliente nuevo. */
   past_visits: number;
+  /**
+   * Un elemento por `appointment_item`: todas comparten start_at/end_at (un
+   * solo bloque de tiempo por cita) pero cada una tiene su propia colaboradora
+   * y servicio/categoría. El calendario pinta un bloque por elemento; la
+   * lista/tablero siguen usando los campos `staff_*`/`service_name` de arriba
+   * (el primer item) como resumen de la tarjeta.
+   */
+  items: AppointmentItemBlock[];
+}
+
+export interface AppointmentItemBlock {
+  staffId: string | null;
+  staffName: string | null;
+  staffColor: string | null;
+  serviceName: string | null;
+}
+
+/** Separadores de campo/item del GROUP_CONCAT: no aparecen en texto real. */
+const ITEM_SEP = '‡';
+const FIELD_SEP = '§';
+
+function parseItemBlocks(raw: string | null): AppointmentItemBlock[] {
+  if (!raw) return [];
+  return raw.split(ITEM_SEP).map((chunk) => {
+    const [staffId, staffName, staffColor, serviceName] = chunk.split(FIELD_SEP);
+    return {
+      staffId: staffId || null,
+      staffName: staffName || null,
+      staffColor: staffColor || null,
+      serviceName: serviceName || null,
+    };
+  });
 }
 
 /** Umbral a partir del cual un cliente se muestra como "frecuente". */
@@ -182,8 +214,8 @@ export function useAppointments(from: string, to: string) {
     // fetch (una fracción de segundo con red rápida; mucho más visible si la
     // consulta tarda — tiene un subquery de past_visits por fila).
     placeholderData: keepPreviousData,
-    queryFn: () =>
-      query<AppointmentRow>(
+    queryFn: async () => {
+      const rows = await query<Omit<AppointmentRow, 'items'> & { items_raw: string | null }>(
         `SELECT a.id, a.start_at, a.end_at, a.status, a.notes,
                 a.customer_id,
                 a.google_calendar_id, a.google_calendar_event_id,
@@ -196,6 +228,16 @@ export function useAppointments(from: string, to: string) {
                 s.first_name || CASE WHEN s.last_name IS NOT NULL THEN ' ' || s.last_name ELSE '' END AS staff_name,
                 s.color AS staff_color,
                 COALESCE(sv.name, ai.category) AS service_name,
+                (SELECT GROUP_CONCAT(
+                     COALESCE(ai2.assigned_staff_id, '') || '${FIELD_SEP}' ||
+                     COALESCE(s2.first_name || CASE WHEN s2.last_name IS NOT NULL THEN ' ' || s2.last_name ELSE '' END, '') || '${FIELD_SEP}' ||
+                     COALESCE(s2.color, '') || '${FIELD_SEP}' ||
+                     COALESCE(sv2.name, ai2.category, ''),
+                   '${ITEM_SEP}')
+                   FROM appointment_item ai2
+                   LEFT JOIN staff_member s2 ON s2.id = ai2.assigned_staff_id
+                   LEFT JOIN service sv2 ON sv2.id = ai2.service_id
+                  WHERE ai2.appointment_id = a.id) AS items_raw,
                 COALESCE((SELECT COUNT(*) FROM appointment a2
                            WHERE a2.customer_id = a.customer_id
                              AND a2.status = 'attended'
@@ -204,14 +246,19 @@ export function useAppointments(from: string, to: string) {
            FROM appointment a
            LEFT JOIN customer c ON c.id = a.customer_id
            LEFT JOIN appointment_item ai
-                  ON ai.id = (SELECT ai2.id FROM appointment_item ai2
-                               WHERE ai2.appointment_id = a.id LIMIT 1)
+                  ON ai.id = (SELECT ai3.id FROM appointment_item ai3
+                               WHERE ai3.appointment_id = a.id LIMIT 1)
            LEFT JOIN staff_member s ON s.id = ai.assigned_staff_id
            LEFT JOIN service sv ON sv.id = ai.service_id
           WHERE a.branch_id = ? AND date(a.start_at) BETWEEN ? AND ?
           ORDER BY a.start_at ASC`,
         [branchId, from, to],
-      ),
+      );
+      return rows.map(({ items_raw, ...row }) => ({
+        ...row,
+        items: parseItemBlocks(items_raw),
+      }));
+    },
   });
 }
 

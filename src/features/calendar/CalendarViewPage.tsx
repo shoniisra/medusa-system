@@ -76,16 +76,34 @@ export function CalendarViewPage() {
   const { from, to } = useMemo(() => windowFor(date), [date]);
   const appts = useAppointments(from, to);
 
+  // Un bloque por colaboradora/servicio de la cita (appointment_item), todos
+  // en el mismo horario: así se ve quién atiende qué sin volver a la cita
+  // duplicada por servicio que había antes de unificar el cobro.
   const events: AgendaEvent[] = useMemo(
     () =>
-      (appts.data ?? []).map((a) => ({
-        id: a.id,
-        title: a.customer_name ?? 'Sin cliente',
-        subtitle: a.service_name ?? undefined,
-        start: new Date(a.start_at),
-        end: new Date(a.end_at),
-        color: rowColor(a),
-      })),
+      (appts.data ?? []).flatMap((a) => {
+        const blocks = a.items.length
+          ? a.items
+          : [
+              {
+                staffId: a.staff_id,
+                staffName: a.staff_name,
+                staffColor: a.staff_color,
+                serviceName: a.service_name,
+              },
+            ];
+        return blocks.map((it) => ({
+          id: a.id,
+          title: a.customer_name ?? 'Sin cliente',
+          subtitle: it.serviceName ?? undefined,
+          start: new Date(a.start_at),
+          end: new Date(a.end_at),
+          color: rowColor({
+            staff_color: it.staffColor,
+            google_color_hex: a.google_color_hex,
+          }),
+        }));
+      }),
     [appts.data],
   );
 
