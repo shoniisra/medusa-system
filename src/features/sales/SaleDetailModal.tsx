@@ -6,7 +6,8 @@ import { execute, query, queryOne } from '@/lib/db';
 import { dateShort, genId, money, timeShort } from '@/lib/format';
 import { invalidateFinance } from '@/lib/queryClient';
 import { ROUTES } from '@/config/constants';
-import { useBranchId } from '@/store/session';
+import { useBranchId, useSession } from '@/store/session';
+import { hasPermission } from '@/config/permissions';
 import { Badge, Modal, Select, useToast } from '@/components/ui';
 import { useStaff, useAssignableStaff } from '@/features/pos/useCatalog';
 import { customerNameSql } from '@/features/clients/customerNameSql';
@@ -228,6 +229,9 @@ export function SaleDetailModal({
 
   const title = sale ? `Venta ${sale.head.sale_number}` : 'Venta';
   const paid = sale?.payments.reduce((a, p) => a + p.amount, 0) ?? 0;
+  const canSeeCommissions = useSession((s) =>
+    hasPermission(s.user?.role, 'view_commissions'),
+  );
 
   // Si el modal se abrió por una cita (o la venta pertenece a una), ofrecemos
   // ir a la ficha completa de la cita con un botón de "ampliar". Es el reemplazo
@@ -334,7 +338,11 @@ export function SaleDetailModal({
                               key={r.id}
                               label={ROLE_LABEL[r.participation_role]}
                               value={r.staff_member_id}
-                              hint={`Comisión ${money(r.commission_amount)}`}
+                              hint={
+                                canSeeCommissions
+                                  ? `Comisión ${money(r.commission_amount)}`
+                                  : undefined
+                              }
                               disabled={!editable || changeStaff.isPending}
                               staff={assignableStaff.data ?? []}
                               fallbackName={staffName(r.staff_member_id)}
@@ -360,9 +368,11 @@ export function SaleDetailModal({
                             <span className="text-white/50">
                               {staffName(r.staff_member_id)}
                             </span>
-                            <span className="ml-auto text-white/60">
-                              Comisión {money(r.commission_amount)}
-                            </span>
+                            {canSeeCommissions && (
+                              <span className="ml-auto text-white/60">
+                                Comisión {money(r.commission_amount)}
+                              </span>
+                            )}
                           </div>
                         ))}
                       </>

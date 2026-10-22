@@ -191,6 +191,7 @@ export function SaleItemsEditor({
   onAddAssist,
   onRemoveAssist,
   onUpdateAssist,
+  showCommissions = true,
 }: {
   items: EditorItem[];
   staff: StaffMember[];
@@ -202,6 +203,8 @@ export function SaleItemsEditor({
   onRemoveItem: (id: string) => void;
   /** Catálogo de tipos de ayuda (nombres) para el selector. */
   assistTypes?: string[];
+  /** Mostrar % y monto de comisión por línea y total. Solo admin/gerente. */
+  showCommissions?: boolean;
   /** Registrar una ayuda en una línea. Si falta, no se muestra la UI de ayudas. */
   onAddAssist?: (itemId: string, assist: Omit<LineAssist, 'id'>) => void;
   onRemoveAssist?: (itemId: string, assistId: string) => void;
@@ -376,7 +379,7 @@ export function SaleItemsEditor({
                 </div>
               </div>
 
-              {c && (
+              {showCommissions && c && (
                 <p className="mt-2 text-xs text-white/40">
                   Comisión estilista:{' '}
                   <span className="text-white/70">
@@ -425,7 +428,7 @@ export function SaleItemsEditor({
               <th className="w-1" />
               <th>Descripción</th>
               <th>Estilista responsable</th>
-              <th className="text-right">% Estilista</th>
+              {showCommissions && <th className="text-right">% Estilista</th>}
               <th className="text-right">Cant.</th>
               <th className="text-right">P. sugerido</th>
               <th className="text-right">Descuento</th>
@@ -436,7 +439,10 @@ export function SaleItemsEditor({
           <tbody className="divide-y divide-white/5">
             {items.length === 0 && (
               <tr>
-                <td colSpan={9} className="py-8 text-center text-white/40">
+                <td
+                  colSpan={showCommissions ? 9 : 8}
+                  className="py-8 text-center text-white/40"
+                >
                   Sin ítems. Agregá un servicio o producto abajo.
                 </td>
               </tr>
@@ -504,22 +510,24 @@ export function SaleItemsEditor({
                       <span className="text-white/30">—</span>
                     )}
                   </td>
-                  <td className="whitespace-nowrap py-1 text-right text-white/70">
-                    {!c ? (
-                      '—'
-                    ) : assistSum > 0 ? (
-                      <>
-                        {money(net)}
-                        <span className="block text-[10px] text-white/35">
-                          −{money(assistSum)} ayudas
-                        </span>
-                      </>
-                    ) : c.commission_type === 'percentage' ? (
-                      `${num(c.commission_rate)}% · ${money(c.commission_amount)}`
-                    ) : (
-                      money(c.commission_amount)
-                    )}
-                  </td>
+                  {showCommissions && (
+                    <td className="whitespace-nowrap py-1 text-right text-white/70">
+                      {!c ? (
+                        '—'
+                      ) : assistSum > 0 ? (
+                        <>
+                          {money(net)}
+                          <span className="block text-[10px] text-white/35">
+                            −{money(assistSum)} ayudas
+                          </span>
+                        </>
+                      ) : c.commission_type === 'percentage' ? (
+                        `${num(c.commission_rate)}% · ${money(c.commission_amount)}`
+                      ) : (
+                        money(c.commission_amount)
+                      )}
+                    </td>
+                  )}
                   <td className="py-1 text-right">
                     {i.product_id ? (
                       <InlineEdit
@@ -574,7 +582,7 @@ export function SaleItemsEditor({
                 {assignable && onAddAssist && (
                   <tr className={cn(placeholder && 'bg-amber-400/[0.07]')}>
                     <td />
-                    <td colSpan={8} className="pb-2 pr-2">
+                    <td colSpan={showCommissions ? 8 : 7} className="pb-2 pr-2">
                       <AssistsBlock
                         item={i}
                         staff={staff}
@@ -597,9 +605,11 @@ export function SaleItemsEditor({
                 <td className="text-white/50" colSpan={2}>
                   Totales
                 </td>
-                <td className="whitespace-nowrap text-right text-white/70">
-                  {money(totalCommission)}
-                </td>
+                {showCommissions && (
+                  <td className="whitespace-nowrap text-right text-white/70">
+                    {money(totalCommission)}
+                  </td>
+                )}
                 <td colSpan={3} />
                 <td className="kpi-gold text-right">{money(total)}</td>
                 <td />

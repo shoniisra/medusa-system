@@ -22,6 +22,7 @@ import {
 } from '@/features/clients/customerCredit';
 import { genId, money, customerName, fullName } from '@/lib/format';
 import { useSession, useBranchId, useOrgId } from '@/store/session';
+import { hasPermission } from '@/config/permissions';
 import { usePosDraft } from '@/store/posDraft';
 import {
   useCustomers,
@@ -224,6 +225,9 @@ export function NewSaleTab() {
 
   const staffCommissions = commissionByStaff(editorItems, rules);
   const totalCommission = staffCommissions.reduce((a, s) => a + s.amount, 0);
+  const canSeeCommissions = useSession((s) =>
+    hasPermission(s.user?.role, 'view_commissions'),
+  );
 
   const total = draft.total();
   const subtotal = draft.subtotal();
@@ -367,6 +371,7 @@ export function NewSaleTab() {
           onUpdateAssist={(id, assistId, patch) =>
             draft.updateAssist(id, assistId, patch)
           }
+          showCommissions={canSeeCommissions}
         />
       </div>
 
@@ -401,7 +406,7 @@ export function NewSaleTab() {
             </div>
 
             {/* Comisiones estilistas */}
-            {staffCommissions.length > 0 && (
+            {canSeeCommissions && staffCommissions.length > 0 && (
               <div className="space-y-2 border-t border-white/10 pt-4 text-sm">
                 <p className="text-xs font-medium uppercase tracking-wide text-white/40">
                   Comisiones estilistas

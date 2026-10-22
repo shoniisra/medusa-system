@@ -2282,6 +2282,9 @@ function EditAppointment({ id }: { id: string }) {
   const noCharge = !!head.data && isNoCharge(head.data);
   const attendedWithSale = head.data?.status === 'attended' && !noCharge;
   const staffContacts = useSession((s) => s.user?.role === 'staff');
+  const canSeeCommissions = useSession((s) =>
+    hasPermission(s.user?.role, 'view_commissions'),
+  );
   const maskContact = staffContacts && head.data?.status !== 'confirmed';
 
   const orgId = useOrgId();
@@ -2676,6 +2679,7 @@ function EditAppointment({ id }: { id: string }) {
             onAddAssist={addAssist}
             onRemoveAssist={removeAssist}
             onUpdateAssist={updateAssist}
+            showCommissions={canSeeCommissions}
           />
 
         </div>
@@ -2814,7 +2818,7 @@ function EditAppointment({ id }: { id: string }) {
               </div>
 
               {/* Comisiones estilistas */}
-              {staffCommissions.length > 0 && (
+              {canSeeCommissions && staffCommissions.length > 0 && (
                 <div className="space-y-2 border-t border-white/10 pt-4 text-sm">
                   <p className="text-xs font-medium uppercase tracking-wide text-white/40">
                     Comisiones estilistas

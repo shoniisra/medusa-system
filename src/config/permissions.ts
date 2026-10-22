@@ -19,6 +19,7 @@ export type Permission =
   | 'use_cash_register'
   | 'view_finance'
   | 'view_staff_finance'
+  | 'view_commissions'
   | 'manage_clients'
   | 'manage_settings'
   | 'manage_staff'
@@ -38,6 +39,7 @@ const ALL: Permission[] = [
   'use_cash_register',
   'view_finance',
   'view_staff_finance',
+  'view_commissions',
   'manage_clients',
   'manage_settings',
   'manage_staff',
