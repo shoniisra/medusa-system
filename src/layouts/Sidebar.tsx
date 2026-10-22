@@ -170,6 +170,7 @@ export function Sidebar() {
                   { to: ROUTES.cashflowTransacciones, label: "Transacciones", icon: Receipt },
                   { to: ROUTES.cashflowTransferencias, label: "Transferencias", icon: ArrowLeftRight },
                   { to: ROUTES.cashflowCuentas, label: "Cuentas", icon: Landmark },
+                  { to: ROUTES.cashflowCaja, label: "Caja (efectivo)", icon: Wallet },
                   { to: ROUTES.cashflowDeudas, label: "Deudas · Créditos", icon: Scale },
                 ],
               } as NavItemWithChildren,

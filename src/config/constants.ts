@@ -77,6 +77,7 @@ export const ROUTES = {
   cashflowCuentas: '/finanzas/cuentas',
   cashflowDeudas: '/finanzas/deudas',
   cashflowTransferencias: '/finanzas/transferencias',
+  cashflowCaja: '/finanzas/caja',
   staff: '/personal',
   staffTeam: '/personal/equipo',
   staffAbsences: '/personal/ausencias',

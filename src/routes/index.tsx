@@ -140,6 +140,7 @@ export const router = createBrowserRouter([
               { path: ROUTES.cashflowCuentas, element: lazyRoute(<CashflowPage />) },
               { path: ROUTES.cashflowDeudas, element: lazyRoute(<CashflowPage />) },
               { path: ROUTES.cashflowTransferencias, element: lazyRoute(<CashflowPage />) },
+              { path: ROUTES.cashflowCaja, element: lazyRoute(<CashflowPage />) },
             ],
           },
 
