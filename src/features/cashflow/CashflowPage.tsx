@@ -170,14 +170,16 @@ export function CashflowPage() {
       {tab === 'transacciones' && <TransactionsTab ctx={ctx} />}
       {tab === 'transferencias' && <TransferenciasTab ctx={ctx} />}
       {tab === 'cuentas' && (
-        <AccountsTab
+        <AccountsTab ctx={ctx} isAdmin={isAdmin} session={open} />
+      )}
+      {tab === 'caja' && (
+        <CashSessionsTab
           ctx={ctx}
-          isAdmin={isAdmin}
           session={open}
           loading={session.isLoading}
+          branchId={branchId}
         />
       )}
-      {tab === 'caja' && <CashSessionsTab branchId={branchId} />}
       {tab === 'deudas' && <DebtsTab ctx={ctx} />}
     </div>
   );
@@ -1017,9 +1019,9 @@ function TransferModal({ ctx, onClose }: { ctx: Ctx; onClose: () => void }) {
 /* ───────────────────────────────── Cuentas ───────────────────────────────── */
 
 /**
- * Tab unificado: la caja física y las cuentas bancarias son todas «cuentas».
- * Permite abrir/cerrar caja, ver el saldo de cada banco y cuadrar cualquier
- * cuenta con un «Ajuste de saldo» (para conciliar saldos previos al sistema).
+ * Tab de cuentas: la caja física y las cuentas bancarias son todas «cuentas».
+ * CRUD completo de cuentas bancarias (crear/editar/borrar) y «Ajuste de saldo»
+ * para conciliar saldos previos al sistema. Abrir/cerrar caja vive en /caja.
  */
 type BankRow = BankAccount & { balance: number; method_name: string | null };
 
@@ -1027,15 +1029,12 @@ function AccountsTab({
   ctx,
   isAdmin,
   session,
-  loading,
 }: {
   ctx: Ctx;
   isAdmin: boolean;
   session: CashSession | null;
-  loading: boolean;
 }) {
   const qc = useQueryClient();
-  const setCashSession = useSession((s) => s.setCashSession);
   const invalidate = useInvalidateFinance();
   const accounts = useAccounts(ctx, isAdmin);
   const [adjust, setAdjust] = useState<AdjustTarget | null>(null);
@@ -1043,8 +1042,6 @@ function AccountsTab({
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<BankRow | null>(null);
   const [search, setSearch] = useState('');
-
-  if (loading) return null;
 
   const cashBalance = accounts.data?.cash ?? 0;
   const q = search.trim().toLowerCase();
@@ -1065,25 +1062,6 @@ function AccountsTab({
 
   return (
     <div className="space-y-6">
-      {/* Caja física */}
-      {!session ? (
-        <OpenForm
-          ctx={ctx}
-          onOpened={() =>
-            void qc.invalidateQueries({ queryKey: qk.cashSession(ctx.branchId) })
-          }
-        />
-      ) : (
-        <OpenSessionCard
-          ctx={ctx}
-          session={session}
-          onClosed={() => {
-            setCashSession(null);
-            invalidate();
-          }}
-        />
-      )}
-
       {/* Listado de cuentas con saldo + CRUD */}
       <Card>
         <CardHeader
@@ -3192,7 +3170,20 @@ const MOVEMENT_LABEL: Record<string, string> = {
  * las transacciones agrupadas de esa sesión. Pensado para admin/gerente que
  * necesitan auditar los turnos de caja.
  */
-function CashSessionsTab({ branchId }: { branchId: string }) {
+function CashSessionsTab({
+  ctx,
+  session,
+  loading,
+  branchId,
+}: {
+  ctx: Ctx;
+  session: CashSession | null;
+  loading: boolean;
+  branchId: string;
+}) {
+  const qc = useQueryClient();
+  const setCashSession = useSession((s) => s.setCashSession);
+  const invalidate = useInvalidateFinance();
   const [month, setMonth] = useState(() => ym(new Date()));
   const [open, setOpen] = useState<string | null>(null);
 
@@ -3249,6 +3240,26 @@ function CashSessionsTab({ branchId }: { branchId: string }) {
 
   return (
     <div className="space-y-6">
+      {/* Abrir / cerrar caja del día */}
+      {!loading &&
+        (!session ? (
+          <OpenForm
+            ctx={ctx}
+            onOpened={() =>
+              void qc.invalidateQueries({ queryKey: qk.cashSession(branchId) })
+            }
+          />
+        ) : (
+          <OpenSessionCard
+            ctx={ctx}
+            session={session}
+            onClosed={() => {
+              setCashSession(null);
+              invalidate();
+            }}
+          />
+        ))}
+
       {/* Selector de mes */}
       <div className="flex items-center justify-center gap-4">
         <button
