@@ -537,6 +537,58 @@ export interface Expense {
   updated_at: ISODateTime;
 }
 
+/* ─────────────────────────── Presupuestos y recurrentes ─────────────────── */
+
+/** Tope de gasto para una categoría en un mes. Único por (sucursal, cat, mes). */
+export interface Budget {
+  id: ID;
+  organization_id: ID;
+  branch_id: ID;
+  expense_category_id: ID;
+  /** `YYYY-MM`. */
+  period_month: string;
+  amount: number;
+  note: string | null;
+  created_by: ID | null;
+  created_at: ISODateTime;
+  updated_at: ISODateTime;
+}
+
+export type RecurringKind = 'expense' | 'income';
+export type RecurringFrequency = 'weekly' | 'biweekly' | 'monthly' | 'yearly';
+
+/**
+ * Transacción recurrente. Al correrla se instancia un `expense` (kind='expense')
+ * o un `payment` sin venta (kind='income'), igual que una carga manual, y se
+ * avanza `next_run_date` según `frequency`. El usuario confirma la generación
+ * desde la UI; no hay cron.
+ */
+export interface RecurringTransaction {
+  id: ID;
+  organization_id: ID;
+  branch_id: ID;
+  kind: RecurringKind;
+  description: string;
+  amount: number;
+  expense_category_id: ID | null;
+  income_reason: string | null;
+  payment_method_id: ID;
+  bank_account_id: ID | null;
+  frequency: RecurringFrequency;
+  /** 1-31; para monthly/yearly. Se recorta al último día si el mes es más corto. */
+  day_of_month: number | null;
+  /** 0-6 (dom-sáb); para weekly/biweekly. */
+  weekday: number | null;
+  next_run_date: ISODate;
+  last_run_date: ISODate | null;
+  start_date: ISODate;
+  end_date: ISODate | null;
+  active: BoolInt;
+  created_by: ID | null;
+  created_at: ISODateTime;
+  updated_at: ISODateTime;
+}
+
 /* ─────────────────────────── Nómina / liquidaciones ──────────────────────── */
 
 export type PayPeriodStatus =

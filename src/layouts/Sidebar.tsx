@@ -21,6 +21,9 @@ import {
   ArrowLeftRight,
   Landmark,
   Scale,
+  Target,
+  Repeat,
+  TrendingUp,
   ChevronRight,
   ChevronDown,
 } from "lucide-react";
@@ -171,9 +174,16 @@ export function Sidebar() {
                   { to: ROUTES.cashflowTransferencias, label: "Transferencias", icon: ArrowLeftRight },
                   { to: ROUTES.cashflowCuentas, label: "Cuentas", icon: Landmark },
                   { to: ROUTES.cashflowCaja, label: "Caja (efectivo)", icon: Wallet },
-                  { to: ROUTES.cashflowDeudas, label: "Deudas · Créditos", icon: Scale },
+                  { to: ROUTES.cashflowPresupuestos, label: "Presupuestos", icon: Target },
+                  { to: ROUTES.cashflowRecurrentes, label: "Recurrentes", icon: Repeat },
+                  { to: ROUTES.cashflowProyeccion, label: "Proyección", icon: TrendingUp },
                 ],
               } as NavItemWithChildren,
+              {
+                to: ROUTES.debts,
+                label: "Deudas y préstamos",
+                icon: Scale,
+              },
             ]
           : []),
         ...(can("view_staff_finance")

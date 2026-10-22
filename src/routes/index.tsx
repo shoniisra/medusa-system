@@ -69,6 +69,9 @@ const InvoicesPage = lazyPage(() =>
     default: m.InvoicesPage,
   })),
 );
+const DebtsPage = lazyPage(() =>
+  import('@/features/debts/DebtsPage').then((m) => ({ default: m.DebtsPage })),
+);
 const SettingsPage = lazyPage(() =>
   import('@/features/settings/SettingsPage').then((m) => ({
     default: m.SettingsPage,
@@ -130,7 +133,7 @@ export const router = createBrowserRouter([
             ],
           },
 
-          // Finanzas: requiere view_finance.
+          // Finanzas: requiere view_finance (admin + gerente).
           {
             element: <RequirePermission permission="view_finance" />,
             children: [
@@ -141,6 +144,10 @@ export const router = createBrowserRouter([
               { path: ROUTES.cashflowDeudas, element: lazyRoute(<CashflowPage />) },
               { path: ROUTES.cashflowTransferencias, element: lazyRoute(<CashflowPage />) },
               { path: ROUTES.cashflowCaja, element: lazyRoute(<CashflowPage />) },
+              { path: ROUTES.cashflowPresupuestos, element: lazyRoute(<CashflowPage />) },
+              { path: ROUTES.cashflowRecurrentes, element: lazyRoute(<CashflowPage />) },
+              { path: ROUTES.cashflowProyeccion, element: lazyRoute(<CashflowPage />) },
+              { path: ROUTES.debts, element: lazyRoute(<DebtsPage />) },
             ],
           },
 

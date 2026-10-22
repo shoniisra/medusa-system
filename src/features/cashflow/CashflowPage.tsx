@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { NavLink, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
+import { Navigate, NavLink, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Lock,
@@ -11,7 +11,6 @@ import {
   ArrowLeftRight,
   Wallet,
   Landmark,
-  Check,
   Trash2,
   Search,
   ChevronLeft,
@@ -23,6 +22,12 @@ import {
   Clock,
   User as UserIcon,
 } from 'lucide-react';
+import { BudgetsTab } from './BudgetsTab';
+import { RecurringTab } from './RecurringTab';
+import { ForecastTab } from './ForecastTab';
+import { CategoryPieCard } from './CategoryPieCard';
+import { ExportMenu } from './lib/ExportMenu';
+import type { ExportColumn } from './lib/exportTx';
 import { query, queryOne, execute, batch, type Stmt } from '@/lib/db';
 import { invalidateFinance, qk } from '@/lib/queryClient';
 import { genId, money, timeShort, dateShort, todayISO } from '@/lib/format';
@@ -42,7 +47,6 @@ import {
   Donut,
   useToast,
 } from '@/components/ui';
-import { CollectSection } from './CollectSection';
 import { CountCashFields } from './CountCashFields';
 import { MetricCard } from './MetricCard';
 import { SaleDetailModal } from '@/features/sales/SaleDetailModal';
@@ -60,8 +64,6 @@ import type {
   CashDirection,
   CashRegister,
   CashSession,
-  DebtCredit,
-  DebtCreditKind,
   Expense,
   ExpenseCategory,
   PaymentMethod,
@@ -96,7 +98,9 @@ const FINANCE_TABS: { path: string; label: string; end?: boolean }[] = [
   { path: ROUTES.cashflowTransferencias, label: 'Transferencias' },
   { path: ROUTES.cashflowCuentas, label: 'Cuentas' },
   { path: ROUTES.cashflowCaja, label: 'Caja' },
-  { path: ROUTES.cashflowDeudas, label: 'Deudas · Créditos' },
+  { path: ROUTES.cashflowPresupuestos, label: 'Presupuestos' },
+  { path: ROUTES.cashflowRecurrentes, label: 'Recurrentes' },
+  { path: ROUTES.cashflowProyeccion, label: 'Proyección' },
 ];
 
 /* ───────────────────────────────── Página ───────────────────────────────── */
@@ -111,7 +115,10 @@ export function CashflowPage() {
     : pathname.startsWith(ROUTES.cashflowTransacciones) ? 'transacciones'
     : pathname.startsWith(ROUTES.cashflowCuentas) ? 'cuentas'
     : pathname.startsWith(ROUTES.cashflowCaja) ? 'caja'
-    : pathname.startsWith(ROUTES.cashflowDeudas) ? 'deudas'
+    : pathname.startsWith(ROUTES.cashflowPresupuestos) ? 'presupuestos'
+    : pathname.startsWith(ROUTES.cashflowRecurrentes) ? 'recurrentes'
+    : pathname.startsWith(ROUTES.cashflowProyeccion) ? 'proyeccion'
+    : pathname.startsWith(ROUTES.cashflowDeudas) ? 'deudas-legacy'
     : pathname.startsWith(ROUTES.cashflowTransferencias) ? 'transferencias'
     : 'general';
 
@@ -139,6 +146,13 @@ export function CashflowPage() {
     userId: user?.id ?? null,
     sessionId: open?.id ?? null,
   };
+
+  // `/finanzas/deudas` dejó de ser una pestaña — ahora es una pantalla aparte
+  // en `/deudas`. Redirigimos para no romper enlaces viejos. Se evalúa después
+  // de los hooks para no violar las reglas de React.
+  if (tab === 'deudas-legacy') {
+    return <Navigate to={ROUTES.debts} replace />;
+  }
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-6">
@@ -180,7 +194,9 @@ export function CashflowPage() {
           branchId={branchId}
         />
       )}
-      {tab === 'deudas' && <DebtsTab ctx={ctx} />}
+      {tab === 'presupuestos' && <BudgetsTab ctx={ctx} />}
+      {tab === 'recurrentes' && <RecurringTab ctx={ctx} />}
+      {tab === 'proyeccion' && <ForecastTab ctx={ctx} />}
     </div>
   );
 }
@@ -1883,264 +1899,6 @@ function OpenSessionCard({
   );
 }
 
-/* ─────────────────────────── Deudas · Créditos ─────────────────────────── */
-
-function DebtsTab({ ctx }: { ctx: Ctx }) {
-  const [modal, setModal] = useState(false);
-  const invalidate = useInvalidateFinance();
-
-  const items = useQuery({
-    queryKey: ['fin-debts', ctx.branchId],
-    enabled: !!ctx.branchId,
-    queryFn: () =>
-      query<DebtCredit>(
-        `SELECT * FROM debt_credit
-          WHERE branch_id = ? AND status <> 'voided'
-          ORDER BY status = 'settled', due_date IS NULL, due_date`,
-        [ctx.branchId],
-      ),
-  });
-
-  const rows = items.data ?? [];
-  const debts = rows.filter((r) => r.kind === 'debt');
-  const credits = rows.filter((r) => r.kind === 'credit');
-  const pend = (list: DebtCredit[]) =>
-    list
-      .filter((r) => r.status === 'open')
-      .reduce((a, r) => a + (r.amount - r.paid_amount), 0);
-
-  return (
-    <div className="space-y-6">
-      <CollectSection ctx={ctx} />
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Card>
-          <MetricCard size="xl" label="Por pagar (deudas)" value={money(pend(debts))} tone="danger" />
-        </Card>
-        <Card>
-          <MetricCard size="xl" label="Por cobrar (créditos)" value={money(pend(credits))} tone="success" />
-        </Card>
-      </div>
-
-      <Card>
-        <CardHeader
-          title="Deudas y créditos"
-          subtitle="Cuentas por pagar y por cobrar"
-          action={
-            <Button size="sm" onClick={() => setModal(true)}>
-              <Plus className="h-4 w-4" /> Nuevo
-            </Button>
-          }
-        />
-        {rows.length > 0 ? (
-          <ul className="divide-y divide-white/5">
-            {rows.map((r) => (
-              <DebtRow key={r.id} item={r} onChanged={invalidate} />
-            ))}
-          </ul>
-        ) : (
-          <EmptyState icon={Receipt} title="Sin deudas ni créditos" />
-        )}
-      </Card>
-
-      {modal && (
-        <DebtModal
-          ctx={ctx}
-          onClose={() => setModal(false)}
-          onSaved={() => {
-            invalidate();
-            setModal(false);
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-function DebtRow({
-  item,
-  onChanged,
-}: {
-  item: DebtCredit;
-  onChanged: () => void;
-}) {
-  const toast = useToast();
-  const pending = item.amount - item.paid_amount;
-  const isDebt = item.kind === 'debt';
-
-  const settle = useMutation({
-    mutationFn: () =>
-      execute(
-        `UPDATE debt_credit
-            SET status='settled', paid_amount=amount, updated_at=?
-          WHERE id = ?`,
-        [new Date().toISOString(), item.id],
-      ),
-    onSuccess: () => {
-      toast.success(isDebt ? 'Deuda saldada' : 'Cobro registrado', item.counterparty);
-      onChanged();
-    },
-    onError: (e: Error) => toast.error('No se pudo saldar', e.message),
-  });
-
-  const remove = useMutation({
-    mutationFn: () =>
-      execute(
-        `UPDATE debt_credit SET status='voided', updated_at=? WHERE id = ?`,
-        [new Date().toISOString(), item.id],
-      ),
-    onSuccess: () => {
-      toast.info('Registro anulado', item.counterparty);
-      onChanged();
-    },
-    onError: (e: Error) => toast.error('No se pudo anular', e.message),
-  });
-
-  return (
-    <li className="flex items-center justify-between gap-3 py-3">
-      <div className="min-w-0">
-        <div className="flex items-center gap-2">
-          <Badge tone={isDebt ? 'danger' : 'success'}>
-            {isDebt ? 'Por pagar' : 'Por cobrar'}
-          </Badge>
-          <p className="truncate text-sm text-white">{item.counterparty}</p>
-        </div>
-        <p className="text-xs text-white/40">
-          {item.description ? `${item.description} · ` : ''}
-          {item.due_date ? `Vence ${dateShort(item.due_date)}` : 'Sin vencimiento'}
-          {item.status === 'settled' && ' · Saldado'}
-        </p>
-      </div>
-      <div className="flex items-center gap-2">
-        <span
-          className={cn(
-            'text-sm font-semibold',
-            item.status === 'settled'
-              ? 'text-white/40 line-through'
-              : isDebt
-                ? 'text-danger'
-                : 'text-success',
-          )}
-        >
-          {money(pending)}
-        </span>
-        {item.status === 'open' && (
-          <button
-            title="Marcar saldado"
-            onClick={() => settle.mutate()}
-            className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-emerald-300"
-          >
-            <Check className="h-4 w-4" />
-          </button>
-        )}
-        <button
-          title="Eliminar"
-          onClick={() => remove.mutate()}
-          className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-danger"
-        >
-          <Trash2 className="h-4 w-4" />
-        </button>
-      </div>
-    </li>
-  );
-}
-
-function DebtModal({
-  ctx,
-  onClose,
-  onSaved,
-}: {
-  ctx: Ctx;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const toast = useToast();
-  const [kind, setKind] = useState<DebtCreditKind>('debt');
-  const [counterparty, setCounterparty] = useState('');
-  const [description, setDescription] = useState('');
-  const [amount, setAmount] = useState('');
-  const [dueDate, setDueDate] = useState('');
-
-  const save = useMutation({
-    mutationFn: async () => {
-      const now = new Date().toISOString();
-      await execute(
-        `INSERT INTO debt_credit
-           (id, organization_id, branch_id, kind, counterparty, description, amount,
-            paid_amount, due_date, status, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, 'open', ?, ?, ?)`,
-        [
-          genId(),
-          ctx.orgId,
-          ctx.branchId,
-          kind,
-          counterparty,
-          description || null,
-          Number(amount),
-          dueDate || null,
-          ctx.userId,
-          now,
-          now,
-        ],
-      );
-    },
-    onSuccess: () => {
-      toast.success(
-        kind === 'debt' ? 'Deuda registrada' : 'Crédito registrado',
-        `${counterparty} · ${money(Number(amount) || 0)}`,
-      );
-      onSaved();
-    },
-    onError: (e: Error) => toast.error('No se pudo guardar', e.message),
-  });
-
-  return (
-    <Modal open onClose={onClose} title="Nueva deuda o crédito">
-      <div className="space-y-4">
-        <Select
-          label="Tipo"
-          value={kind}
-          onChange={(e) => setKind(e.target.value as DebtCreditKind)}
-        >
-          <option value="debt">Por pagar (le debemos a alguien)</option>
-          <option value="credit">Por cobrar (nos deben)</option>
-        </Select>
-        <Input
-          label={kind === 'debt' ? 'Acreedor' : 'Deudor'}
-          value={counterparty}
-          onChange={(e) => setCounterparty(e.target.value)}
-          placeholder="Nombre de la persona o proveedor"
-        />
-        <Input
-          label="Monto"
-          type="number"
-          min="0"
-          step="0.01"
-          value={amount}
-          onChange={(e) => setAmount(e.target.value)}
-        />
-        <DateInput
-          label="Vencimiento (opcional)"
-          value={dueDate}
-          onChange={setDueDate}
-        />
-        <Input
-          label="Descripción (opcional)"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-        />
-        <Button
-          className="w-full"
-          disabled={!counterparty || !amount || Number(amount) <= 0}
-          loading={save.isPending}
-          onClick={() => save.mutate()}
-        >
-          Guardar
-        </Button>
-      </div>
-    </Modal>
-  );
-}
 
 /* ─────────────────────── Transacciones (ingresos / egresos) ─────────────────────── */
 
@@ -2295,8 +2053,49 @@ function TxTable({
   accountOf?: (r: TxRow | TxFullRow) => string;
 }) {
   const navigate = useNavigate();
+  const qc = useQueryClient();
+  const branchId = useBranchId();
+  const toast = useToast();
   // Venta abierta en el modal de detalle (ingresos del POS o de cita).
   const [openSale, setOpenSale] = useState<string | null>(null);
+  const [toVoid, setToVoid] = useState<TxRow | TxFullRow | null>(null);
+
+  const voidTx = useMutation({
+    mutationFn: async (r: TxRow | TxFullRow) => {
+      const now = new Date().toISOString();
+      if (r.direction === 'out') {
+        // Egreso manual: marca expense como voided y revierte movimiento de caja.
+        await batch([
+          {
+            sql: `UPDATE expense SET status='voided', updated_at=? WHERE id = ?`,
+            args: [now, r.id],
+          },
+          {
+            sql: `DELETE FROM cash_movement WHERE expense_id = ?`,
+            args: [r.id],
+          },
+        ]);
+      } else {
+        // Ingreso manual (sin venta): payment status=voided + revierte caja.
+        await batch([
+          {
+            sql: `UPDATE payment SET status='voided' WHERE id = ?`,
+            args: [r.id],
+          },
+          {
+            sql: `DELETE FROM cash_movement WHERE payment_id = ?`,
+            args: [r.id],
+          },
+        ]);
+      }
+    },
+    onSuccess: () => {
+      toast.info('Transacción anulada');
+      invalidateFinance(qc, branchId);
+      setToVoid(null);
+    },
+    onError: (e: Error) => toast.error('No se pudo anular', e.message),
+  });
   return (
     <div className="-mx-2 overflow-x-auto">
       <table className="w-full min-w-[720px] text-sm">
@@ -2355,30 +2154,41 @@ function TxTable({
                   {money(r.amount)}
                 </td>
                 <td className="whitespace-nowrap px-2 py-2 text-right">
-                  {target || (isIn && r.sale_id) ? (
-                    <span className="inline-flex items-center gap-3">
-                      {target && (
-                        <button
-                          onClick={() => navigate(target)}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-gold-300 hover:underline"
-                          title="Abrir cita"
-                        >
-                          Cita <ExternalLink className="h-3 w-3" />
-                        </button>
+                  <span className="inline-flex items-center gap-3">
+                    {target && (
+                      <button
+                        onClick={() => navigate(target)}
+                        className="inline-flex items-center gap-1 text-xs font-medium text-gold-300 hover:underline"
+                        title="Abrir cita"
+                      >
+                        Cita <ExternalLink className="h-3 w-3" />
+                      </button>
+                    )}
+                    {isIn && r.sale_id && (
+                      <button
+                        onClick={() => setOpenSale(r.sale_id)}
+                        className="inline-flex items-center gap-1 text-xs font-medium text-gold-300 hover:underline"
+                        title="Ver detalle de la venta"
+                      >
+                        Venta <Receipt className="h-3 w-3" />
+                      </button>
+                    )}
+                    {/* Anular egresos manuales e ingresos sueltos (sin venta ni cita).
+                        Las ventas y cobros de cita se editan desde su propio detalle. */}
+                    {(!isIn || (!r.sale_id && !r.appointment_id)) && (
+                      <button
+                        onClick={() => setToVoid(r)}
+                        className="inline-flex items-center gap-1 text-xs font-medium text-white/40 hover:text-danger"
+                        title="Anular esta transacción"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                    {!target && !(isIn && r.sale_id) &&
+                      (isIn ? (r.sale_id || r.appointment_id) : false) && (
+                        <span className="text-xs text-white/20">—</span>
                       )}
-                      {isIn && r.sale_id && (
-                        <button
-                          onClick={() => setOpenSale(r.sale_id)}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-gold-300 hover:underline"
-                          title="Ver detalle de la venta"
-                        >
-                          Venta <Receipt className="h-3 w-3" />
-                        </button>
-                      )}
-                    </span>
-                  ) : (
-                    <span className="text-xs text-white/20">—</span>
-                  )}
+                  </span>
                 </td>
               </tr>
             );
@@ -2388,6 +2198,52 @@ function TxTable({
       {openSale && (
         <SaleDetailModal saleId={openSale} onClose={() => setOpenSale(null)} />
       )}
+      {toVoid && (
+        <Modal
+          open
+          onClose={() => setToVoid(null)}
+          title="Anular transacción"
+        >
+          <div className="space-y-4">
+            <p className="text-sm text-white/70">
+              {toVoid.direction === 'out'
+                ? 'El egreso quedará anulado y se revertirá de la caja si estaba en efectivo. La fila se oculta de los resúmenes.'
+                : 'El ingreso quedará anulado y se revertirá de la caja si estaba en efectivo. La fila se oculta de los resúmenes.'}
+            </p>
+            <div className="rounded-xl bg-white/5 p-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-white/50">Detalle</span>
+                <span className="text-white">
+                  {toVoid.reference ?? toVoid.category}
+                </span>
+              </div>
+              <div className="mt-1 flex justify-between">
+                <span className="text-white/50">Monto</span>
+                <span className="font-semibold text-white">
+                  {money(toVoid.amount)}
+                </span>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => setToVoid(null)}
+              >
+                Cancelar
+              </Button>
+              <Button
+                variant="danger"
+                className="flex-1"
+                loading={voidTx.isPending}
+                onClick={() => voidTx.mutate(toVoid)}
+              >
+                Anular
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -2396,6 +2252,9 @@ function TxTable({
 
 function MonthlyResumenTab({ branchId }: { branchId: string }) {
   const [year, setYear] = useState(new Date().getFullYear());
+  const [pieMonth, setPieMonth] = useState(() =>
+    new Date().toISOString().slice(0, 7),
+  );
 
   const data = useQuery({
     queryKey: ['fin-monthly', branchId, year],
@@ -2435,24 +2294,47 @@ function MonthlyResumenTab({ branchId }: { branchId: string }) {
   const yearExpense = months.reduce((a, m) => a + m.expense, 0);
   const yearTotal = yearIncome - yearExpense;
 
+  const resumenCols: ExportColumn<{
+    key: string;
+    income: number;
+    expense: number;
+    total: number;
+  }>[] = [
+    { header: 'Mes', value: (r) => r.key },
+    { header: 'Ingresos', value: (r) => r.income.toFixed(2) },
+    { header: 'Egresos', value: (r) => r.expense.toFixed(2) },
+    { header: 'Neto', value: (r) => r.total.toFixed(2) },
+  ];
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-center gap-4">
-        <button
-          onClick={() => setYear((y) => y - 1)}
-          className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
-        >
-          <ChevronLeft className="h-5 w-5" />
-        </button>
-        <span className="min-w-[4rem] text-center text-lg font-semibold text-white">
-          {year}
-        </span>
-        <button
-          onClick={() => setYear((y) => y + 1)}
-          className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
-        >
-          <ChevronRight className="h-5 w-5" />
-        </button>
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex-1" />
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setYear((y) => y - 1)}
+            className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+          >
+            <ChevronLeft className="h-5 w-5" />
+          </button>
+          <span className="min-w-[4rem] text-center text-lg font-semibold text-white">
+            {year}
+          </span>
+          <button
+            onClick={() => setYear((y) => y + 1)}
+            className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+          >
+            <ChevronRight className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="flex flex-1 justify-end">
+          <ExportMenu
+            title={`Resumen ${year}`}
+            rows={months}
+            columns={resumenCols}
+            subtitle={`Ingresos ${money(yearIncome)} · Egresos ${money(yearExpense)}`}
+          />
+        </div>
       </div>
 
       <Card gold>
@@ -2466,6 +2348,18 @@ function MonthlyResumenTab({ branchId }: { branchId: string }) {
           />
         </div>
       </Card>
+
+      {/* Gráfico de gastos por categoría del mes seleccionado */}
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-white">Mes a analizar</h3>
+        <input
+          type="month"
+          value={pieMonth}
+          onChange={(e) => setPieMonth(e.target.value)}
+          className="h-9 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-white focus:border-gold/40 focus:outline-none"
+        />
+      </div>
+      <CategoryPieCard branchId={branchId} month={pieMonth} />
 
       <div className="grid gap-4 sm:grid-cols-2">
         {months.map((m) => (
@@ -2673,6 +2567,18 @@ function TransactionsTab({ ctx }: { ctx: Ctx }) {
   const set = <K extends keyof TxFilters>(k: K, v: TxFilters[K]) =>
     setFilters((prev) => ({ ...prev, [k]: v }));
 
+  const exportCols: ExportColumn<TxFullRow>[] = [
+    { header: 'Fecha', value: (r) => r.at },
+    { header: 'Tipo', value: (r) => (r.direction === 'in' ? 'Ingreso' : 'Egreso') },
+    { header: 'Categoría', value: (r) => r.category },
+    { header: 'Detalle', value: (r) => r.reference ?? '' },
+    { header: 'Cliente', value: (r) => r.customer_name ?? '' },
+    { header: 'Cuenta', value: (r) => (r.bank_account_id ? bankName(r.bank_account_id) : r.method_type === 'cash' ? 'Caja' : r.method_name) },
+    { header: 'Usuario', value: (r) => r.created_by_name ?? '' },
+    { header: 'Monto', value: (r) => (r.direction === 'in' ? r.amount.toFixed(2) : (-r.amount).toFixed(2)) },
+    { header: 'Nota', value: (r) => r.note ?? '' },
+  ];
+
   return (
     <div className="space-y-4">
       {/* Fila 1: año + ordenar (siempre visible) */}
@@ -2697,6 +2603,12 @@ function TransactionsTab({ ctx }: { ctx: Ctx }) {
         </div>
 
         <div className="flex items-center gap-3">
+          <ExportMenu
+            title={`Transacciones ${year}`}
+            rows={rows}
+            columns={exportCols}
+            subtitle={`${rows.length} registro(s) · Ingresos ${money(totalIn)} · Egresos ${money(totalOut)}`}
+          />
           {/* Buscar (solo mobile) */}
           <Button
             size="sm"

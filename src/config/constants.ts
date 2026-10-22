@@ -75,9 +75,15 @@ export const ROUTES = {
   cashflowResumen: '/finanzas/resumen',
   cashflowTransacciones: '/finanzas/transacciones',
   cashflowCuentas: '/finanzas/cuentas',
-  cashflowDeudas: '/finanzas/deudas',
   cashflowTransferencias: '/finanzas/transferencias',
   cashflowCaja: '/finanzas/caja',
+  cashflowPresupuestos: '/finanzas/presupuestos',
+  cashflowRecurrentes: '/finanzas/recurrentes',
+  cashflowProyeccion: '/finanzas/proyeccion',
+  /** Pantalla aparte de deudas y préstamos (ex-tab de Finanzas). */
+  debts: '/deudas',
+  /** Alias legacy `/finanzas/deudas` → `/deudas` para no romper enlaces viejos. */
+  cashflowDeudas: '/finanzas/deudas',
   staff: '/personal',
   staffTeam: '/personal/equipo',
   staffAbsences: '/personal/ausencias',
