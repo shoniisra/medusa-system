@@ -1130,12 +1130,16 @@ function AccountsTab({
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="truncate text-sm text-white">{b.name}</p>
-                    {b.is_internal ? (
-                      <Badge tone="gold">Interna</Badge>
-                    ) : b.method_name ? (
+                    {b.is_internal && (
+                      <Badge tone="info">
+                        <Lock className="mr-1 h-3 w-3" />
+                        Privada
+                      </Badge>
+                    )}
+                    {b.method_name ? (
                       <Badge tone="muted">{b.method_name}</Badge>
                     ) : (
-                      <Badge tone="danger">Sin método</Badge>
+                      !b.is_internal && <Badge tone="danger">Sin método</Badge>
                     )}
                   </div>
                   <p className="truncate text-xs text-white/40">
