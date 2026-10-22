@@ -2,7 +2,7 @@
  * Horario comercial y utilidades de disponibilidad.
  *
  * Realidad del salón:
- *  - Lun–Vie 10:00–18:00, Sáb 09:00–16:00, Dom cerrado.
+ *  - Lun–Sáb 07:00–19:30, Dom cerrado.
  *  - A veces hay horas extra → reservar fuera de horario se PERMITE pero se avisa.
  *  - La duración depende del servicio (uñas 20–30 min, color 4–5 h).
  *  - El solape con otra cita del mismo estilista se BLOQUEA.
@@ -25,12 +25,12 @@ export interface DayHours {
 /** Índice 0=Dom … 6=Sáb. null = cerrado. */
 const BUSINESS_HOURS: (DayHours | null)[] = [
   null, // Dom
-  { open: '10:00', close: '18:00' }, // Lun
-  { open: '10:00', close: '18:00' }, // Mar
-  { open: '10:00', close: '18:00' }, // Mié
-  { open: '10:00', close: '18:00' }, // Jue
-  { open: '10:00', close: '18:00' }, // Vie
-  { open: '09:00', close: '16:00' }, // Sáb
+  { open: '07:00', close: '19:30' }, // Lun
+  { open: '07:00', close: '19:30' }, // Mar
+  { open: '07:00', close: '19:30' }, // Mié
+  { open: '07:00', close: '19:30' }, // Jue
+  { open: '07:00', close: '19:30' }, // Vie
+  { open: '07:00', close: '19:30' }, // Sáb
 ];
 
 /** Duración por defecto (min) si no hay categoría ni servicio que la definan. */

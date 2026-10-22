@@ -242,9 +242,33 @@ const rbcMessages = {
   noEventsInRange: 'Sin citas.',
 };
 
+const HOUR_OPTIONS = Array.from({ length: 24 }, (_, i) =>
+  String(i).padStart(2, '0'),
+);
+const MINUTE_OPTIONS = [
+  '00',
+  '05',
+  '10',
+  '15',
+  '20',
+  '25',
+  '30',
+  '35',
+  '40',
+  '45',
+  '50',
+  '55',
+];
+
+const timeSelectClass =
+  'rounded-lg border border-white/10 bg-ink-800/80 px-2 py-2 text-white focus:border-gold/40 focus:outline-none';
+
 /**
- * Hora libre a mano. La rejilla y el calendario avanzan de a bloques; esto
- * permite cualquier minuto en múltiplos de 5 (14:45, 17:15…).
+ * Hora libre a mano, con dos desplegables (hora / minuto) en vez del input
+ * nativo `type="time"`: ese widget obliga a apuntar con precisión a cada
+ * segmento (o a abrir una rueda lenta) y no deja tipear la hora directo. Con
+ * selects se puede tipear el número para saltar de una, o tocar y elegir sin
+ * puntería. Minutos en múltiplos de 5 (14:45, 17:15…), igual que antes.
  */
 function TimeField({
   value,
@@ -255,6 +279,7 @@ function TimeField({
   onChange: (v: string) => void;
   className?: string;
 }) {
+  const [hh, mm] = value.split(':');
   return (
     <label
       className={cn(
@@ -263,16 +288,33 @@ function TimeField({
       )}
     >
       Otra hora
-      <input
-        type="time"
-        value={value}
-        step={300}
-        onChange={(e) => {
-          if (!e.target.value) return;
-          onChange(e.target.value);
-        }}
-        className="rounded-lg border border-white/10 bg-ink-800/60 px-2.5 py-2 text-white"
-      />
+      <div className="flex items-center gap-1">
+        <select
+          value={hh}
+          onChange={(e) => onChange(`${e.target.value}:${mm}`)}
+          className={timeSelectClass}
+          aria-label="Hora"
+        >
+          {HOUR_OPTIONS.map((h) => (
+            <option key={h} value={h}>
+              {h}
+            </option>
+          ))}
+        </select>
+        <span className="text-white/30">:</span>
+        <select
+          value={mm}
+          onChange={(e) => onChange(`${hh}:${e.target.value}`)}
+          className={timeSelectClass}
+          aria-label="Minuto"
+        >
+          {MINUTE_OPTIONS.map((m) => (
+            <option key={m} value={m}>
+              {m}
+            </option>
+          ))}
+        </select>
+      </div>
     </label>
   );
 }
