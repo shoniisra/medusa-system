@@ -16,8 +16,12 @@ import {
   Search,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Scale,
+  Pencil,
   ExternalLink,
+  Clock,
+  User as UserIcon,
 } from 'lucide-react';
 import { query, queryOne, execute, batch, type Stmt } from '@/lib/db';
 import { invalidateFinance, qk } from '@/lib/queryClient';
@@ -91,6 +95,7 @@ const FINANCE_TABS: { path: string; label: string; end?: boolean }[] = [
   { path: ROUTES.cashflowTransacciones, label: 'Transacciones' },
   { path: ROUTES.cashflowTransferencias, label: 'Transferencias' },
   { path: ROUTES.cashflowCuentas, label: 'Cuentas' },
+  { path: ROUTES.cashflowCaja, label: 'Caja' },
   { path: ROUTES.cashflowDeudas, label: 'Deudas · Créditos' },
 ];
 
@@ -105,6 +110,7 @@ export function CashflowPage() {
   const tab = pathname.startsWith(ROUTES.cashflowResumen) ? 'resumen'
     : pathname.startsWith(ROUTES.cashflowTransacciones) ? 'transacciones'
     : pathname.startsWith(ROUTES.cashflowCuentas) ? 'cuentas'
+    : pathname.startsWith(ROUTES.cashflowCaja) ? 'caja'
     : pathname.startsWith(ROUTES.cashflowDeudas) ? 'deudas'
     : pathname.startsWith(ROUTES.cashflowTransferencias) ? 'transferencias'
     : 'general';
@@ -171,6 +177,7 @@ export function CashflowPage() {
           loading={session.isLoading}
         />
       )}
+      {tab === 'caja' && <CashSessionsTab branchId={branchId} />}
       {tab === 'deudas' && <DebtsTab ctx={ctx} />}
     </div>
   );
@@ -569,8 +576,13 @@ function useAccounts(ctx: Ctx, showInternal = true) {
             [ctx.branchId],
           );
       const cash = (row?.opening ?? 0) + (row?.net ?? 0);
-      const banks = await query<BankAccount & { balance: number }>(
-        `SELECT ba.id, ba.name, ba.bank_name,
+      const banks = await query<
+        BankAccount & { balance: number; method_name: string | null }
+      >(
+        `SELECT ba.id, ba.organization_id, ba.name, ba.bank_name,
+                ba.account_number, ba.account_type,
+                ba.payment_method_id, ba.is_internal, ba.active,
+                pm.name AS method_name,
                 COALESCE((SELECT SUM(p.amount) FROM payment p
                            WHERE p.bank_account_id = ba.id AND p.status = 'confirmed'),0)
               - COALESCE((SELECT SUM(e.amount) FROM expense e
@@ -581,6 +593,7 @@ function useAccounts(ctx: Ctx, showInternal = true) {
                            WHERE t.from_kind = 'bank' AND t.from_bank_account_id = ba.id),0)
                 AS balance
            FROM bank_account ba
+           LEFT JOIN payment_method pm ON pm.id = ba.payment_method_id
           WHERE ba.organization_id = ? AND ba.active = 1
             AND (? OR COALESCE(ba.is_internal, 0) = 0)
           ORDER BY ba.name`,
@@ -1008,6 +1021,8 @@ function TransferModal({ ctx, onClose }: { ctx: Ctx; onClose: () => void }) {
  * Permite abrir/cerrar caja, ver el saldo de cada banco y cuadrar cualquier
  * cuenta con un «Ajuste de saldo» (para conciliar saldos previos al sistema).
  */
+type BankRow = BankAccount & { balance: number; method_name: string | null };
+
 function AccountsTab({
   ctx,
   isAdmin,
@@ -1024,10 +1039,29 @@ function AccountsTab({
   const invalidate = useInvalidateFinance();
   const accounts = useAccounts(ctx, isAdmin);
   const [adjust, setAdjust] = useState<AdjustTarget | null>(null);
+  const [editing, setEditing] = useState<BankRow | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [deleting, setDeleting] = useState<BankRow | null>(null);
+  const [search, setSearch] = useState('');
 
   if (loading) return null;
 
   const cashBalance = accounts.data?.cash ?? 0;
+  const q = search.trim().toLowerCase();
+  const banks = accounts.data?.banks ?? [];
+  const filteredBanks = q
+    ? banks.filter((b) =>
+        [b.name, b.bank_name, b.account_number, b.method_name]
+          .some((v) => v && String(v).toLowerCase().includes(q)),
+      )
+    : banks;
+  const cashMatches = !q || 'caja efectivo'.includes(q);
+
+  const refresh = () => {
+    invalidate();
+    void qc.invalidateQueries({ queryKey: ['bank-accounts', ctx.orgId] });
+    void qc.invalidateQueries({ queryKey: ['bank-accounts-checkout', ctx.orgId] });
+  };
 
   return (
     <div className="space-y-6">
@@ -1050,53 +1084,86 @@ function AccountsTab({
         />
       )}
 
-      {/* Listado de cuentas con saldo + ajuste */}
+      {/* Listado de cuentas con saldo + CRUD */}
       <Card>
         <CardHeader
           title="Cuentas"
           subtitle="Saldo actual de la caja y las cuentas bancarias"
         />
-        <ul className="divide-y divide-white/5">
-          {/* Caja */}
-          <li className="flex items-center justify-between gap-3 py-3">
-            <div className="flex items-center gap-3">
-              <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-gold/10 text-gold-300 ring-1 ring-gold/20">
-                <Wallet className="h-5 w-5" />
-              </span>
-              <div>
-                <p className="text-sm text-white">Caja (efectivo)</p>
-                <p className="text-xs text-white/40">
-                  {session ? 'Sesión abierta' : 'Caja cerrada'}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-sm font-semibold text-white">
-                {money(cashBalance)}
-              </span>
-              <button
-                title="Ajustar saldo"
-                disabled={!session}
-                onClick={() =>
-                  setAdjust({ kind: 'cash', name: 'Caja', current: cashBalance })
-                }
-                className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-gold-300 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <Scale className="h-4 w-4" />
-              </button>
-            </div>
-          </li>
 
-          {/* Bancos */}
-          {accounts.data?.banks.map((b) => (
-            <li key={b.id} className="flex items-center justify-between gap-3 py-3">
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="relative flex-1 sm:max-w-xs">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Buscar cuenta, banco, método…"
+              className="input-base pl-9"
+            />
+          </div>
+          {isAdmin && (
+            <Button onClick={() => setCreating(true)}>
+              <Plus className="h-4 w-4" /> Nueva cuenta
+            </Button>
+          )}
+        </div>
+
+        <ul className="divide-y divide-white/5">
+          {/* Caja (siempre visible salvo que el buscador la filtre) */}
+          {cashMatches && (
+            <li className="flex items-center justify-between gap-3 py-3">
               <div className="flex items-center gap-3">
-                <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 text-white/60 ring-1 ring-white/10">
-                  <Landmark className="h-5 w-5" />
+                <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-gold/10 text-gold-300 ring-1 ring-gold/20">
+                  <Wallet className="h-5 w-5" />
                 </span>
                 <div>
-                  <p className="text-sm text-white">{b.name}</p>
-                  <p className="text-xs text-white/40">{b.bank_name ?? 'Banco'}</p>
+                  <p className="text-sm text-white">Caja (efectivo)</p>
+                  <p className="text-xs text-white/40">
+                    {session ? 'Sesión abierta' : 'Caja cerrada'}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-semibold text-white">
+                  {money(cashBalance)}
+                </span>
+                <button
+                  title="Ajustar saldo"
+                  disabled={!session}
+                  onClick={() =>
+                    setAdjust({ kind: 'cash', name: 'Caja', current: cashBalance })
+                  }
+                  className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-gold-300 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Scale className="h-4 w-4" />
+                </button>
+              </div>
+            </li>
+          )}
+
+          {/* Bancos */}
+          {filteredBanks.map((b) => (
+            <li key={b.id} className="flex items-center justify-between gap-3 py-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/5 text-white/60 ring-1 ring-white/10">
+                  <Landmark className="h-5 w-5" />
+                </span>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="truncate text-sm text-white">{b.name}</p>
+                    {b.is_internal ? (
+                      <Badge tone="gold">Interna</Badge>
+                    ) : b.method_name ? (
+                      <Badge tone="muted">{b.method_name}</Badge>
+                    ) : (
+                      <Badge tone="danger">Sin método</Badge>
+                    )}
+                  </div>
+                  <p className="truncate text-xs text-white/40">
+                    {[b.bank_name, b.account_number].filter(Boolean).join(' · ') ||
+                      'Banco'}
+                  </p>
                 </div>
               </div>
               <div className="flex items-center gap-3">
@@ -1117,18 +1184,36 @@ function AccountsTab({
                 >
                   <Scale className="h-4 w-4" />
                 </button>
+                {isAdmin && (
+                  <>
+                    <button
+                      title="Editar"
+                      onClick={() => setEditing(b)}
+                      className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-gold-300"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button
+                      title="Eliminar"
+                      onClick={() => setDeleting(b)}
+                      className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-danger"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </>
+                )}
               </div>
             </li>
           ))}
         </ul>
 
-        {(!accounts.data || accounts.data.banks.length === 0) && (
+        {banks.length === 0 && (
           <EmptyState
             icon={Landmark}
             title="Sin cuentas bancarias"
             description={
               isAdmin
-                ? 'Agregá cuentas en Configuración → Cuentas bancarias.'
+                ? 'Creá una cuenta con el botón “Nueva cuenta”.'
                 : 'Todavía no hay cuentas bancarias configuradas.'
             }
           />
@@ -1151,7 +1236,290 @@ function AccountsTab({
           }}
         />
       )}
+
+      {(creating || editing) && (
+        <BankAccountModal
+          ctx={ctx}
+          row={editing}
+          onClose={() => {
+            setCreating(false);
+            setEditing(null);
+          }}
+          onSaved={() => {
+            refresh();
+            setCreating(false);
+            setEditing(null);
+          }}
+        />
+      )}
+
+      {deleting && (
+        <DeleteBankAccountModal
+          row={deleting}
+          onClose={() => setDeleting(null)}
+          onDeleted={() => {
+            refresh();
+            setDeleting(null);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/* ───────────────────────── Modal: crear / editar banco ───────────────────────── */
+
+function BankAccountModal({
+  ctx,
+  row,
+  onClose,
+  onSaved,
+}: {
+  ctx: Ctx;
+  row: BankRow | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const toast = useToast();
+  const isEdit = !!row;
+  const [name, setName] = useState(row?.name ?? '');
+  const [bankName, setBankName] = useState(row?.bank_name ?? '');
+  const [accountNumber, setAccountNumber] = useState(row?.account_number ?? '');
+  const [accountType, setAccountType] = useState(row?.account_type ?? '');
+  const [isInternal, setIsInternal] = useState<boolean>(!!row?.is_internal);
+  const [methodId, setMethodId] = useState(row?.payment_method_id ?? '');
+
+  const methods = usePaymentMethods(ctx.orgId, true);
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const trimmed = name.trim();
+      if (!trimmed) throw new Error('El nombre es obligatorio.');
+      if (!isInternal && !methodId) {
+        throw new Error('Elegí el método de pago asociado a esta cuenta.');
+      }
+      const effectiveMethod = isInternal ? null : methodId || null;
+      if (isEdit && row) {
+        await execute(
+          `UPDATE bank_account
+              SET name = ?, bank_name = ?, account_number = ?, account_type = ?,
+                  payment_method_id = ?, is_internal = ?
+            WHERE id = ?`,
+          [
+            trimmed,
+            bankName.trim() || null,
+            accountNumber.trim() || null,
+            accountType.trim() || null,
+            effectiveMethod,
+            isInternal ? 1 : 0,
+            row.id,
+          ],
+        );
+      } else {
+        await execute(
+          `INSERT INTO bank_account
+             (id, organization_id, name, bank_name, account_number, account_type,
+              payment_method_id, is_internal, active)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+          [
+            genId(),
+            ctx.orgId,
+            trimmed,
+            bankName.trim() || null,
+            accountNumber.trim() || null,
+            accountType.trim() || null,
+            effectiveMethod,
+            isInternal ? 1 : 0,
+          ],
+        );
+      }
+    },
+    onSuccess: () => {
+      toast.info(isEdit ? 'Cuenta actualizada' : 'Cuenta creada');
+      onSaved();
+    },
+    onError: (e: Error) =>
+      toast.error('No se pudo guardar', e.message),
+  });
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={isEdit ? 'Editar cuenta' : 'Nueva cuenta'}
+    >
+      <div className="grid grid-cols-2 gap-3">
+        <div className="col-span-2">
+          <Input
+            label="Nombre"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Ej: Cuenta Macro, POS BBVA"
+          />
+        </div>
+        <div className="col-span-2 sm:col-span-1">
+          <Input
+            label="Banco"
+            value={bankName}
+            onChange={(e) => setBankName(e.target.value)}
+          />
+        </div>
+        <div className="col-span-2 sm:col-span-1">
+          <Input
+            label="Nº de cuenta"
+            value={accountNumber}
+            onChange={(e) => setAccountNumber(e.target.value)}
+          />
+        </div>
+        <div className="col-span-2 sm:col-span-1">
+          <Input
+            label="Tipo"
+            value={accountType}
+            onChange={(e) => setAccountType(e.target.value)}
+            placeholder="ahorros, corriente…"
+          />
+        </div>
+        <div className="col-span-2 sm:col-span-1">
+          <Select
+            label="Método de pago"
+            value={isInternal ? '' : methodId}
+            onChange={(e) => setMethodId(e.target.value)}
+            disabled={isInternal}
+          >
+            <option value="">
+              {isInternal ? 'No aplica (interna)' : 'Seleccionar…'}
+            </option>
+            {methods.data?.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <label className="col-span-2 flex cursor-pointer items-start gap-2 rounded-xl bg-white/5 p-3 text-sm">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={isInternal}
+            onChange={(e) => setIsInternal(e.target.checked)}
+          />
+          <span>
+            <span className="block text-white">Cuenta interna (solo admins)</span>
+            <span className="block text-xs text-white/50">
+              No se ofrece como destino de cobro al cliente. Útil para ahorros
+              o efectivo en casa.
+            </span>
+          </span>
+        </label>
+        <div className="col-span-2">
+          <Button
+            className="w-full"
+            loading={save.isPending}
+            onClick={() => save.mutate()}
+          >
+            {isEdit ? 'Guardar cambios' : 'Crear cuenta'}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* ───────────────────────── Modal: borrar banco ───────────────────────── */
+
+function DeleteBankAccountModal({
+  row,
+  onClose,
+  onDeleted,
+}: {
+  row: BankRow;
+  onClose: () => void;
+  onDeleted: () => void;
+}) {
+  const toast = useToast();
+  const [hasRefs, setHasRefs] = useState<boolean | null>(null);
+
+  // Chequeo previo: si tiene movimientos no podemos borrar (hay FKs). Mejor
+  // avisamos antes y ofrecemos desactivar.
+  useQuery({
+    queryKey: ['bank-account-refs', row.id],
+    queryFn: async () => {
+      const r = await queryOne<{ n: number }>(
+        `SELECT
+           (SELECT COUNT(*) FROM payment WHERE bank_account_id = ?) +
+           (SELECT COUNT(*) FROM expense WHERE bank_account_id = ?) +
+           (SELECT COUNT(*) FROM account_transfer
+             WHERE from_bank_account_id = ? OR to_bank_account_id = ?) AS n`,
+        [row.id, row.id, row.id, row.id],
+      );
+      const n = Number(r?.n ?? 0);
+      setHasRefs(n > 0);
+      return n;
+    },
+  });
+
+  const hardDelete = useMutation({
+    mutationFn: () =>
+      execute('DELETE FROM bank_account WHERE id = ?', [row.id]),
+    onSuccess: () => {
+      toast.info('Cuenta eliminada');
+      onDeleted();
+    },
+    onError: (e: Error) => toast.error('No se pudo eliminar', e.message),
+  });
+
+  const deactivate = useMutation({
+    mutationFn: () =>
+      execute('UPDATE bank_account SET active = 0 WHERE id = ?', [row.id]),
+    onSuccess: () => {
+      toast.info('Cuenta desactivada');
+      onDeleted();
+    },
+    onError: (e: Error) => toast.error('No se pudo desactivar', e.message),
+  });
+
+  return (
+    <Modal open onClose={onClose} title={`Eliminar · ${row.name}`}>
+      <div className="space-y-4">
+        {hasRefs === null ? (
+          <p className="text-sm text-white/60">Verificando movimientos…</p>
+        ) : hasRefs ? (
+          <>
+            <p className="text-sm text-white/80">
+              Esta cuenta tiene movimientos (cobros, gastos o transferencias)
+              registrados. No se puede borrar sin romper el historial.
+            </p>
+            <p className="text-xs text-white/50">
+              Podés <b>desactivarla</b>: deja de ofrecerse como destino de cobro
+              pero el historial queda intacto.
+            </p>
+            <Button
+              className="w-full"
+              variant="danger"
+              loading={deactivate.isPending}
+              onClick={() => deactivate.mutate()}
+            >
+              Desactivar cuenta
+            </Button>
+          </>
+        ) : (
+          <>
+            <p className="text-sm text-white/80">
+              Esta cuenta no tiene movimientos. ¿Querés eliminarla
+              definitivamente?
+            </p>
+            <Button
+              className="w-full"
+              variant="danger"
+              loading={hardDelete.isPending}
+              onClick={() => hardDelete.mutate()}
+            >
+              Eliminar definitivamente
+            </Button>
+          </>
+        )}
+      </div>
+    </Modal>
   );
 }
 
@@ -2772,6 +3140,360 @@ function TransferenciasTab({ ctx }: { ctx: Ctx }) {
           </div>
         )}
       </Card>
+    </div>
+  );
+}
+
+/* ─────────────────── Caja (efectivo): aperturas y cierres ────────────────── */
+
+interface CashSessionRow {
+  id: string;
+  status: CashSession['status'];
+  opened_at: string;
+  closed_at: string | null;
+  opening_cash: number;
+  expected_cash: number | null;
+  counted_cash: number | null;
+  difference: number | null;
+  notes: string | null;
+  opened_by_name: string | null;
+  closed_by_name: string | null;
+  mov_in: number;
+  mov_out: number;
+  mov_count: number;
+}
+
+interface CashSessionMovementRow {
+  id: string;
+  cash_session_id: string;
+  movement_type: string;
+  direction: CashDirection;
+  amount: number;
+  movement_at: string;
+  description: string | null;
+  created_by_name: string | null;
+  sale_number: string | null;
+  category: string | null;
+}
+
+const MOVEMENT_LABEL: Record<string, string> = {
+  sale: 'Cobro de venta',
+  expense: 'Gasto',
+  staff_payment: 'Pago a personal',
+  cash_in: 'Ingreso en caja',
+  cash_out: 'Retiro de caja',
+  refund: 'Devolución',
+  adjustment: 'Ajuste',
+};
+
+/**
+ * Pestaña Caja (efectivo): lista las sesiones del mes seleccionado con
+ * apertura/cierre (quién, cuándo, monto) y permite expandir para ver todas
+ * las transacciones agrupadas de esa sesión. Pensado para admin/gerente que
+ * necesitan auditar los turnos de caja.
+ */
+function CashSessionsTab({ branchId }: { branchId: string }) {
+  const [month, setMonth] = useState(() => ym(new Date()));
+  const [open, setOpen] = useState<string | null>(null);
+
+  const sessions = useQuery({
+    queryKey: ['fin-cash-sessions', branchId, month],
+    enabled: !!branchId,
+    queryFn: () =>
+      query<CashSessionRow>(
+        `SELECT cs.id,
+                cs.status,
+                cs.opened_at,
+                cs.closed_at,
+                cs.opening_cash,
+                cs.expected_cash,
+                cs.counted_cash,
+                cs.difference,
+                cs.notes,
+                uo.full_name AS opened_by_name,
+                uc.full_name AS closed_by_name,
+                COALESCE((SELECT SUM(CASE WHEN direction='in'  THEN amount ELSE 0 END)
+                            FROM cash_movement WHERE cash_session_id = cs.id), 0) AS mov_in,
+                COALESCE((SELECT SUM(CASE WHEN direction='out' THEN amount ELSE 0 END)
+                            FROM cash_movement WHERE cash_session_id = cs.id), 0) AS mov_out,
+                COALESCE((SELECT COUNT(*) FROM cash_movement WHERE cash_session_id = cs.id), 0) AS mov_count
+           FROM cash_session cs
+           JOIN cash_register cr ON cr.id = cs.cash_register_id
+           LEFT JOIN app_user uo ON uo.id = cs.opened_by
+           LEFT JOIN app_user uc ON uc.id = cs.closed_by
+          WHERE cr.branch_id = ? AND substr(cs.opened_at, 1, 7) = ?
+          ORDER BY cs.opened_at DESC`,
+        [branchId, month],
+      ),
+  });
+
+  const rows = sessions.data ?? [];
+  const totals = rows.reduce(
+    (acc, r) => {
+      acc.in += r.mov_in;
+      acc.out += r.mov_out;
+      if (r.difference != null) acc.diff += r.difference;
+      return acc;
+    },
+    { in: 0, out: 0, diff: 0 },
+  );
+
+  const prevMonth = () => {
+    const [y, m] = month.split('-').map(Number);
+    setMonth(ym(new Date(y, m - 2, 1)));
+  };
+  const nextMonth = () => {
+    const [y, m] = month.split('-').map(Number);
+    setMonth(ym(new Date(y, m, 1)));
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Selector de mes */}
+      <div className="flex items-center justify-center gap-4">
+        <button
+          onClick={prevMonth}
+          className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+        >
+          <ChevronLeft className="h-5 w-5" />
+        </button>
+        <span className="min-w-[9rem] text-center text-lg font-semibold capitalize text-white">
+          {monthLabel(month)} {month.slice(0, 4)}
+        </span>
+        <button
+          onClick={nextMonth}
+          className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+        >
+          <ChevronRight className="h-5 w-5" />
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <MetricCard size="xl" label="Turnos" value={String(rows.length)} />
+        <MetricCard size="xl" label="Ingresos efectivo" value={money(totals.in)} tone="success" />
+        <MetricCard size="xl" label="Egresos efectivo" value={money(totals.out)} tone="danger" />
+        <MetricCard
+          size="xl"
+          label="Descuadre acumulado"
+          value={money(totals.diff)}
+          tone={totals.diff === 0 ? undefined : totals.diff < 0 ? 'danger' : 'success'}
+        />
+      </div>
+
+      <Card>
+        <CardHeader
+          title="Sesiones de caja"
+          subtitle="Aperturas y cierres del mes · toca una fila para ver sus movimientos"
+        />
+
+        {sessions.isLoading ? (
+          <div className="py-10 text-center text-sm text-white/40">Cargando…</div>
+        ) : rows.length === 0 ? (
+          <EmptyState icon={Wallet} title="No hay sesiones de caja en este mes" />
+        ) : (
+          <div className="space-y-2">
+            {rows.map((r) => (
+              <CashSessionCard
+                key={r.id}
+                row={r}
+                expanded={open === r.id}
+                onToggle={() => setOpen(open === r.id ? null : r.id)}
+              />
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function CashSessionCard({
+  row,
+  expanded,
+  onToggle,
+}: {
+  row: CashSessionRow;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const isOpen = row.status === 'open';
+  const diff = row.difference ?? 0;
+  const diffTone = diff === 0 ? 'text-white/60' : diff < 0 ? 'text-red-400' : 'text-emerald-400';
+
+  return (
+    <div
+      className={cn(
+        'rounded-xl border transition-colors',
+        isOpen
+          ? 'border-emerald-400/30 bg-emerald-400/5'
+          : 'border-white/10 bg-white/[0.03]',
+      )}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full flex-col gap-3 p-4 text-left hover:bg-white/[0.03] sm:flex-row sm:items-center"
+      >
+        <div className="flex flex-1 flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <Badge tone={isOpen ? 'success' : 'muted'}>
+              {isOpen ? (
+                <>
+                  <Unlock className="h-3 w-3" /> Abierta
+                </>
+              ) : (
+                <>
+                  <Lock className="h-3 w-3" /> Cerrada
+                </>
+              )}
+            </Badge>
+            <span className="text-sm font-medium text-white">
+              {dateShort(row.opened_at)}
+            </span>
+            <span className="text-xs text-white/40">
+              {row.mov_count} {row.mov_count === 1 ? 'movimiento' : 'movimientos'}
+            </span>
+          </div>
+
+          <div className="grid gap-x-6 gap-y-1 text-xs text-white/60 sm:grid-cols-2">
+            <span className="inline-flex items-center gap-1.5">
+              <Unlock className="h-3 w-3 text-emerald-300/70" />
+              Apertura · {timeShort(row.opened_at)} · {row.opened_by_name ?? 'sin usuario'}
+              <span className="text-white/40">· fondo</span>
+              <span className="font-medium text-white/80">{money(row.opening_cash)}</span>
+            </span>
+            {isOpen ? (
+              <span className="inline-flex items-center gap-1.5 text-white/40">
+                <Lock className="h-3 w-3" /> Cierre · pendiente
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5">
+                <Lock className="h-3 w-3 text-white/40" />
+                Cierre · {timeShort(row.closed_at)} · {row.closed_by_name ?? 'sin usuario'}
+                <span className="text-white/40">· contado</span>
+                <span className="font-medium text-white/80">{money(row.counted_cash)}</span>
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-5 sm:gap-6">
+          <div className="text-right">
+            <div className="text-[10px] uppercase tracking-wide text-white/40">Ingresos</div>
+            <div className="text-sm font-medium text-emerald-300">{money(row.mov_in)}</div>
+          </div>
+          <div className="text-right">
+            <div className="text-[10px] uppercase tracking-wide text-white/40">Egresos</div>
+            <div className="text-sm font-medium text-red-300">{money(row.mov_out)}</div>
+          </div>
+          {!isOpen && (
+            <div className="text-right">
+              <div className="text-[10px] uppercase tracking-wide text-white/40">Descuadre</div>
+              <div className={cn('text-sm font-medium', diffTone)}>{money(diff)}</div>
+            </div>
+          )}
+          <ChevronDown
+            className={cn(
+              'h-4 w-4 text-white/40 transition-transform',
+              expanded && 'rotate-180',
+            )}
+          />
+        </div>
+      </button>
+
+      {expanded && <SessionMovements sessionId={row.id} />}
+    </div>
+  );
+}
+
+function SessionMovements({ sessionId }: { sessionId: string }) {
+  const movements = useQuery({
+    queryKey: ['fin-cash-session-movements', sessionId],
+    queryFn: () =>
+      query<CashSessionMovementRow>(
+        `SELECT m.id,
+                m.cash_session_id,
+                m.movement_type,
+                m.direction,
+                m.amount,
+                m.movement_at,
+                COALESCE(m.description, s.sale_number, ec.name) AS description,
+                u.full_name AS created_by_name,
+                s.sale_number,
+                ec.name AS category
+           FROM cash_movement m
+           LEFT JOIN app_user u ON u.id = m.created_by
+           LEFT JOIN sale s ON s.id = m.sale_id
+           LEFT JOIN expense e ON e.id = m.expense_id
+           LEFT JOIN expense_category ec ON ec.id = e.expense_category_id
+          WHERE m.cash_session_id = ?
+          ORDER BY m.movement_at ASC`,
+        [sessionId],
+      ),
+  });
+
+  const rows = movements.data ?? [];
+
+  if (movements.isLoading) {
+    return <div className="border-t border-white/10 p-4 text-center text-xs text-white/40">Cargando movimientos…</div>;
+  }
+  if (rows.length === 0) {
+    return <div className="border-t border-white/10 p-4 text-center text-xs text-white/40">Sin movimientos en esta sesión.</div>;
+  }
+
+  return (
+    <div className="border-t border-white/10 overflow-x-auto">
+      <table className="w-full min-w-[640px] text-sm">
+        <thead>
+          <tr className="border-b border-white/10 text-left text-[11px] uppercase tracking-wide text-white/40">
+            <th className="px-3 py-2 font-medium">Hora</th>
+            <th className="px-3 py-2 font-medium">Tipo</th>
+            <th className="px-3 py-2 font-medium">Detalle</th>
+            <th className="px-3 py-2 font-medium">Usuario</th>
+            <th className="px-3 py-2 text-right font-medium">Monto</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-white/5">
+          {rows.map((m) => (
+            <tr key={m.id} className="text-white/80">
+              <td className="whitespace-nowrap px-3 py-2 text-white/50">
+                <span className="inline-flex items-center gap-1.5">
+                  <Clock className="h-3 w-3 text-white/30" />
+                  {timeShort(m.movement_at)}
+                </span>
+              </td>
+              <td className="whitespace-nowrap px-3 py-2">
+                <span className="inline-flex items-center gap-1.5">
+                  {m.direction === 'in' ? (
+                    <ArrowDownLeft className="h-3.5 w-3.5 text-emerald-300" />
+                  ) : (
+                    <ArrowUpRight className="h-3.5 w-3.5 text-red-300" />
+                  )}
+                  {MOVEMENT_LABEL[m.movement_type] ?? m.movement_type}
+                </span>
+              </td>
+              <td className="px-3 py-2 text-white/70">
+                {m.description || <span className="text-white/20">—</span>}
+              </td>
+              <td className="whitespace-nowrap px-3 py-2 text-white/60">
+                <span className="inline-flex items-center gap-1.5">
+                  <UserIcon className="h-3 w-3 text-white/30" />
+                  {m.created_by_name ?? '—'}
+                </span>
+              </td>
+              <td
+                className={cn(
+                  'whitespace-nowrap px-3 py-2 text-right font-medium',
+                  m.direction === 'in' ? 'text-emerald-300' : 'text-red-300',
+                )}
+              >
+                {m.direction === 'in' ? '+' : '−'}
+                {money(m.amount)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
