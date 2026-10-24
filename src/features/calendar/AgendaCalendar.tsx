@@ -200,6 +200,75 @@ export function AgendaCalendar({
     [],
   );
 
+  // Horas límite de la rejilla. Base: 7:00–21:00 (horario del salón más el
+  // margen). Si alguna cita visible cae fuera (los días de desfile se agenda
+  // desde las 3–5 am, a veces hasta tarde), el rango se abre lo justo para
+  // que esos turnos no queden ocultos. La vista "Mes" no usa rejilla horaria,
+  // así que mantiene los valores por defecto.
+  const { minDate, maxDate, scrollDate } = useMemo(() => {
+    const DEFAULT_MIN_H = 7;
+    const DEFAULT_MAX_H = 21;
+    const DEFAULT_SCROLL_H = 8;
+
+    if (view === 'month') {
+      return {
+        minDate: new Date(1970, 0, 1, DEFAULT_MIN_H, 0),
+        maxDate: new Date(1970, 0, 1, DEFAULT_MAX_H, 0),
+        scrollDate: new Date(1970, 0, 1, DEFAULT_SCROLL_H, 0),
+      };
+    }
+
+    let rangeStart: Date;
+    let rangeEnd: Date;
+    if (view === 'three') {
+      rangeStart = startOfDay(date);
+      rangeEnd = addDays(rangeStart, 3);
+    } else if (view === 'day') {
+      rangeStart = startOfDay(date);
+      rangeEnd = addDays(rangeStart, 1);
+    } else {
+      // 'week'
+      rangeStart = startOfWeek(date, { weekStartsOn: 1 });
+      rangeEnd = addDays(rangeStart, 7);
+    }
+
+    let earliestMin = DEFAULT_MIN_H * 60;
+    let latestMin = DEFAULT_MAX_H * 60;
+
+    for (const e of events) {
+      if (e.end <= rangeStart || e.start >= rangeEnd) continue;
+      const sMin = e.start.getHours() * 60 + e.start.getMinutes();
+      if (sMin < earliestMin) earliestMin = sMin;
+      // Si cruza medianoche, topa en 24:00; si no, usa el fin real.
+      const sameDay =
+        e.start.toDateString() === e.end.toDateString();
+      const eMin = sameDay
+        ? e.end.getHours() * 60 + e.end.getMinutes()
+        : 24 * 60;
+      if (eMin > latestMin) latestMin = eMin;
+    }
+
+    const minHour = Math.floor(earliestMin / 60);
+    // Subir el techo a la hora siguiente para que un fin a las 20:45 no quede
+    // cortado. 24:00 no es válido en rbc: lo bajamos a 23:59.
+    let maxTotal = Math.ceil(latestMin / 60) * 60;
+    if (maxTotal >= 24 * 60) maxTotal = 24 * 60 - 1;
+
+    const scrollHour = Math.min(DEFAULT_SCROLL_H, minHour);
+
+    return {
+      minDate: new Date(1970, 0, 1, minHour, 0),
+      maxDate: new Date(
+        1970,
+        0,
+        1,
+        Math.floor(maxTotal / 60),
+        maxTotal % 60,
+      ),
+      scrollDate: new Date(1970, 0, 1, scrollHour, 0),
+    };
+  }, [events, view, date]);
+
   const body = (
     <DnDCalendar
       localizer={localizer}
@@ -223,9 +292,9 @@ export function AgendaCalendar({
       // hay que mantener presionado: scroll normal queda intacto, drag queda
       // explícito. En escritorio el mouse no toca este umbral.
       longPressThreshold={500}
-      min={new Date(1970, 0, 1, 7, 0)}
-      max={new Date(1970, 0, 1, 21, 0)}
-      scrollToTime={new Date(1970, 0, 1, 8, 0)}
+      min={minDate}
+      max={maxDate}
+      scrollToTime={scrollDate}
       dayLayoutAlgorithm="no-overlap"
       messages={messages}
       eventPropGetter={eventPropGetter}
