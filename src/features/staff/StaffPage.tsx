@@ -27,6 +27,7 @@ import { activityTotals, groupingForPeriod, periodBounds, timestampBounds, weekB
 import { ActivityTable } from './ActivityTable';
 import { ADJUST_COMMISSION_MARK, COMMISSION_BALANCE_SQL, commissionBalance, type CommissionBalanceData, type CommissionBalanceRow } from './commissionBalanceModel';
 import { StaffMovements } from './StaffMovements';
+import { StaffShell } from './StaffShell';
 import { ROUTES } from '@/config/constants';
 import { useTimeOff } from './useTimeOff';
 import { invalidateFinance } from '@/lib/queryClient';
@@ -134,20 +135,19 @@ export function StaffPage() {
   const [advanceOpen, setAdvanceOpen] = useState(false);
 
   return (
-    <div className="mx-auto max-w-[1500px] space-y-3">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-white">Comisiones</h1>
+    <StaffShell
+      action={
         <Button onClick={() => setAdvanceOpen(true)}>
           <HandCoins className="h-4 w-4" /> Adelanto
         </Button>
-      </div>
-
+      }
+    >
       <CommissionBalanceSection orgId={orgId} />
       <TeamActivitySection orgId={orgId} />
       <AbsencesSummaryCard />
 
       <AdvanceModal open={advanceOpen} onClose={() => setAdvanceOpen(false)} />
-    </div>
+    </StaffShell>
   );
 }
 
@@ -207,14 +207,16 @@ function TeamActivitySection({ orgId }: { orgId: string }) {
         </button>)}
       </div>
       </div>
-      <div className="mb-2 grid gap-2 sm:grid-cols-3">
+      <div className="mb-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
         <Select label="Período" value={period} onChange={e => setPeriod(e.target.value as Period)}>
           <option value="day">Día</option><option value="week">Semana</option><option value="month">Mes</option>
         </Select>
         <Input label={period === 'week' ? 'Fecha de la semana' : period === 'month' ? 'Fecha del mes' : 'Fecha'} type="date" value={anchor} onChange={e => setAnchor(e.target.value)} />
-        <Select label="Colaborador" value={staffId} onChange={e => setStaffId(e.target.value)}>
-          <option value="">Todo el equipo</option>{(staff.data ?? []).map(s => <option key={s.id} value={s.id}>{fullName(s.first_name, s.last_name)}</option>)}
-        </Select>
+        <div className="col-span-2 sm:col-span-1">
+          <Select label="Colaborador" value={staffId} onChange={e => setStaffId(e.target.value)}>
+            <option value="">Todo el equipo</option>{(staff.data ?? []).map(s => <option key={s.id} value={s.id}>{fullName(s.first_name, s.last_name)}</option>)}
+          </Select>
+        </div>
       </div>
       <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-white/50">
         <button type="button" className="rounded-lg border border-white/15 px-3 py-1.5 hover:bg-white/5" onClick={() => { setAnchor(todayISO()); setPeriod('day'); }}>Ir a hoy</button>
@@ -233,12 +235,15 @@ function TeamActivitySection({ orgId }: { orgId: string }) {
                 const items = byStaff.get(s.id)!;
                 const total = activityTotals(items);
                 return <details key={`${s.id}:${grouping}:${from}:${to}`} open className="rounded-xl border border-white/10" style={{ borderLeft: `3px solid ${s.color || NO_COLOR}` }}>
-                  <summary className="cursor-pointer rounded-xl p-2 text-white focus-visible:outline focus-visible:outline-gold-300">
-                    <span className="ml-2 inline-flex max-w-full flex-wrap items-center gap-2 align-middle">
-                      <StaffInitials first={s.first_name} last={s.last_name} color={s.color} />
-                      <span className="text-sm font-semibold">{fullName(s.first_name, s.last_name)}</span>
-                      <span className="text-xs text-white/50">{items.length} servicios · Cobrado {money(total.billed)}</span>
-                      <span className="text-sm font-semibold text-gold-200">Comisión {money(total.commission)}</span>
+                  <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl p-2 [&::-webkit-details-marker]:hidden text-white focus-visible:outline focus-visible:outline-gold-300">
+                    <StaffInitials first={s.first_name} last={s.last_name} color={s.color} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-semibold">{fullName(s.first_name, s.last_name)}</span>
+                      <span className="block truncate text-xs text-white/50">{items.length} servicios · Cobrado {money(total.billed)}</span>
+                    </span>
+                    <span className="shrink-0 text-right text-sm font-semibold tabular-nums text-gold-200">
+                      {money(total.commission)}
+                      <span className="block text-[10px] font-normal text-white/40">comisión</span>
                     </span>
                   </summary>
                   <ActivityTable items={items} period={period} />
@@ -285,13 +290,43 @@ function CommissionBalanceSection({ orgId }: { orgId: string }) {
       <CardHeader
         title="Comisiones · saldo actual"
         subtitle={`Esta semana: ${dateShort(week.from)} — ${dateShort(week.to)} · Movimientos hasta hoy`}
-        action={<label className="flex items-center gap-2 text-xs text-white/50"><input type="checkbox" checked={showZero} onChange={e => setShowZero(e.target.checked)} className="rounded border-white/20 bg-white/5 text-gold-400" />Mostrar sin saldo ni actividad{zeroCount > 0 ? ` (${zeroCount})` : ''}</label>}
+        action={<label className="flex shrink-0 items-center gap-2 text-xs text-white/50"><input type="checkbox" checked={showZero} onChange={e => setShowZero(e.target.checked)} className="rounded border-white/20 bg-white/5 text-gold-400" />Sin actividad{zeroCount > 0 ? ` (${zeroCount})` : ''}</label>}
       />
-      <p className="mb-3 text-xs text-white/50">Saldo anterior + generado esta semana − adelantos − pagos{hasAdjustments ? ' − cuadres' : ''} = pendiente actual.</p>
+      <p className="mb-3 hidden text-xs text-white/50 sm:block">Saldo anterior + generado esta semana − adelantos − pagos{hasAdjustments ? ' − cuadres' : ''} = pendiente actual.</p>
       {bal.isError ? <p role="alert" className="text-sm text-danger">No se pudieron cargar los saldos. <button className="underline" onClick={() => void bal.refetch()}>Reintentar</button></p>
         : bal.isPending ? <p role="status" className="text-sm text-white/50">Cargando saldos…</p>
-        : rows.length > 0 ? (
-        <div className="overflow-x-auto">
+        : rows.length > 0 ? (<>
+        {/* Teléfono: una fila por colaborador con el pendiente a la vista y el
+            desglose de la semana en una línea; la tabla completa desde `sm`. */}
+        <div className="sm:hidden">
+          <div className="mb-1 flex items-baseline justify-between rounded-lg bg-gold-400/5 px-2 py-1.5 text-sm">
+            <span className="text-white/70">Pendiente total</span>
+            <span className="font-semibold tabular-nums text-gold-200">{money(totalPending)}</span>
+          </div>
+          <ul className="divide-y divide-white/5">
+            {visibleRows.map((r) => (
+              <li key={r.staff_member_id} className="flex items-center gap-2 px-1 py-2" style={staffRowStyle(r.color)}>
+                <div className="min-w-0 flex-1">
+                  <p className="flex items-center gap-2 text-sm text-white">
+                    <StaffDot color={r.color} />
+                    <span className="truncate">{r.staff_name}</span>
+                  </p>
+                  <p className="truncate text-[11px] tabular-nums text-white/40">
+                    Ant. {money(r.opening)} · Gen. {money(r.earned_week)}
+                    {r.advances_week ? ` · Adel. −${money(r.advances_week)}` : ''}
+                    {r.paid_week ? ` · Pag. −${money(r.paid_week)}` : ''}
+                    {r.adjustments_week ? ` · Cuadre ${adjustmentLabel(r.adjustments_week)}` : ''}
+                  </p>
+                </div>
+                <span className={`shrink-0 text-sm font-semibold tabular-nums ${r.pending >= 0 ? 'text-gold-200' : 'text-danger'}`}>
+                  {money(r.pending)}
+                </span>
+                <BalanceActions row={r} onPay={setPay} onAdjust={setAdjust} compact />
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="hidden overflow-x-auto sm:block">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs uppercase text-white/40">
@@ -313,7 +348,7 @@ function CommissionBalanceSection({ orgId }: { orgId: string }) {
                   <td className="px-2 py-2 text-right tabular-nums text-white/80">{money(r.earned_week)}</td>
                   <td className="px-2 py-2 text-right tabular-nums text-white/60">{r.advances_week ? `−${money(r.advances_week)}` : '—'}</td>
                   <td className="px-2 py-2 text-right tabular-nums text-white/60">{r.paid_week ? `−${money(r.paid_week)}` : '—'}</td>
-                  {hasAdjustments && <td className="px-2 py-2 text-right tabular-nums text-white/50">{r.adjustments_week ? `${r.adjustments_week > 0 ? '−' : '+'}${money(Math.abs(r.adjustments_week))}` : '—'}</td>}
+                  {hasAdjustments && <td className="px-2 py-2 text-right tabular-nums text-white/50">{r.adjustments_week ? adjustmentLabel(r.adjustments_week) : '—'}</td>}
                   <td
                     className={`bg-gold-400/5 px-3 py-2 text-right font-semibold tabular-nums ${
                       r.pending >= 0 ? 'text-gold-200' : 'text-danger'
@@ -322,20 +357,7 @@ function CommissionBalanceSection({ orgId }: { orgId: string }) {
                     {money(r.pending)}
                   </td>
                   <td className="py-2">
-                    <div className="flex items-center justify-end gap-2">
-                      {r.pending > 0.001 && (
-                        <Button size="sm" onClick={() => setPay(r)}>
-                          <HandCoins className="h-4 w-4" /> Pagar
-                        </Button>
-                      )}
-                      <button
-                        title="Cuadrar saldo (ajustar pendiente real)"
-                        onClick={() => setAdjust(r)}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-medium text-white/60 hover:border-white/25 hover:bg-white/5 hover:text-gold-300"
-                      >
-                        <Scale className="h-3.5 w-3.5" /> Cuadrar
-                      </button>
-                    </div>
+                    <BalanceActions row={r} onPay={setPay} onAdjust={setAdjust} />
                   </td>
                 </tr>
               ))}
@@ -353,7 +375,7 @@ function CommissionBalanceSection({ orgId }: { orgId: string }) {
             </tfoot>
           </table>
         </div>
-      ) : (
+      </>) : (
         <EmptyState
           icon={Users}
           title="Sin colaboradores activos"
@@ -381,6 +403,44 @@ function CommissionBalanceSection({ orgId }: { orgId: string }) {
         />
       )}
     </Card>
+  );
+}
+
+/** Cuadre en la convención del saldo: positivo baja el pendiente. */
+function adjustmentLabel(v: number): string {
+  return `${v > 0 ? '−' : '+'}${money(Math.abs(v))}`;
+}
+
+/** Pagar (si hay pendiente) + Cuadrar; `compact` deja solo los íconos. */
+function BalanceActions({
+  row,
+  onPay,
+  onAdjust,
+  compact,
+}: {
+  row: CommissionBalanceRow;
+  onPay: (r: CommissionBalanceRow) => void;
+  onAdjust: (r: CommissionBalanceRow) => void;
+  compact?: boolean;
+}) {
+  return (
+    <div className="flex shrink-0 items-center justify-end gap-1.5 sm:gap-2">
+      {row.pending > 0.001 && (
+        <Button size="sm" onClick={() => onPay(row)} title="Pagar comisiones">
+          <HandCoins className="h-4 w-4" />
+          {!compact && ' Pagar'}
+        </Button>
+      )}
+      <button
+        title="Cuadrar saldo (ajustar pendiente real)"
+        aria-label="Cuadrar saldo"
+        onClick={() => onAdjust(row)}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-medium text-white/60 hover:border-white/25 hover:bg-white/5 hover:text-gold-300"
+      >
+        <Scale className="h-3.5 w-3.5" />
+        {!compact && ' Cuadrar'}
+      </button>
+    </div>
   );
 }
 

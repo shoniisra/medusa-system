@@ -13,3 +13,4 @@ export { EmptyState } from './EmptyState';
 export { PageHeader } from './PageHeader';
 export { DetailRow } from './DetailRow';
 export { Donut } from './Donut';
+export { SubNavTabs, type SubNavTab } from './SubNavTabs';

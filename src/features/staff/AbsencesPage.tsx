@@ -3,12 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
   Plus,
-  CalendarOff,
   Trash2,
   AlertTriangle,
-  ArrowLeft,
-  Calendar as CalendarIcon,
-  Users,
 } from 'lucide-react';
 import { query } from '@/lib/db';
 import { dateShort, fullName, todayISO } from '@/lib/format';
@@ -19,13 +15,13 @@ import {
   Card,
   CardHeader,
   DateInput,
-  EmptyState,
   Input,
   Select,
   useToast,
 } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { ROUTES } from '@/config/constants';
+import { StaffShell } from './StaffShell';
 import type { StaffMember } from '@/types';
 import {
   useTimeOff,
@@ -141,6 +137,9 @@ export function AbsencesPage() {
   // Conflictos: citas futuras (reservadas/confirmadas) que caen dentro de alguna
   // ausencia vigente/futura de su propia colaboradora o dentro de un cierre.
   const conflicts = useConflicts(branchId, timeOff.data);
+  // El formulario arranca cerrado: lo primero a la vista es qué pasa hoy
+  // (conflictos, vigentes, próximas), no un formulario largo.
+  const [formOpen, setFormOpen] = useState(false);
 
   const Row = ({
     id,
@@ -182,59 +181,46 @@ export function AbsencesPage() {
   );
 
   return (
-    <div className="mx-auto max-w-[1500px] space-y-6">
-      {/* Encabezado con navegación a /personal (padre). */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <Link
-            to={ROUTES.staff}
-            className="tap flex items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] p-2 text-white/60 hover:bg-white/10 hover:text-white"
-            aria-label="Volver a Personal"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Link>
-          <div>
-            <h1 className="text-2xl font-semibold text-white">
-              Ausencias y cierres
-            </h1>
-            <p className="text-sm text-white/40">
-              Vacaciones y permisos del equipo, y días que cierra el local. El
-              agendado respeta estas fechas.
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* Formulario de alta con atajos. Deliberadamente arriba (no en modal):
-          esta pantalla ES para registrar/revisar ausencias. */}
-      <TimeOffForm
-        staff={staff.data ?? []}
-        onSubmit={(payload) => {
-          add.mutate(payload, {
-            onSuccess: () =>
-              toast.success(
-                'Registrado',
-                payload.staffMemberId
-                  ? 'La colaboradora no aparecerá disponible esas fechas.'
-                  : 'El local quedará cerrado esas fechas.',
-              ),
-            onError: (e) =>
-              toast.error(
-                'No se pudo guardar',
-                e instanceof Error ? e.message : '',
-              ),
-          });
-        }}
-        pending={add.isPending}
-      />
+    <StaffShell
+      action={
+        <Button onClick={() => setFormOpen((v) => !v)}>
+          <Plus className="h-4 w-4" /> Registrar
+        </Button>
+      }
+    >
+      {formOpen && (
+        <TimeOffForm
+          staff={staff.data ?? []}
+          onCancel={() => setFormOpen(false)}
+          onSubmit={(payload) => {
+            add.mutate(payload, {
+              onSuccess: () => {
+                setFormOpen(false);
+                toast.success(
+                  'Registrado',
+                  payload.staffMemberId
+                    ? 'La colaboradora no aparecerá disponible esas fechas.'
+                    : 'El local quedará cerrado esas fechas.',
+                );
+              },
+              onError: (e) =>
+                toast.error(
+                  'No se pudo guardar',
+                  e instanceof Error ? e.message : '',
+                ),
+            });
+          }}
+          pending={add.isPending}
+        />
+      )}
 
       {/* Conflictos con citas ya agendadas: se destaca arriba para que no pase
           desapercibido (ej. Kelly se va el 13 pero ya tenía una cita el 20). */}
       {conflicts.data && conflicts.data.length > 0 && (
         <Card className="border-danger/40">
           <CardHeader
-            title="Citas en conflicto con ausencias"
-            subtitle="Estas citas ya están agendadas durante una ausencia o cierre. Reasigná al equipo o reprogramá antes de que llegue el día."
+            title={`Citas en conflicto (${conflicts.data.length})`}
+            subtitle="Agendadas durante una ausencia o cierre: reasigná o reprogramá."
           />
           <ul className="space-y-2">
             {conflicts.data.map((c) => (
@@ -269,33 +255,18 @@ export function AbsencesPage() {
         </Card>
       )}
 
-      {/* Línea de tiempo visual: una fila por recurso con sus ausencias/cierres
-          pintadas en una franja de 90 días desde hoy. Ayuda a ver de un vistazo
-          "¿cuándo se cruzan vacaciones?" y "¿cuándo cierra el local?". */}
-      <TimelineCard
-        rows={rows}
-        staff={staff.data ?? []}
-        staffById={staffById}
-      />
-
-      {/* Listas separadas: vigentes / próximas / pasadas. */}
-      <div className="grid gap-5 lg:grid-cols-3">
+      {/* Lo vigente y lo próximo primero: es lo que se consulta a diario. */}
+      <div className="grid gap-3 sm:gap-5 lg:grid-cols-2">
         <Card>
           <CardHeader
             title="Vigentes ahora"
             subtitle={
               current.length === 0
-                ? 'Nadie está de ausencia ni cerrado hoy.'
+                ? 'Todo el equipo disponible hoy.'
                 : `${current.length} activa${current.length === 1 ? '' : 's'}.`
             }
           />
-          {current.length === 0 ? (
-            <EmptyState
-              icon={Users}
-              title="Todo el equipo disponible"
-              description="Hoy no hay ausencias ni cierres registrados."
-            />
-          ) : (
+          {current.length > 0 && (
             <ul className="space-y-2">
               {current.map((r) => (
                 <Row
@@ -322,13 +293,7 @@ export function AbsencesPage() {
                 : `${upcoming.length} programada${upcoming.length === 1 ? '' : 's'}.`
             }
           />
-          {upcoming.length === 0 ? (
-            <EmptyState
-              icon={CalendarIcon}
-              title="Sin ausencias próximas"
-              description="Cuando alguien del equipo pida vacaciones, registralo acá."
-            />
-          ) : (
+          {upcoming.length > 0 && (
             <ul className="space-y-2">
               {upcoming.map((r) => (
                 <Row
@@ -345,21 +310,27 @@ export function AbsencesPage() {
           )}
         </Card>
 
-        <Card>
-          <CardHeader
-            title="Ya pasaron"
-            subtitle={
-              past.length === 0 ? 'Sin histórico aún.' : `${past.length} en total.`
-            }
-          />
+      </div>
+
+      {/* Línea de tiempo visual: una fila por recurso con sus ausencias/cierres
+          pintadas en una franja de 90 días desde hoy. Ayuda a ver de un vistazo
+          "¿cuándo se cruzan vacaciones?" y "¿cuándo cierra el local?". */}
+      <TimelineCard
+        rows={rows}
+        staff={staff.data ?? []}
+        staffById={staffById}
+      />
+
+      {/* Histórico plegado: rara vez se consulta y empujaba todo hacia abajo. */}
+      <Card>
+        <details>
+          <summary className="cursor-pointer text-sm font-medium text-white/70">
+            Ya pasaron ({past.length})
+          </summary>
           {past.length === 0 ? (
-            <EmptyState
-              icon={CalendarOff}
-              title="Sin histórico"
-              description="Las ausencias viejas se guardan acá para consultarlas."
-            />
+            <p className="mt-3 text-xs text-white/40">Sin histórico aún.</p>
           ) : (
-            <ul className="space-y-2">
+            <ul className="mt-3 space-y-2">
               {past.slice(0, 20).map((r) => (
                 <Row
                   key={r.id}
@@ -373,9 +344,9 @@ export function AbsencesPage() {
               ))}
             </ul>
           )}
-        </Card>
-      </div>
-    </div>
+        </details>
+      </Card>
+    </StaffShell>
   );
 }
 
@@ -392,10 +363,12 @@ interface FormPayload {
 function TimeOffForm({
   staff,
   onSubmit,
+  onCancel,
   pending,
 }: {
   staff: StaffMember[];
   onSubmit: (p: FormPayload) => void;
+  onCancel: () => void;
   pending: boolean;
 }) {
   const [staffId, setStaffId] = useState('');
@@ -459,10 +432,10 @@ function TimeOffForm({
     <Card>
       <CardHeader
         title="Registrar ausencia o cierre"
-        subtitle="Elegí a quién afecta, el rango y el motivo. El agendado dejará de ofrecer esas fechas."
+        subtitle="El agendado dejará de ofrecer esas fechas."
       />
-      <div className="space-y-4">
-        <div className="grid gap-3 md:grid-cols-2">
+      <div className="space-y-3 sm:space-y-4">
+        <div className="grid grid-cols-2 gap-2 sm:gap-3">
           <label className="block">
             <span className="mb-1 block text-xs font-medium text-white/60">
               ¿A quién afecta?
@@ -522,7 +495,7 @@ function TimeOffForm({
           })}
         </div>
 
-        <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+        <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-[1fr_1fr_auto]">
           <DateInput
             label="Desde"
             value={start}
@@ -540,7 +513,7 @@ function TimeOffForm({
             onChange={(v) => v && setEnd(v)}
             clearable={false}
           />
-          <div className="flex items-end">
+          <div className="col-span-2 flex items-end md:col-span-1">
             <div className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-center">
               <p className="text-[10px] uppercase tracking-wide text-white/40">
                 Total
@@ -570,9 +543,14 @@ function TimeOffForm({
                 )} no aparecerá disponible en el agendado.`
               : 'El local quedará cerrado para todas las colaboradoras.'}
           </p>
-          <Button loading={pending} onClick={submit}>
-            <Plus className="h-4 w-4" /> Guardar
-          </Button>
+          <div className="flex shrink-0 gap-2">
+            <Button variant="ghost" onClick={onCancel}>
+              Cancelar
+            </Button>
+            <Button loading={pending} onClick={submit}>
+              <Plus className="h-4 w-4" /> Guardar
+            </Button>
+          </div>
         </div>
       </div>
     </Card>
@@ -640,21 +618,8 @@ function TimelineCard({
     }));
   }, [today]);
 
-  if (grouped.size === 0) {
-    return (
-      <Card>
-        <CardHeader
-          title="Línea de tiempo"
-          subtitle={`Próximos ${TIMELINE_DAYS} días. Nada registrado todavía.`}
-        />
-        <EmptyState
-          icon={CalendarIcon}
-          title="Sin ausencias ni cierres a la vista"
-          description="Al registrar vacaciones o un cierre arriba, aparecerán acá como barras en el calendario."
-        />
-      </Card>
-    );
-  }
+  // Sin nada a la vista no se pinta: "Vigentes" y "Próximas" ya lo dicen.
+  if (grouped.size === 0) return null;
 
   // Resolver color de barra: el del colaborador, o rojo para cierres del local.
   const colorFor = (staffId: string | null): string =>
@@ -696,11 +661,14 @@ function TimelineCard({
         subtitle={`Próximos ${TIMELINE_DAYS} días · ${visible.length} rango${visible.length === 1 ? '' : 's'} visible${visible.length === 1 ? '' : 's'}.`}
       />
 
-      <div className="overflow-x-auto">
-        <div className="min-w-[640px] space-y-2">
-          {/* Eje con hitos. */}
-          <div className="relative h-5 pl-32 text-[10px] text-white/40">
-            <div className="relative h-full">
+      {/* Sin ancho mínimo: en el teléfono la franja se comprime en vez de
+          obligar a scrollear de costado. */}
+      <div>
+        <div className="space-y-2">
+          {/* Eje con hitos, alineado con la franja (misma columna de nombre). */}
+          <div className="flex gap-2 text-[10px] text-white/40 sm:gap-3">
+            <div className="w-20 shrink-0 sm:w-32" />
+            <div className="relative h-5 flex-1">
               {marks.map((m) => (
                 <div
                   key={m.offset}
@@ -726,8 +694,8 @@ function TimelineCard({
                 );
             const color = colorFor(isLocal ? null : k);
             return (
-              <div key={k} className="flex items-center gap-3">
-                <div className="flex w-32 shrink-0 items-center gap-2 truncate text-xs text-white/70">
+              <div key={k} className="flex items-center gap-2 sm:gap-3">
+                <div className="flex w-20 shrink-0 items-center gap-2 truncate text-xs text-white/70 sm:w-32">
                   <span
                     className="h-2.5 w-2.5 shrink-0 rounded-full"
                     style={{ backgroundColor: color }}

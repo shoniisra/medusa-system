@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Navigate, NavLink, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
+import { Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Lock,
@@ -46,6 +46,8 @@ import {
   Badge,
   Donut,
   useToast,
+  SubNavTabs,
+  type SubNavTab,
 } from '@/components/ui';
 import { CountCashFields } from './CountCashFields';
 import { MetricCard } from './MetricCard';
@@ -91,7 +93,7 @@ function useInvalidateFinance() {
   return () => invalidateFinance(qc, branchId);
 }
 
-const FINANCE_TABS: { path: string; label: string; end?: boolean }[] = [
+const FINANCE_TABS: SubNavTab[] = [
   { path: ROUTES.cashflow, label: 'Vista general', end: true },
   { path: ROUTES.cashflowResumen, label: 'Resumen' },
   { path: ROUTES.cashflowTransacciones, label: 'Transacciones' },
@@ -158,26 +160,7 @@ export function CashflowPage() {
     <div className="mx-auto max-w-[1500px] space-y-6">
       <h1 className="text-2xl font-semibold text-white">Finanzas</h1>
 
-      {/* Submenú */}
-      <div className="flex flex-wrap gap-1 rounded-xl bg-white/5 p-1">
-        {FINANCE_TABS.map((t) => (
-          <NavLink
-            key={t.path}
-            to={t.path}
-            end={t.end}
-            className={({ isActive }) =>
-              cn(
-                'rounded-lg px-3 py-1.5 text-xs font-medium transition-colors sm:text-sm',
-                isActive
-                  ? 'bg-gold-400 text-ink-950 shadow-gold-glow'
-                  : 'text-white/50 hover:text-white',
-              )
-            }
-          >
-            {t.label}
-          </NavLink>
-        ))}
-      </div>
+      <SubNavTabs tabs={FINANCE_TABS} />
 
       {tab === 'general' && <GeneralTab ctx={ctx} />}
       {tab === 'resumen' && <MonthlyResumenTab branchId={branchId} />}

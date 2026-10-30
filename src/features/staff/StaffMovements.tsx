@@ -18,6 +18,9 @@ interface Movement {
   status: string;
 }
 const labels = { advance: 'Adelanto', payment: 'Pago de comisión', adjustment: 'Cuadre de saldo' };
+const statusLabel = (status: string) => status === 'confirmed' ? 'Confirmado' : status === 'voided' ? 'Anulado' : 'Pendiente';
+/** Los adelantos guardan solo la fecha; se fija al mediodía para no correr de día por la zona. */
+const formatDate = (at: string) => dateShort(at.length === 10 ? at + 'T12:00:00' : at);
 
 export function StaffMovements({ branchId, from, to, staffId }: { branchId: string; from: string; to: string; staffId: string }) {
   const [kind, setKind] = useState('');
@@ -45,18 +48,30 @@ export function StaffMovements({ branchId, from, to, staffId }: { branchId: stri
   const rows = (movements.data ?? []).filter(row => (!staffId || row.staff_id === staffId) && (!kind || row.kind === kind) && (!status || row.status === status));
   const sum = (type: Movement['kind']) => rows.filter(row => row.kind === type && row.status === 'confirmed').reduce((total, row) => total + row.amount, 0);
   return <div className="space-y-4">
-    <div className="grid gap-3 sm:grid-cols-2">
+    <div className="grid grid-cols-2 gap-2 sm:gap-3">
       <Select label="Tipo de movimiento" value={kind} onChange={e => setKind(e.target.value)}><option value="">Todos los movimientos</option><option value="advance">Adelantos</option><option value="payment">Pagos de comisión</option><option value="adjustment">Cuadres de saldo</option></Select>
       <Select label="Estado" value={status} onChange={e => setStatus(e.target.value)}><option value="confirmed">Confirmados</option><option value="">Todos los estados</option><option value="pending">Pendientes</option><option value="voided">Anulados</option></Select>
     </div>
     {movements.isError ? <p role="alert" className="text-sm text-danger">No se pudieron cargar los movimientos. <button onClick={() => void movements.refetch()} className="underline">Reintentar</button></p>
       : movements.isPending ? <p role="status" className="text-sm text-white/50">Cargando movimientos…</p> : <>
-        <div className="flex flex-wrap gap-x-6 gap-y-2 rounded-xl bg-white/5 p-3 text-sm text-white/70"><span>Adelantos confirmados: <strong className="text-white">{money(sum('advance'))}</strong></span><span>Pagos confirmados: <strong className="text-gold-200">{money(sum('payment'))}</strong></span><span className="text-white/40">{rows.length} movimientos</span></div>
-        <p className="text-xs text-white/40">Los cuadres ajustan el saldo y no representan una salida de dinero.</p>
-        {rows.length ? <div className="max-h-[560px] overflow-auto"><table className="w-full min-w-[680px] text-sm">
+        <div className="flex flex-wrap gap-x-6 gap-y-1 rounded-xl bg-white/5 p-2.5 text-sm text-white/70 sm:p-3"><span>Adelantos: <strong className="text-white">{money(sum('advance'))}</strong></span><span>Pagos: <strong className="text-gold-200">{money(sum('payment'))}</strong></span><span className="text-white/40">{rows.length} movimientos</span></div>
+        <p className="hidden text-xs text-white/40 sm:block">Los cuadres ajustan el saldo y no representan una salida de dinero.</p>
+        {rows.length ? <>
+        {/* Teléfono: lista de dos líneas en vez de la tabla de 6 columnas. */}
+        <ul className="divide-y divide-white/5 sm:hidden">{rows.map(row => <li key={`${row.kind}:${row.id}`} className="flex items-start justify-between gap-3 py-2">
+          <div className="min-w-0">
+            <p className="truncate text-sm text-white">{row.staff_name} <span className="text-white/50">· {labels[row.kind]}</span></p>
+            <p className="truncate text-xs text-white/40">{formatDate(row.occurred_at)} · {row.kind === 'adjustment' ? 'Sin movimiento de caja' : row.method || '—'}{row.notes ? ` · ${row.notes}` : ''}</p>
+          </div>
+          <div className="shrink-0 text-right">
+            <p className="text-sm font-medium tabular-nums text-white">{money(row.amount)}</p>
+            {row.status !== 'confirmed' && <p className="text-[10px] text-white/40">{statusLabel(row.status)}</p>}
+          </div>
+        </li>)}</ul>
+        <div className="hidden max-h-[560px] overflow-auto sm:block"><table className="w-full min-w-[680px] text-sm">
           <thead className="text-left text-xs text-white/40"><tr><th className="pb-3">Fecha</th><th className="pb-3">Colaborador</th><th className="pb-3">Movimiento</th><th className="pb-3">Método / detalle</th><th className="pb-3">Estado</th><th className="pb-3 text-right">Monto</th></tr></thead>
-          <tbody className="divide-y divide-white/5">{rows.map(row => <tr key={`${row.kind}:${row.id}`} className="text-white/70"><td className="py-3 pr-3">{dateShort(row.occurred_at.length === 10 ? row.occurred_at + 'T12:00:00' : row.occurred_at)}</td><td className="py-3 pr-3 text-white">{row.staff_name}</td><td className="py-3 pr-3">{labels[row.kind]}</td><td className="max-w-xs py-3 pr-3"><span>{row.kind === 'adjustment' ? 'Sin movimiento de caja' : row.method || '—'}</span>{row.notes && <span className="mt-1 block break-words text-xs text-white/40">{row.notes}</span>}</td><td className="py-3 pr-3"><Badge tone={row.status === 'confirmed' ? 'success' : 'muted'}>{row.status === 'confirmed' ? 'Confirmado' : row.status === 'voided' ? 'Anulado' : 'Pendiente'}</Badge></td><td className="py-3 text-right font-medium text-white">{money(row.amount)}</td></tr>)}</tbody>
-        </table></div> : <EmptyState icon={HandCoins} title="Sin movimientos para estos filtros" />}
+          <tbody className="divide-y divide-white/5">{rows.map(row => <tr key={`${row.kind}:${row.id}`} className="text-white/70"><td className="py-3 pr-3">{formatDate(row.occurred_at)}</td><td className="py-3 pr-3 text-white">{row.staff_name}</td><td className="py-3 pr-3">{labels[row.kind]}</td><td className="max-w-xs py-3 pr-3"><span>{row.kind === 'adjustment' ? 'Sin movimiento de caja' : row.method || '—'}</span>{row.notes && <span className="mt-1 block break-words text-xs text-white/40">{row.notes}</span>}</td><td className="py-3 pr-3"><Badge tone={row.status === 'confirmed' ? 'success' : 'muted'}>{statusLabel(row.status)}</Badge></td><td className="py-3 text-right font-medium text-white">{money(row.amount)}</td></tr>)}</tbody>
+        </table></div></> : <EmptyState icon={HandCoins} title="Sin movimientos para estos filtros" />}
       </>}
   </div>;
 }

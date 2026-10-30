@@ -9,13 +9,15 @@ function serviceLabel(item: ActivityRow) {
 export function ActivityTable({ items, period }: { items: ActivityRow[]; period: Period }) {
   const daily = period === 'day';
   return (
-    <div className="overflow-x-auto px-2 pb-2">
-      <table className="w-full min-w-[440px] text-xs">
+    <div className="px-2 pb-2 sm:overflow-x-auto">
+      {/* En el teléfono: actividad, cobrado y comisión; el conteo de citas y
+          servicios ya va en el resumen del colaborador y en la segunda línea. */}
+      <table className="w-full text-xs sm:min-w-[440px]">
         <thead className="text-left text-white/40">
           <tr>
             <th className="py-1.5 pr-2">{daily ? 'Cita / servicios' : period === 'week' ? 'Día / actividad' : 'Semana / actividad'}</th>
-            {!daily && <th className="px-2 py-1.5 text-right">Citas</th>}
-            <th className="px-2 py-1.5 text-right">Servicios</th>
+            {!daily && <th className="hidden px-2 py-1.5 text-right sm:table-cell">Citas</th>}
+            <th className="hidden px-2 py-1.5 text-right sm:table-cell">Servicios</th>
             <th className="px-2 py-1.5 text-right">Cobrado</th>
             <th className="py-1.5 pl-2 text-right">Comisión</th>
           </tr>
@@ -28,7 +30,7 @@ export function ActivityTable({ items, period }: { items: ActivityRow[]; period:
             const time = new Date(group.items[0].sold_at).toLocaleTimeString('es-EC', { hour: '2-digit', minute: '2-digit' });
             return (
               <tr key={group.key} className="align-top text-white/75">
-                <td className="py-2 pr-2">
+                <td className="w-full max-w-0 py-2 pr-2 sm:w-auto sm:max-w-none">
                   <details>
                     <summary className="cursor-pointer text-white/90">
                       {daily ? `${clients.join(', ')} · ${time}` : group.label}
@@ -48,8 +50,8 @@ export function ActivityTable({ items, period }: { items: ActivityRow[]; period:
                     {daily ? services : `${clients.length} clientes · ${clients.join(', ')}`}
                   </p>
                 </td>
-                {!daily && <td className="px-2 py-2 text-right tabular-nums">{appointments}</td>}
-                <td className="px-2 py-2 text-right tabular-nums">{group.items.length}</td>
+                {!daily && <td className="hidden px-2 py-2 text-right tabular-nums sm:table-cell">{appointments}</td>}
+                <td className="hidden px-2 py-2 text-right tabular-nums sm:table-cell">{group.items.length}</td>
                 <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">{money(group.billed)}</td>
                 <td className="whitespace-nowrap py-2 pl-2 text-right font-medium tabular-nums text-gold-200">{money(group.commission)}</td>
               </tr>

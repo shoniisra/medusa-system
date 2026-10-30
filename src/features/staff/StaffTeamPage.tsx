@@ -35,6 +35,7 @@ import { cn } from '@/lib/cn';
 import { birthdayDayMonth } from '@/lib/date';
 import type { Service, UserRole } from '@/types';
 import { PendingAccessPanel } from './PendingAccessPanel';
+import { StaffShell } from './StaffShell';
 
 /* ─── Constantes ─────────────────────────────────────────────────────────── */
 
@@ -1074,19 +1075,16 @@ export function StaffTeamPage() {
   const { data: services = [] } = useOrgServices();
 
   return (
-    <div className="mx-auto max-w-[1500px] space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-white">Miembros del equipo</h1>
-          <p className="text-sm text-white/40">Colaboradoras, especialidades y accesos.</p>
-        </div>
-        {canManageRoles && (
+    <StaffShell
+      action={
+        canManageRoles && (
           <Button onClick={() => setEditStaff('new')}>
-            <Plus className="h-4 w-4" /> Nueva colaboradora
+            <Plus className="h-4 w-4" /> Nueva
+            <span className="hidden sm:inline"> colaboradora</span>
           </Button>
-        )}
-      </div>
+        )
+      }
+    >
 
       <PendingAccessPanel role={role} accounts={staffList.flatMap((staff) => staff.user_id ? [{
         userId: staff.user_id, name: [staff.first_name, staff.last_name].filter(Boolean).join(' '), hasPassword: staff.has_password === 1,
@@ -1115,7 +1113,7 @@ export function StaffTeamPage() {
             <thead>
               <tr className="border-b border-white/10 text-xs uppercase tracking-wider text-white/40">
                 <th className="px-4 py-2.5 text-left font-medium">Nombre</th>
-                <th className="px-4 py-2.5 text-left font-medium">Rol</th>
+                <th className="hidden px-4 py-2.5 text-left font-medium sm:table-cell">Rol</th>
                 <th className="hidden px-4 py-2.5 text-left font-medium md:table-cell">
                   Teléfono
                 </th>
@@ -1145,18 +1143,23 @@ export function StaffTeamPage() {
                     className="transition-colors hover:bg-white/[0.02]"
                   >
                     {/* Nombre */}
-                    <td className="px-4 py-3">
+                    <td className="w-full max-w-0 px-3 py-2 sm:w-auto sm:max-w-none sm:px-4 sm:py-3">
                       <div className="flex items-center gap-2.5">
                         <span
                           className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-white/20"
                           style={{ background: staff.color ?? '#64748b' }}
                         />
                         <div className="min-w-0">
-                          <span className="font-medium text-white">{displayName}</span>
-                          {/* Cuenta en mobile */}
-                          <div className="mt-0.5 sm:hidden">
+                          <span className="block truncate font-medium text-white">{displayName}</span>
+                          {/* Rol y cuenta en mobile: una sola línea bajo el nombre. */}
+                          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 sm:hidden">
+                            {staff.role && (
+                              <Badge tone={ROLE_TONES[staff.role] ?? 'muted'}>
+                                {roleLabel(staff.role as UserRole)}
+                              </Badge>
+                            )}
                             {staff.user_id ? (
-                              <span className="text-xs text-white/50">
+                              <span className="truncate text-xs text-white/50">
                                 @{staff.username}
                                 {staff.has_password === 1 && (
                                   <CheckCircle2 className="ml-1 inline h-3 w-3 text-success" />
@@ -1171,7 +1174,7 @@ export function StaffTeamPage() {
                     </td>
 
                     {/* Rol */}
-                    <td className="px-4 py-3">
+                    <td className="hidden px-4 py-3 sm:table-cell">
                       {staff.role ? (
                         <Badge tone={ROLE_TONES[staff.role] ?? 'muted'}>
                           {roleLabel(staff.role as UserRole)}
@@ -1228,8 +1231,8 @@ export function StaffTeamPage() {
 
                     {/* Acciones (solo admin) */}
                     {canManageRoles && (
-                      <td className="px-4 py-3">
-                        <div className="flex items-center justify-end gap-2">
+                      <td className="px-2 py-2 sm:px-4 sm:py-3">
+                        <div className="flex items-center justify-end gap-1 sm:gap-2">
                           <Button
                             size="sm"
                             variant="ghost"
@@ -1285,6 +1288,6 @@ export function StaffTeamPage() {
           onClose={() => setSpecialtiesStaff(null)}
         />
       )}
-    </div>
+    </StaffShell>
   );
 }
