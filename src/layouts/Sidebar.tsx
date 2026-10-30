@@ -57,7 +57,7 @@ function useOverdueCount(): number {
       const rows = await query<{ n: number }>(
         `SELECT COUNT(*) AS n FROM appointment
           WHERE branch_id = ? AND status IN ('reserved','confirmed')
-            AND date(start_at) < ?`,
+            AND start_at < ?`,
         [branchId, today],
       );
       return rows[0]?.n ?? 0;
@@ -77,7 +77,8 @@ function useTomorrowCount(): number {
       const rows = await query<{ n: number }>(
         `SELECT COUNT(*) AS n FROM appointment
           WHERE branch_id = ? AND status IN ('reserved','confirmed')
-            AND date(start_at) = date('now','localtime','+1 day')`,
+            AND start_at >= date('now','localtime','+1 day')
+            AND start_at < date('now','localtime','+2 day')`,
         [branchId],
       );
       return rows[0]?.n ?? 0;

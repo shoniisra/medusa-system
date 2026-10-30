@@ -39,7 +39,12 @@ interface DbPayload {
   sql?: string;
   args?: InValue[];
   batch?: { sql: string; args?: InValue[] }[];
+  /** Lecturas independientes agrupadas por el cliente (src/lib/db.ts). */
+  reads?: { sql: string; args?: InValue[] }[];
 }
+
+/** Tope de lecturas por request agrupado; el cliente nunca manda más. */
+const MAX_READS = 50;
 
 /**
  * Un cliente nuevo por request a propósito: con el singleton compartido entre
@@ -364,6 +369,27 @@ export default {
             'batch',
           );
           return Response.json({ ok: true });
+        }
+
+        // Varias lecturas en un solo request: un único viaje a Turso en vez de
+        // uno por query. Si alguna falla, falla el lote entero y el cliente
+        // reintenta cada una por separado para aislar el error.
+        if (Array.isArray(body.reads)) {
+          if (!body.reads.length || body.reads.length > MAX_READS) {
+            return Response.json({ error: 'Lote de lecturas inválido' }, { status: 400 });
+          }
+          for (const statement of body.reads) {
+            validateAppStatement(statement.sql);
+            if (!isReadStatement(statement.sql)) {
+              throw new ApiError(400, 'El lote de lecturas solo admite SELECT.');
+            }
+          }
+          const results = await withTimeout(
+            db.batch(body.reads.map((s) => ({ sql: s.sql, args: s.args ?? [] })), 'read'),
+            DB_TIMEOUT_MS,
+            'reads',
+          );
+          return Response.json({ results: results.map((rs) => ({ rows: rs.rows })) });
         }
 
         if (typeof body.sql === 'string') {

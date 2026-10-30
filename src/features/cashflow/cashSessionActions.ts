@@ -503,15 +503,15 @@ export function useDayMetricsForSession(sessionId: string | null, branchId: stri
           queryOne<{ n: number; total: number }>(
             `SELECT COUNT(*) AS n, COALESCE(SUM(total),0) AS total FROM sale
               WHERE branch_id = ? AND status IN ('completed','partially_refunded')
-                AND date(sold_at) = ?`,
-            [branchId, day!],
+                AND sold_at >= ? AND sold_at < date(?, '+1 day')`,
+            [branchId, day!, day!],
           ),
           queryOne<{ attended: number; pending: number }>(
             `SELECT SUM(CASE WHEN status='attended' THEN 1 ELSE 0 END) AS attended,
                     SUM(CASE WHEN status IN ('reserved','confirmed') THEN 1 ELSE 0 END) AS pending
                FROM appointment
-              WHERE branch_id = ? AND date(start_at) = ?`,
-            [branchId, day!],
+              WHERE branch_id = ? AND start_at >= ? AND start_at < date(?, '+1 day')`,
+            [branchId, day!, day!],
           ),
           queryOne<{ s: number }>(
             `SELECT COALESCE(SUM(amount),0) AS s

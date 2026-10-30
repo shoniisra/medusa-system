@@ -73,7 +73,7 @@ function useStandalonePosSales(from: string, to: string) {
            LEFT JOIN customer c ON c.id = s.customer_id
           WHERE s.branch_id = ? AND s.appointment_id IS NULL
             AND s.status <> 'voided'
-            AND date(s.sold_at) BETWEEN ? AND ?
+            AND s.sold_at >= ? AND s.sold_at < date(?, '+1 day')
           ORDER BY s.sold_at DESC`,
         [branchId, from, to],
       ),

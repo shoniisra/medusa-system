@@ -11,6 +11,10 @@
   "workers_dev": false,
   "preview_urls": false,
   "main": "worker/index.ts",
+  // Turso vive en aws-us-east-1: Smart Placement corre el Worker cerca de la
+  // base, así las escrituras (sesión + batch auditado = 2 viajes a Turso) no
+  // pagan dos veces la distancia desde el borde del usuario.
+  "placement": { "mode": "smart" },
   "assets": {
     "directory": "./dist",
     // El Worker corre primero; delega los archivos estáticos a env.ASSETS.

@@ -38,17 +38,19 @@ export function CollectSection({ ctx }: { ctx: CollectCtx }) {
     enabled: !!ctx.branchId,
     queryFn: () =>
       query<SaleWithBalance>(
-        `SELECT s.*,
-                COALESCE(pp.paid, 0) AS paid_amount,
-                s.total - COALESCE(pp.paid, 0) AS balance
-           FROM sale s
-           LEFT JOIN (
-             SELECT sale_id, SUM(amount) AS paid
-               FROM payment WHERE status = 'confirmed' GROUP BY sale_id
-           ) pp ON pp.sale_id = s.id
-          WHERE s.branch_id = ? AND s.status = 'completed'
-          ORDER BY s.sold_at DESC
-          LIMIT 100`,
+        // Lo pagado se suma solo para las 100 ventas que se muestran: antes un
+        // GROUP BY recorría todos los pagos de la base en cada carga.
+        `SELECT s.*, s.total - paid_amount AS balance
+           FROM (
+             SELECT s.*,
+                    COALESCE((SELECT SUM(p.amount) FROM payment p
+                               WHERE p.sale_id = s.id AND p.status = 'confirmed'), 0) AS paid_amount
+               FROM sale s
+              WHERE s.branch_id = ? AND s.status = 'completed'
+              ORDER BY s.sold_at DESC
+              LIMIT 100
+           ) s
+          ORDER BY s.sold_at DESC`,
         [ctx.branchId],
       ),
   });

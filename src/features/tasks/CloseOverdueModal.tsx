@@ -53,7 +53,7 @@ export function useOverduePending() {
            LEFT JOIN staff_member s ON s.id = ai.assigned_staff_id
            LEFT JOIN service sv ON sv.id = ai.service_id
           WHERE a.branch_id = ? AND a.status IN ('reserved','confirmed')
-            AND date(a.start_at) < ?
+            AND a.start_at < ?
           ORDER BY a.start_at DESC`,
         [branchId, today],
       ),

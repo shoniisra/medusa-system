@@ -250,7 +250,7 @@ export function useAppointments(from: string, to: string) {
                                WHERE ai3.appointment_id = a.id LIMIT 1)
            LEFT JOIN staff_member s ON s.id = ai.assigned_staff_id
            LEFT JOIN service sv ON sv.id = ai.service_id
-          WHERE a.branch_id = ? AND date(a.start_at) BETWEEN ? AND ?
+          WHERE a.branch_id = ? AND a.start_at >= ? AND a.start_at < date(?, '+1 day')
           ORDER BY a.start_at ASC`,
         [branchId, from, to],
       );

@@ -123,8 +123,9 @@ export function useDashboardMetrics() {
         ),
         query<{ status: string; n: number }>(
           `SELECT status, COUNT(*) AS n FROM appointment
-            WHERE branch_id = ? AND date(start_at) = ? GROUP BY status`,
-          [branchId, day],
+            WHERE branch_id = ? AND start_at >= ? AND start_at < date(?, '+1 day')
+            GROUP BY status`,
+          [branchId, day, day],
         ),
         query<NextAppointment>(
           `SELECT a.id, a.start_at, a.end_at, a.status, a.customer_id,
@@ -149,7 +150,7 @@ export function useDashboardMetrics() {
              JOIN sale_service_staff sss ON sss.sale_item_id = si.id
              JOIN staff_member sm ON sm.id = sss.staff_member_id
             WHERE s.branch_id = ? AND s.status IN ('completed','partially_refunded')
-              AND date(s.sold_at) >= ? AND date(s.sold_at) < ?
+              AND s.sold_at >= ? AND s.sold_at < ?
             GROUP BY sss.staff_member_id
             ORDER BY revenue DESC LIMIT 5`,
           [branchId, start, end],
@@ -170,7 +171,7 @@ export function useDashboardMetrics() {
           `SELECT SUM(CASE WHEN status='no_show' THEN 1 ELSE 0 END) AS no_shows,
                   COUNT(*) AS total
              FROM appointment
-            WHERE branch_id = ? AND date(start_at) >= ? AND date(start_at) < ?`,
+            WHERE branch_id = ? AND start_at >= ? AND start_at < ?`,
           [branchId, start, end],
         ),
         query<{ id: string; name: string }>(
@@ -186,10 +187,10 @@ export function useDashboardMetrics() {
           `SELECT ai.assigned_staff_id AS staff_id, a.start_at, a.end_at
              FROM appointment a
              JOIN appointment_item ai ON ai.appointment_id = a.id
-            WHERE a.branch_id = ? AND date(a.start_at) = ?
+            WHERE a.branch_id = ? AND a.start_at >= ? AND a.start_at < date(?, '+1 day')
               AND ai.assigned_staff_id IS NOT NULL
               AND a.status IN ('reserved','confirmed','attended')`,
-          [branchId, day],
+          [branchId, day, day],
         ),
       ]);
 

@@ -16,6 +16,7 @@ import { useSession } from '@/store/session';
 interface DbResult {
   rows?: unknown[];
   rowsAffected?: number;
+  results?: { rows: unknown[] }[];
   ok?: boolean;
   error?: string;
 }
@@ -40,13 +41,78 @@ async function callApi(payload: unknown): Promise<DbResult> {
   return data;
 }
 
+/* ─── Agrupado de lecturas ──────────────────────────────────────────────────
+ * Cada pantalla dispara muchas consultas a la vez (el dashboard ~10, Flujo ~20)
+ * y cada una era un request propio al Worker y un viaje propio a Turso. Las
+ * lecturas que llegan dentro de la misma ventana corta salen juntas en un solo
+ * request ({ reads }), que el Worker resuelve con un único batch de lectura.
+ */
+
+interface PendingRead {
+  sql: string;
+  args: InValue[];
+  resolve: (rows: unknown[]) => void;
+  reject: (error: unknown) => void;
+}
+
+/** Ventana para juntar lecturas: alcanza para un render, no se nota en la UI. */
+const READ_BATCH_WINDOW_MS = 5;
+/** Debe coincidir con MAX_READS de worker/index.ts. */
+const READ_BATCH_MAX = 50;
+
+let pendingReads: PendingRead[] = [];
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function readOne(sql: string, args: InValue[]): Promise<unknown[]> {
+  return (await callApi({ sql, args })).rows ?? [];
+}
+
+function settle(read: PendingRead, run: Promise<unknown[]>): void {
+  run.then(read.resolve, read.reject);
+}
+
+function flushReads(): void {
+  flushTimer = null;
+  const reads = pendingReads;
+  pendingReads = [];
+  for (let i = 0; i < reads.length; i += READ_BATCH_MAX) {
+    const chunk = reads.slice(i, i + READ_BATCH_MAX);
+    if (chunk.length === 1) {
+      settle(chunk[0], readOne(chunk[0].sql, chunk[0].args));
+      continue;
+    }
+    callApi({ reads: chunk.map(({ sql, args }) => ({ sql, args })) }).then(
+      (data) => {
+        const results = data.results ?? [];
+        chunk.forEach((r, idx) => r.resolve(results[idx]?.rows ?? []));
+      },
+      // El lote falla entero si una sola consulta falla: se reintenta cada una
+      // por separado para que el error le llegue solo a la que corresponde.
+      () => chunk.forEach((r) => settle(r, readOne(r.sql, r.args))),
+    );
+  }
+}
+
+function enqueueRead(sql: string, args: InValue[]): Promise<unknown[]> {
+  return new Promise((resolve, reject) => {
+    pendingReads.push({ sql, args, resolve, reject });
+    flushTimer ??= setTimeout(flushReads, READ_BATCH_WINDOW_MS);
+  });
+}
+
+const isRead = (sql: string): boolean => /^\s*(SELECT|WITH)\b/i.test(sql);
+
 async function execRaw(
   sql: string,
   args: InValue[],
+  groupReads = false,
 ): Promise<{ rows: unknown[]; rowsAffected: number }> {
-  if (import.meta.env.DEV && /^\s*(SELECT|WITH)\b/i.test(sql)) {
+  if (import.meta.env.DEV && isRead(sql)) {
     const { devExecute } = await import('./db.dev');
     return devExecute(sql, args);
+  }
+  if (groupReads && isRead(sql)) {
+    return { rows: await enqueueRead(sql, args), rowsAffected: 0 };
   }
   const data = await callApi({ sql, args });
   return { rows: data.rows ?? [], rowsAffected: data.rowsAffected ?? 0 };
@@ -60,7 +126,7 @@ async function batchRaw(
 
 /** Ejecuta una consulta y devuelve las filas tipadas como T. */
 export async function query<T>(sql: string, args: InValue[] = []): Promise<T[]> {
-  const { rows } = await execRaw(sql, args);
+  const { rows } = await execRaw(sql, args, true);
   return rows as unknown as T[];
 }
 
