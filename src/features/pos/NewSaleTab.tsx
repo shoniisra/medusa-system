@@ -3,6 +3,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Check,
+  Lock,
   Pencil,
   UserRound,
 } from 'lucide-react';
@@ -844,6 +845,15 @@ function ConfirmSalePosModal({
         ) : (
           <p className="rounded-xl border border-success/30 bg-success/10 p-3 text-sm text-success">
             La venta queda cubierta con el saldo a favor. No entra plata a caja.
+          </p>
+        )}
+        {remainderDue > 0 && !!method && !hasOpenCashToday && (
+          <p className="flex items-start gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-100">
+            <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              No podés confirmar la venta con la caja cerrada. Abrí la caja de
+              hoy desde el botón <b>Abrir caja</b> de la barra superior.
+            </span>
           </p>
         )}
         {error && <p className="text-xs text-danger">{error}</p>}

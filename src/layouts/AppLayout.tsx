@@ -13,10 +13,13 @@ import { cn } from '@/lib/cn';
 /**
  * Contenedor principal: Sidebar (escritorio) + Topbar + área de contenido.
  *
- * El guard diario abre el modal de caja al entrar al día: si quedó una caja
- * abierta de ayer o todavía no se abrió la de hoy, no deja seguir sin
- * resolverlo. En rutas inmersivas (una cita a pantalla completa) no interrumpe:
- * esos flujos ya están protegidos y la caja se abrirá al salir.
+ * El guard diario solo bloquea donde entra dinero: el POS. Si quedó una caja
+ * abierta de ayer o todavía no se abrió la de hoy, no deja vender sin
+ * resolverlo. Agendar citas, ver el calendario o navegar el resto de la app
+ * NO exige caja: se puede usar la app desde afuera del local sin abrir caja.
+ * La seña en efectivo y el cobro de una cita ya piden caja en su propio botón
+ * (con acceso a "Abrir caja" en la barra superior), así que la integridad
+ * financiera no depende de este guard global.
  *
  * Los flujos de cita (agendar / atender) son "inmersivos" en móvil: ocultan la
  * navegación inferior para que su propia barra de acción quede al alcance del
@@ -25,6 +28,9 @@ import { cn } from '@/lib/cn';
 export function AppLayout() {
   const { pathname } = useLocation();
   const immersive = pathname.startsWith(ROUTES.appointment);
+  // La caja solo se exige obligatoriamente en el POS, donde se registran
+  // ventas con cobro inmediato.
+  const requiresCash = pathname.startsWith(ROUTES.pos);
   // El calendario administra su propio alto y scroll: sin padding ni scroll
   // de página, como una app de calendario nativa.
   const flush = pathname.startsWith(ROUTES.calendarView);
@@ -37,7 +43,7 @@ export function AppLayout() {
   const [dismissedMode, setDismissedMode] = useState<string | null>(null);
   const activeMode = !guard.loading && guard.needsAction ? guard.mode : null;
   const guardOpen =
-    !!activeMode && !immersive && dismissedMode !== activeMode;
+    !!activeMode && requiresCash && dismissedMode !== activeMode;
 
   return (
     <div className="flex h-[100dvh] overflow-hidden">
