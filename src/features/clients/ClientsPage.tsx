@@ -1,6 +1,6 @@
 import { AuditHistoryLink } from '@/features/audit/AuditHistoryLink';
 import { ColorRecordsCard, ManicureRecordsCard } from './ColorRecordsCard';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -186,32 +186,48 @@ export function ClientsPage() {
   const start = (current - 1) * pageSize;
   const pageRows = filtered.slice(start, start + pageSize);
 
+  const dupTotal = dupCount + phonelessMatches.length;
+
   return (
-    <div className="mx-auto max-w-[1500px] space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
+    <div className="mx-auto max-w-[1500px] space-y-4 sm:space-y-6">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
           <h1 className="text-2xl font-semibold text-white">Clientes</h1>
           <p className="text-sm text-white/40">
             {stats.total.toLocaleString('es-EC')} en total
           </p>
+          {/* En el teléfono las tarjetas de resumen se comían la pantalla: el
+              resumen queda en una línea y la lista arranca arriba. */}
+          <p className="truncate text-xs text-white/40 sm:hidden">
+            {stats.withWa.toLocaleString('es-EC')} con WhatsApp ·{' '}
+            {stats.buyers.toLocaleString('es-EC')} con compras ·{' '}
+            <span className="text-gold-200">{money(stats.revenue)}</span>
+          </p>
         </div>
-        <div className="flex items-center gap-2">
-          {dupCount + phonelessMatches.length > 0 && (
-            <Button variant="ghost" onClick={() => setDupsOpen(true)}>
+        <div className="flex shrink-0 items-center gap-2">
+          {dupTotal > 0 && (
+            <Button
+              variant="ghost"
+              onClick={() => setDupsOpen(true)}
+              title="Posibles duplicados"
+            >
               <CopyCheck className="h-4 w-4" />
-              {dupCount + phonelessMatches.length} posible
-              {dupCount + phonelessMatches.length > 1 ? 's' : ''} duplicado
-              {dupCount + phonelessMatches.length > 1 ? 's' : ''}
+              {dupTotal}
+              <span className="hidden sm:inline">
+                {' '}posible{dupTotal > 1 ? 's' : ''} duplicado
+                {dupTotal > 1 ? 's' : ''}
+              </span>
             </Button>
           )}
           <Button onClick={() => setCreateOpen(true)}>
-            <UserPlus className="h-4 w-4" /> Nuevo cliente
+            <UserPlus className="h-4 w-4" /> Nuevo
+            <span className="hidden sm:inline"> cliente</span>
           </Button>
         </div>
       </div>
 
       {/* Resumen */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="hidden grid-cols-2 gap-3 sm:grid lg:grid-cols-4">
         <StatCard
           label="Clientes"
           value={stats.total.toLocaleString('es-EC')}
@@ -283,16 +299,20 @@ export function ClientsPage() {
 
         {filtered.length > 0 ? (
           <>
+            {/* En el teléfono solo nombre + número + botón de WhatsApp, sin
+                scroll horizontal; el resto de columnas aparece desde `sm`. */}
             <div className="-mx-4 overflow-x-auto sm:mx-0">
-              <table className="w-full min-w-[640px] border-collapse text-sm">
+              <table className="w-full border-collapse text-sm sm:min-w-[640px]">
                 <thead>
                   <tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-white/40">
                     <th className="px-4 py-2.5 font-medium">Cliente</th>
-                    <th className="px-4 py-2.5 font-medium">WhatsApp</th>
-                    <th className="px-4 py-2.5 text-center font-medium">
+                    <th className="hidden px-4 py-2.5 font-medium sm:table-cell">
+                      WhatsApp
+                    </th>
+                    <th className="hidden px-4 py-2.5 text-center font-medium sm:table-cell">
                       Visitas
                     </th>
-                    <th className="px-4 py-2.5 text-right font-medium">
+                    <th className="hidden px-4 py-2.5 text-right font-medium sm:table-cell">
                       Total gastado
                     </th>
                     <th className="hidden px-4 py-2.5 font-medium md:table-cell">
@@ -308,15 +328,19 @@ export function ClientsPage() {
                       onClick={() => navigate(`${ROUTES.client}/${c.id}`)}
                       className="cursor-pointer border-b border-white/5 transition-colors hover:bg-white/[0.03]"
                     >
-                      <td className="px-4 py-3">
+                      {/* `max-w-0` deja que el nombre se recorte en el
+                          teléfono en vez de ensanchar la tabla. */}
+                      <td className="w-full max-w-0 px-4 py-2 sm:w-auto sm:max-w-none sm:py-3">
                         <div className="flex items-center gap-3">
-                          <Avatar
-                            first={c.first_name}
-                            last={c.last_name}
-                          />
+                          <span className="hidden sm:contents">
+                            <Avatar
+                              first={c.first_name}
+                              last={c.last_name}
+                            />
+                          </span>
                           <div className="min-w-0">
-                            <p className="flex items-center gap-1.5 truncate font-medium text-white">
-                              {customerName(c)}
+                            <p className="flex items-center gap-1.5 font-medium text-white">
+                              <span className="truncate">{customerName(c)}</span>
                               {c.allergies && (
                                 <TriangleAlert
                                   className="h-3.5 w-3.5 shrink-0 text-danger"
@@ -324,33 +348,36 @@ export function ClientsPage() {
                                 />
                               )}
                             </p>
+                            <p className="truncate text-xs text-white/40 sm:hidden">
+                              {c.phone || 'Sin WhatsApp'}
+                            </p>
                             {c.email && (
-                              <p className="truncate text-xs text-white/40">
+                              <p className="hidden truncate text-xs text-white/40 sm:block">
                                 {c.email}
                               </p>
                             )}
                           </div>
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-white/70">
+                      <td className="hidden px-4 py-3 text-white/70 sm:table-cell">
                         {c.phone || (
                           <span className="text-white/25">Sin WhatsApp</span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-center">
+                      <td className="hidden px-4 py-3 text-center sm:table-cell">
                         {c.visits > 0 ? (
                           <Badge tone="info">{c.visits}</Badge>
                         ) : (
                           <span className="text-white/25">—</span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-right font-medium text-gold-200">
+                      <td className="hidden px-4 py-3 text-right font-medium text-gold-200 sm:table-cell">
                         {money(c.spent)}
                       </td>
                       <td className="hidden px-4 py-3 text-white/50 md:table-cell">
                         {c.last_visit ? dateShort(c.last_visit) : '—'}
                       </td>
-                      <td className="px-4 py-3 text-right">
+                      <td className="px-2 py-2 text-right sm:px-4 sm:py-3">
                         {c.phone && (
                           <a
                             href={waLink(c.phone)}
@@ -358,7 +385,7 @@ export function ClientsPage() {
                             rel="noreferrer"
                             onClick={(e) => e.stopPropagation()}
                             title="Abrir WhatsApp"
-                            className="inline-flex rounded-lg p-1.5 text-success/80 hover:bg-success/10 hover:text-success"
+                            className="inline-flex rounded-lg p-2 text-success/80 hover:bg-success/10 hover:text-success sm:p-1.5"
                           >
                             <MessageCircle className="h-4 w-4" />
                           </a>
@@ -725,6 +752,9 @@ function ClientDetail({ customer }: { customer: Customer }) {
   const qc = useQueryClient();
   const toast = useToast();
   const [confirmLeave, setConfirmLeave] = useState(false);
+  /** Solo en el teléfono: historial y ficha apilados eran una sola columna
+   *  interminable; se muestran de a uno. En `lg` se ven los dos lado a lado. */
+  const [tab, setTab] = useState<'activity' | 'form'>('activity');
 
   const metrics = useQuery({
     queryKey: ['client-metrics', id],
@@ -856,7 +886,7 @@ function ClientDetail({ customer }: { customer: Customer }) {
   const avg = visits > 0 ? spent / visits : 0;
 
   return (
-    <div className="mx-auto max-w-[1500px] space-y-6">
+    <div className="mx-auto max-w-[1500px] space-y-4 sm:space-y-6">
       <PageHeader
         onBack={handleBack}
         title={customerName(c)}
@@ -913,18 +943,46 @@ function ClientDetail({ customer }: { customer: Customer }) {
       <AuditHistoryLink entityType="customer" id={id ?? ''} />
 
       {/* Métricas */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Metric label="Total gastado" value={money(spent)} gold />
+      <div className="grid grid-cols-4 gap-2 sm:gap-3">
+        <Metric label="Gastado" value={money(spent)} gold />
         <Metric label="Visitas" value={String(visits)} />
-        <Metric label="Ticket promedio" value={money(avg)} />
+        <Metric label="Ticket prom." value={money(avg)} />
         <Metric
-          label="Última visita"
+          label="Última"
           value={m?.last ? dateShort(m.last) : '—'}
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="space-y-6 lg:col-span-2">
+      <div className="grid grid-cols-2 gap-1 rounded-xl border border-white/10 bg-white/[0.02] p-1 text-sm lg:hidden">
+        {(
+          [
+            ['activity', 'Historial'],
+            ['form', 'Ficha'],
+          ] as const
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className={
+              tab === key
+                ? 'rounded-lg bg-white/10 py-1.5 font-medium text-white'
+                : 'rounded-lg py-1.5 text-white/50'
+            }
+          >
+            {label}
+            {key === 'form' && form.dirty && (
+              <span className="ml-1 text-gold-300">•</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-3">
+        <div
+          className={`space-y-4 sm:space-y-6 lg:col-span-2 lg:block ${
+            tab === 'activity' ? '' : 'hidden'
+          }`}
+        >
           {/* Próximas citas */}
           {upcoming.data && upcoming.data.length > 0 && (
             <Card>
@@ -970,8 +1028,9 @@ function ClientDetail({ customer }: { customer: Customer }) {
               subtitle="Cobros confirmados (más recientes primero)"
             />
             {payments.data && payments.data.length > 0 ? (
-              <ul className="divide-y divide-white/5">
-                {payments.data.map((p) => {
+              <CollapsibleList
+                items={payments.data}
+                render={(p) => {
                   const target = p.appointment_id
                     ? `${ROUTES.appointment}/${p.appointment_id}`
                     : null;
@@ -1013,8 +1072,8 @@ function ClientDetail({ customer }: { customer: Customer }) {
                       )}
                     </li>
                   );
-                })}
-              </ul>
+                }}
+              />
             ) : (
               <EmptyState
                 icon={Wallet}
@@ -1031,8 +1090,9 @@ function ClientDetail({ customer }: { customer: Customer }) {
               subtitle="Servicios contratados (más recientes primero)"
             />
             {history.data && history.data.length > 0 ? (
-              <ul className="divide-y divide-white/5">
-                {history.data.map((h, i) => (
+              <CollapsibleList
+                items={history.data}
+                render={(h, i) => (
                   <li
                     key={i}
                     className="flex items-center justify-between gap-3 py-2.5"
@@ -1052,8 +1112,8 @@ function ClientDetail({ customer }: { customer: Customer }) {
                       {money(h.final_unit_price * h.quantity)}
                     </span>
                   </li>
-                ))}
-              </ul>
+                )}
+              />
             ) : (
               <EmptyState
                 icon={Scissors}
@@ -1065,7 +1125,9 @@ function ClientDetail({ customer }: { customer: Customer }) {
         </div>
 
         {/* Ficha editable */}
-        <div className="lg:col-span-1">
+        <div
+          className={`lg:col-span-1 lg:block ${tab === 'form' ? '' : 'hidden'}`}
+        >
           <ClientForm
             form={form}
             onSave={() => void saveAndExit()}
@@ -1280,7 +1342,7 @@ function ClientForm({
   const { draft, set, dirty, owner, setOwner, setCombineOpen, save } = form;
 
   return (
-    <Card className="sticky top-4">
+    <Card className="lg:sticky lg:top-4">
       <CardHeader title="Ficha" subtitle="Datos y notas del cliente" />
       <div className="space-y-3">
         <CustomerFields
@@ -1392,12 +1454,44 @@ function Metric({
   gold?: boolean;
 }) {
   return (
-    <div className="glass-card p-4">
-      <p className="text-xs text-white/40">{label}</p>
-      <p className={gold ? 'kpi-gold mt-1 text-xl' : 'mt-1 text-xl text-white'}>
+    <div className="glass-card min-w-0 rounded-2xl px-2 py-2 sm:rounded-3xl sm:p-4">
+      <p className="truncate text-[10px] text-white/40 sm:text-xs">{label}</p>
+      <p
+        className={`truncate text-sm sm:mt-1 sm:text-xl ${
+          gold ? 'kpi-gold' : 'text-white'
+        }`}
+      >
         {value}
       </p>
     </div>
+  );
+}
+
+/** Primeras `limit` filas; el resto detrás de "Ver todos" (hasta 200 pagos
+ *  hacían de la ficha un scroll sin fin). */
+function CollapsibleList<T>({
+  items,
+  render,
+  limit = 5,
+}: {
+  items: T[];
+  render: (item: T, index: number) => ReactNode;
+  limit?: number;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const shown = expanded ? items : items.slice(0, limit);
+  return (
+    <>
+      <ul className="divide-y divide-white/5">{shown.map(render)}</ul>
+      {items.length > limit && (
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-2 w-full rounded-lg py-1.5 text-xs text-gold-300 hover:bg-white/[0.03]"
+        >
+          {expanded ? 'Ver menos' : `Ver todos (${items.length})`}
+        </button>
+      )}
+    </>
   );
 }
 
