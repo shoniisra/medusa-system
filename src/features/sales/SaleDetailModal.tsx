@@ -1,14 +1,16 @@
 import { AuditHistoryLink } from '@/features/audit/AuditHistoryLink';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { HandHelping, Maximize2 } from 'lucide-react';
-import { execute, query, queryOne } from '@/lib/db';
+import { AlertTriangle, HandHelping, Maximize2, Trash2 } from 'lucide-react';
+import { batch, execute, query, queryOne, type Stmt } from '@/lib/db';
 import { dateShort, genId, money, timeShort } from '@/lib/format';
 import { invalidateFinance } from '@/lib/queryClient';
 import { ROUTES } from '@/config/constants';
 import { useBranchId, useSession } from '@/store/session';
 import { hasPermission } from '@/config/permissions';
-import { Badge, Modal, Select, useToast } from '@/components/ui';
+import { Badge, Button, Modal, Select, useToast } from '@/components/ui';
+import { useOpenCashSession } from '@/features/cashflow/accounts';
 import { useStaff, useAssignableStaff } from '@/features/pos/useCatalog';
 import { customerNameSql } from '@/features/clients/customerNameSql';
 import { commissionForItem, loadCommissionRules } from '@/features/pos/createSale';
@@ -59,6 +61,10 @@ interface SalePaymentRow {
   created_by_name: string | null;
   /** Pago atado también a la cita = abono/seña cobrado antes del servicio. */
   appointment_id: string | null;
+  /** Movimiento de caja generado por el cobro (solo si fue en efectivo). */
+  movement_id: string | null;
+  /** Estado de la caja donde entró el efectivo: abierta o ya cerrada. */
+  session_status: string | null;
 }
 
 const SALE_STATUS: Record<SaleStatus, { label: string; tone: 'success' | 'danger' | 'muted' | 'gold' }> = {
@@ -119,10 +125,13 @@ async function loadSale(saleId: string | null, appointmentId: string | null) {
     query<SalePaymentRow>(
       `SELECT p.id, p.amount, p.paid_at, p.reference, p.appointment_id,
               pm.method_type, ba.name AS bank_name,
+              cm.id AS movement_id, cs.status AS session_status,
               u.full_name AS created_by_name
          FROM payment p
          JOIN payment_method pm ON pm.id = p.payment_method_id
          LEFT JOIN bank_account ba ON ba.id = p.bank_account_id
+         LEFT JOIN cash_movement cm ON cm.payment_id = p.id
+         LEFT JOIN cash_session cs ON cs.id = cm.cash_session_id
          LEFT JOIN app_user u ON u.id = p.created_by
         WHERE p.sale_id = ? AND p.status = 'confirmed'
         ORDER BY p.paid_at`,
@@ -156,6 +165,7 @@ export function SaleDetailModal({
   const branchId = useBranchId();
   const staffList = useStaff();
   const assignableStaff = useAssignableStaff();
+  const [voidPayment, setVoidPayment] = useState<SalePaymentRow | null>(null);
 
   const data = useQuery({
     queryKey: ['sale-detail', saleId, appointmentId],
@@ -232,6 +242,11 @@ export function SaleDetailModal({
   const canSeeCommissions = useSession((s) =>
     hasPermission(s.user?.role, 'view_commissions'),
   );
+  // Anular un cobro mueve dinero y caja: lo habilita quien opera caja.
+  const canVoidPayments = useSession((s) =>
+    hasPermission(s.user?.role, 'use_cash_register'),
+  );
+  const userId = useSession((s) => s.user?.id ?? null);
 
   // Si el modal se abrió por una cita (o la venta pertenece a una), ofrecemos
   // ir a la ficha completa de la cita con un botón de "ampliar". Es el reemplazo
@@ -410,15 +425,34 @@ export function SaleDetailModal({
                         {p.reference ? ` · ${p.reference}` : ''}
                       </span>
                     </span>
-                    <span className="whitespace-nowrap text-right text-[11px] text-white/40">
-                      {dateShort(p.paid_at)} · {timeShort(p.paid_at)}
-                      {p.created_by_name ? (
-                        <span className="block">{p.created_by_name}</span>
-                      ) : null}
+                    <span className="flex items-start gap-3">
+                      <span className="whitespace-nowrap text-right text-[11px] text-white/40">
+                        {dateShort(p.paid_at)} · {timeShort(p.paid_at)}
+                        {p.created_by_name ? (
+                          <span className="block">{p.created_by_name}</span>
+                        ) : null}
+                      </span>
+                      {editable && canVoidPayments && (
+                        <button
+                          type="button"
+                          onClick={() => setVoidPayment(p)}
+                          title="Anular este cobro"
+                          className="tap mt-0.5 shrink-0 text-white/40 hover:text-danger"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                     </span>
                   </li>
                 ))}
               </ul>
+            )}
+            {editable && canVoidPayments && sale.payments.length > 0 && (
+              <p className="mt-1.5 text-[11px] text-white/35">
+                Si un cobro se cargó mal o duplicado, anulalo: la venta queda con
+                saldo pendiente y lo recobrás con el monto correcto desde
+                Flujo → «Cobros / abonos».
+              </p>
             )}
           </section>
 
@@ -437,6 +471,145 @@ export function SaleDetailModal({
           </div>
         </div>
       )}
+      {voidPayment && sale && (
+        <VoidPaymentModal
+          payment={voidPayment}
+          saleNumber={sale.head.sale_number}
+          branchId={branchId}
+          userId={userId}
+          onClose={() => setVoidPayment(null)}
+          onDone={() => {
+            setVoidPayment(null);
+            toast.success('Cobro anulado', 'La venta quedó con saldo pendiente.');
+            refresh();
+          }}
+        />
+      )}
+    </Modal>
+  );
+}
+
+/**
+ * Anula UN cobro de una venta (mal cargado o duplicado), sin descuadrar la caja:
+ *  - el `payment` pasa a "voided", deja de contar como ingreso y la venta queda
+ *    con saldo pendiente (se recobra con el monto correcto desde «Cobros / abonos»);
+ *  - si el cobro fue en efectivo y su caja sigue abierta, se borra el
+ *    `cash_movement` (la caja esperada baja sin dejar un movimiento fantasma);
+ *  - si esa caja ya se cerró, se revierte con una salida en la caja abierta de hoy;
+ *  - si fue a una cuenta bancaria, alcanza con anular el pago.
+ */
+function VoidPaymentModal({
+  payment,
+  saleNumber,
+  branchId,
+  userId,
+  onClose,
+  onDone,
+}: {
+  payment: SalePaymentRow;
+  saleNumber: string;
+  branchId: string;
+  userId: string | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [error, setError] = useState('');
+  const cash = useOpenCashSession(branchId);
+  const sessionId = cash.data?.id ?? null;
+
+  const inOpenCash = !!payment.movement_id && payment.session_status === 'open';
+  const inClosedCash = !!payment.movement_id && payment.session_status !== 'open';
+  const blocked = inClosedCash && !sessionId;
+
+  const voidIt = useMutation({
+    mutationFn: async () => {
+      const now = new Date().toISOString();
+      const stmts: Stmt[] = [
+        { sql: `UPDATE payment SET status = 'voided' WHERE id = ?`, args: [payment.id] },
+      ];
+      if (inOpenCash) {
+        stmts.push({
+          sql: 'DELETE FROM cash_movement WHERE id = ?',
+          args: [payment.movement_id],
+        });
+      } else if (inClosedCash && sessionId) {
+        stmts.push({
+          sql: `INSERT INTO cash_movement
+                  (id, cash_session_id, branch_id, movement_type, direction, amount,
+                   movement_at, payment_id, description, created_by)
+                VALUES (?, ?, ?, 'adjustment', 'out', ?, ?, ?, ?, ?)`,
+          args: [
+            genId(),
+            sessionId,
+            branchId,
+            payment.amount,
+            now,
+            payment.id,
+            `Anulación cobro ${saleNumber}`,
+            userId,
+          ],
+        });
+      }
+      await batch(stmts);
+    },
+    onSuccess: onDone,
+    onError: (e) =>
+      setError(e instanceof Error ? e.message : 'No se pudo anular el cobro.'),
+  });
+
+  return (
+    <Modal open onClose={onClose} title="Anular cobro">
+      <div className="space-y-4">
+        <div className="rounded-xl bg-white/5 p-3 text-sm">
+          <div className="flex justify-between text-white/60">
+            <span>
+              {dateShort(payment.paid_at)} ·{' '}
+              {payment.bank_name ??
+                (payment.method_type === 'cash' ? 'Efectivo' : payment.method_type)}
+            </span>
+            <span className="kpi-gold">{money(payment.amount)}</span>
+          </div>
+          {payment.reference && (
+            <p className="mt-1 truncate text-xs text-white/40">{payment.reference}</p>
+          )}
+        </div>
+
+        <p className="text-sm text-white/70">
+          Este cobro deja de contar como ingreso y la venta queda con{' '}
+          {money(payment.amount)} de saldo pendiente, que podés recobrar con el
+          monto correcto desde Flujo → «Cobros / abonos».
+          {inOpenCash && ' También se quita el efectivo de la caja abierta.'}
+          {inClosedCash &&
+            ' El efectivo entró en una caja ya cerrada: se revierte con una salida en la caja de hoy.'}
+        </p>
+
+        {blocked && (
+          <p className="flex items-center gap-1.5 text-xs text-amber-300/80">
+            <AlertTriangle className="h-3.5 w-3.5" /> El cobro fue en efectivo de
+            una caja ya cerrada y no hay caja abierta. Abrí la caja para poder
+            revertir el efectivo.
+          </p>
+        )}
+        {error && <p className="text-xs text-danger">{error}</p>}
+
+        <div className="flex gap-2">
+          <Button variant="outline" className="flex-1" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button
+            className="flex-1"
+            variant="danger"
+            disabled={voidIt.isPending || blocked}
+            loading={voidIt.isPending}
+            onClick={() => {
+              setError('');
+              voidIt.mutate();
+            }}
+          >
+            Anular cobro
+          </Button>
+        </div>
+      </div>
     </Modal>
   );
 }
